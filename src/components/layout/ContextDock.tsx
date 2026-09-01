@@ -47,7 +47,7 @@ export function ContextDock({ view, terminalContent, sessionId, profileId, profi
     </header>
     <div className="dock-content">
       <div className={view === "terminal" ? "h-full" : "hidden"} aria-hidden={view !== "terminal"}>{terminalContent}</div>
-      {view === "files" && <FilesView sessionId={sessionId} active={active && view === "files"} />}
+      {view === "files" && <FilesView sessionId={sessionId} profileId={profileId} active={active && view === "files"} />}
       {view === "assistant" && <AiTerminalView sessionId={sessionId} onInsertCommand={onInsertCommand} />}
       {view === "changes" && <Suspense fallback={<p className="p-4 text-sm text-[hsl(var(--muted))]">{t("common.loading")}</p>}>
         <ChangeSetWorkspace sessions={sessionId ? [{ sessionId, profileId, label: profile?.name ?? sessionId }] : []} activeSessionId={sessionId} agentRunId={reviewRunId} />

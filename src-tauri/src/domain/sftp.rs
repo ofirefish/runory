@@ -144,6 +144,13 @@ pub struct LocalFileSelection {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SelectUploadFilesRequest {
+    pub session_id: SessionId,
+    pub remote_directory: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SelectDownloadTargetRequest {
     pub suggested_name: String,
 }

@@ -1,21 +1,25 @@
-import { Ban, ChevronRight, Download, Eye, File, FileQuestion, Folder, FolderPlus, Link, Pencil, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Ban, ChevronRight, Download, Eye, FileQuestion, Folder, FolderPlus, Link, Pencil, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { ContextMenu } from "../../components/ui/context-menu";
 import { DialogShell } from "../../components/ui/dialog-shell";
 import { Input } from "../../components/ui/input";
-import { cancelTransfer, changeDirectory, createRemoteDirectory, deleteRemoteEntry, listTransfers, openSftp, refreshDirectory, renameRemoteEntry, retryTransfer, selectDownloadTarget, selectUploadFiles, startDownload, startUpload, subscribeTransfers } from "../../lib/tauri/ssh";
-import type { SftpDirectory, SftpEntry, SftpEntryKind, TransferJob } from "../../types/session";
+import { appErrorCode } from "../../lib/app-error";
+import { acceptLatestUploadDrop, cancelTransfer, changeDirectory, createRemoteDirectory, deleteRemoteEntry, listTransfers, openSftp, refreshDirectory, renameRemoteEntry, retryTransfer, selectDownloadTarget, selectUploadFiles, startDownload, startUpload, subscribeTransfers } from "../../lib/tauri/ssh";
+import type { LocalFileSelection, SftpDirectory, SftpEntry, SftpEntryKind, TransferJob } from "../../types/session";
+import { FileTypeIcon } from "./FileTypeIcon";
 import { RemoteImagePreview, type RemoteFileRequest } from "./RemoteImagePreview";
 import { RemoteTextPreview } from "./RemoteTextPreview";
+import { clearLastRemotePath, readLastRemotePath, saveLastRemotePath } from "./remote-path-history";
 import { breadcrumbPaths, formatFileSize, formatPermissions } from "./sftp-format";
 
-const entryIcon = (kind: SftpEntryKind) => {
+const entryIcon = (kind: SftpEntryKind, name: string) => {
   if (kind === "directory") return <Folder aria-hidden size={17} className="text-blue-500" />;
   if (kind === "symlink") return <Link aria-hidden size={17} className="text-violet-500" />;
-  if (kind === "file") return <File aria-hidden size={17} className="text-[hsl(var(--secondary))]" />;
+  if (kind === "file") return <FileTypeIcon fileName={name} />;
   return <FileQuestion aria-hidden size={17} className="text-[hsl(var(--muted))]" />;
 };
 
@@ -62,7 +66,7 @@ function RemotePathBar({ path, loading, onNavigate }: { path: string; loading: b
       autoFocus
       autoCapitalize="none"
       aria-label={t("files.pathInput")}
-      className="h-8 min-w-0 flex-1 font-mono"
+      className="h-8 w-full min-w-0 flex-1 font-mono"
       disabled={loading}
       spellCheck={false}
       value={draft}
@@ -82,7 +86,11 @@ function RemotePathBar({ path, loading, onNavigate }: { path: string; loading: b
   }
 
   const crumbs = breadcrumbPaths(path);
-  return <nav className="flex min-w-0 flex-1 items-center overflow-x-auto font-mono text-sm" aria-label={t("files.breadcrumb")}>
+  return <nav
+    className="flex w-full min-w-0 flex-1 cursor-text items-center overflow-x-auto font-mono text-sm"
+    aria-label={t("files.breadcrumb")}
+    onClick={startEditing}
+  >
     {crumbs.map((crumb, index) => {
       const current = index === crumbs.length - 1;
       return <span key={crumb.path} className="flex shrink-0 items-center">
@@ -92,7 +100,11 @@ function RemotePathBar({ path, loading, onNavigate }: { path: string; loading: b
           className="rounded px-1.5 py-1 hover:bg-[hsl(var(--elevated))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           aria-label={current ? t("files.editPath") : undefined}
           title={current ? t("files.editPath") : undefined}
-          onClick={() => current ? startEditing() : onNavigate(crumb.path)}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (current) startEditing();
+            else onNavigate(crumb.path);
+          }}
         >
           {crumb.label}
         </button>
@@ -125,25 +137,43 @@ function TransferQueue({ sessionId, jobs, onCancel, onRetry, onClose }: { sessio
 
 const imageFile = (entry: { name: string } | null) => Boolean(entry && /\.(?:png|jpe?g|webp|gif)$/i.test(entry.name));
 
-export function FilesView({ sessionId, active }: { sessionId: string | null; active: boolean }) {
+export function FilesView({ sessionId, profileId, active }: { sessionId: string | null; profileId: string; active: boolean }) {
   const { t, i18n } = useTranslation();
   const [directory, setDirectory] = useState<SftpDirectory | null>(null);
   const [selected, setSelected] = useState<SftpEntry | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const [operationError, setOperationError] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<"mkdir" | "rename" | "delete" | null>(null);
   const [jobs, setJobs] = useState<TransferJob[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [filePreview, setFilePreview] = useState<RemoteFileRequest | null>(null);
+  const [dragUploadActive, setDragUploadActive] = useState(false);
+  const pendingUploadDirectories = useRef(new Map<string, string>());
 
   const load = useCallback(async (operation: () => Promise<SftpDirectory>) => {
     setLoading(true); setError(false); setSelected(null);
-    try { setDirectory(await operation()); } catch { setError(true); } finally { setLoading(false); }
-  }, []);
-  useEffect(() => { setDirectory(null); setSelected(null); setContextMenu(null); setFilePreview(null); setError(false); }, [sessionId]);
-  useEffect(() => { if (active && sessionId && !directory && !loading && !error) void load(() => openSftp(sessionId)); }, [active, sessionId, directory, loading, error, load]);
+    try {
+      const nextDirectory = await operation();
+      setDirectory(nextDirectory);
+      saveLastRemotePath(profileId, nextDirectory.path);
+    } catch { setError(true); } finally { setLoading(false); }
+  }, [profileId]);
+  const openInitialDirectory = useCallback(async () => {
+    if (!sessionId) throw new Error("SSH session is required");
+    const initialDirectory = await openSftp(sessionId);
+    const savedPath = readLastRemotePath(profileId);
+    if (!savedPath || savedPath === initialDirectory.path) return initialDirectory;
+    try {
+      return await changeDirectory(sessionId, savedPath);
+    } catch {
+      clearLastRemotePath(profileId);
+      return initialDirectory;
+    }
+  }, [profileId, sessionId]);
+  useEffect(() => { pendingUploadDirectories.current.clear(); setDirectory(null); setSelected(null); setContextMenu(null); setFilePreview(null); setError(false); }, [sessionId]);
+  useEffect(() => { if (active && sessionId && !directory && !loading && !error) void load(openInitialDirectory); }, [active, sessionId, directory, loading, error, load, openInitialDirectory]);
   useEffect(() => {
     if (!sessionId) return;
     let current = true;
@@ -152,18 +182,73 @@ export function FilesView({ sessionId, active }: { sessionId: string | null; act
     return () => { current = false; };
   }, [sessionId]);
 
+  const startUploads = useCallback(async (files: LocalFileSelection[]) => {
+    if (!sessionId || !directory || files.length === 0) return;
+    setOperationError(null);
+    try {
+      const uploadDirectory = directory.path;
+      for (const file of files) {
+        const job = await startUpload(sessionId, file.grantId, uploadDirectory);
+        pendingUploadDirectories.current.set(job.id, uploadDirectory);
+        setJobs((items) => items.some((item) => item.id === job.id) ? [...items] : [...items, job]);
+      }
+      setQueueOpen(true);
+    } catch (cause) {
+      setOperationError(appErrorCode(cause));
+    }
+  }, [directory, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !directory || loading) return;
+    let refreshCurrentDirectory = false;
+    for (const job of jobs) {
+      if (job.direction !== "upload" || job.state !== "completed") continue;
+      const uploadDirectory = pendingUploadDirectories.current.get(job.id);
+      if (!uploadDirectory) continue;
+      pendingUploadDirectories.current.delete(job.id);
+      if (uploadDirectory === directory.path) refreshCurrentDirectory = true;
+    }
+    if (refreshCurrentDirectory) void load(() => refreshDirectory(sessionId));
+  }, [directory, jobs, load, loading, sessionId]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    // Security invariant: native paths in the Tauri payload are intentionally ignored.
+    // Rust alone turns dropped paths into scoped, single-use upload grants.
+    void getCurrentWindow().onDragDropEvent(({ payload }) => {
+      if (disposed) return;
+      if (payload.type === "enter" || payload.type === "over") {
+        setDragUploadActive(active && Boolean(directory) && !loading);
+        return;
+      }
+      const accepted = active && Boolean(directory) && !loading;
+      setDragUploadActive(false);
+      if (payload.type !== "drop" || !accepted) return;
+      void acceptLatestUploadDrop()
+        .then(startUploads)
+        .catch((cause) => setOperationError(appErrorCode(cause)));
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [active, directory, loading, startUploads]);
+
   const navigate = (path: string) => { if (sessionId) void load(() => changeDirectory(sessionId, path)); };
   const refresh = () => { if (sessionId) void load(() => refreshDirectory(sessionId)); };
-  const mutate = async (operation: () => Promise<SftpDirectory>) => { setOperationError(false); try { setDirectory(await operation()); setSelected(null); } catch (cause) { setOperationError(true); throw cause; } };
+  const mutate = async (operation: () => Promise<SftpDirectory>) => { setOperationError(null); try { setDirectory(await operation()); setSelected(null); } catch (cause) { setOperationError(appErrorCode(cause)); throw cause; } };
   const upload = async () => {
     if (!sessionId || !directory) return;
-    setOperationError(false);
-    try { const files = await selectUploadFiles(); for (const file of files) await startUpload(sessionId, file.grantId, directory.path); if (files.length) setQueueOpen(true); } catch { setOperationError(true); }
+    try { await startUploads(await selectUploadFiles(sessionId, directory.path)); } catch (cause) { setOperationError(appErrorCode(cause)); }
   };
   const download = async () => {
     if (!sessionId || selected?.kind !== "file") return;
-    setOperationError(false);
-    try { const target = await selectDownloadTarget(selected.name); if (target) { await startDownload(sessionId, target.grantId, selected.path); setQueueOpen(true); } } catch { setOperationError(true); }
+    setOperationError(null);
+    try { const target = await selectDownloadTarget(selected.name); if (target) { await startDownload(sessionId, target.grantId, selected.path); setQueueOpen(true); } } catch (cause) { setOperationError(appErrorCode(cause)); }
   };
 
   if (!sessionId) return <div className="grid h-full place-items-center text-sm text-[hsl(var(--muted))]">{t("files.connectRequired")}</div>;
@@ -179,12 +264,12 @@ export function FilesView({ sessionId, active }: { sessionId: string | null; act
       <Button variant="ghost" size="sm" aria-label={t("transfers.title")} onClick={() => setQueueOpen((value) => !value)}><span className="hidden text-xs sm:inline">{t("transfers.title")}</span><span className="sm:hidden">{jobs.filter((job) => job.sessionId === sessionId).length}</span></Button>
       <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={t("files.refresh")} title={t("files.refresh")} disabled={loading} onClick={refresh}><RefreshCw size={16} className={loading ? "animate-spin" : undefined} /></Button>
     </div>
-    {operationError && <div className="border-b bg-red-500/10 px-4 py-2 text-xs text-red-500">{t("files.operationFailed")}</div>}
-    {error && <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-red-500"><span>{t("files.error")}</span><Button variant="secondary" size="sm" onClick={() => void load(() => openSftp(sessionId))}>{t("files.retry")}</Button></div>}
+    {operationError && <div className="border-b bg-red-500/10 px-4 py-2 text-xs text-red-500">{t(`connection.errors.${operationError}`, { defaultValue: t("files.operationFailed") })}<span className="ml-2 font-mono text-[10px] opacity-70">{operationError}</span></div>}
+    {error && <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-red-500"><span>{t("files.error")}</span><Button variant="secondary" size="sm" onClick={() => void load(openInitialDirectory)}>{t("files.retry")}</Button></div>}
     {!error && loading && !directory && <div className="grid flex-1 place-items-center text-sm text-[hsl(var(--muted))]">{t("common.loading")}</div>}
-    {!error && directory && <div className="min-h-0 flex-1 overflow-auto" onContextMenu={(event) => { event.preventDefault(); setSelected(null); setContextMenu({ x: event.clientX, y: event.clientY }); }}><table className="w-full table-fixed text-left text-sm"><thead className="sticky top-0 z-10 bg-[hsl(var(--elevated))] text-xs text-[hsl(var(--secondary))]"><tr><th className="w-full px-4 py-2 font-medium md:w-[46%]">{t("files.name")}</th><th className="hidden w-[16%] px-3 py-2 font-medium sm:table-cell">{t("files.size")}</th><th className="hidden w-[24%] px-3 py-2 font-medium lg:table-cell">{t("files.modified")}</th><th className="hidden w-[14%] px-3 py-2 font-medium md:table-cell">{t("files.permissions")}</th></tr></thead><tbody>
-      {directory.entries.map((entry) => <tr key={entry.path} className={`border-b border-[hsl(var(--border-soft))] hover:bg-[hsl(var(--elevated))]/70 ${selected?.path === entry.path ? "bg-blue-500/10" : ""}`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSelected(entry); setContextMenu({ x: event.clientX, y: event.clientY }); }}><td className="px-3 py-1.5"><div className="flex items-center"><button type="button" className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" onDoubleClick={() => { if (entry.kind === "directory") navigate(entry.path); else if (entry.kind === "file") setFilePreview(entry); }} onClick={() => setSelected(entry)}>{entryIcon(entry.kind)}<span className="truncate">{entry.name}</span></button>{entry.kind === "directory" && <button type="button" className="grid h-10 w-10 place-items-center rounded md:hidden" aria-label={t("files.openFolder", { name: entry.name })} onClick={() => navigate(entry.path)}><ChevronRight size={18} /></button>}</div></td><td className="hidden truncate px-3 py-2 font-mono text-xs text-[hsl(var(--secondary))] sm:table-cell">{entry.kind === "directory" ? "—" : formatFileSize(entry.size, i18n.language)}</td><td className="hidden truncate px-3 py-2 text-xs text-[hsl(var(--secondary))] lg:table-cell">{entry.modified === null ? "—" : new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(entry.modified * 1000)}</td><td className="hidden px-3 py-2 font-mono text-xs text-[hsl(var(--secondary))] md:table-cell">{formatPermissions(entry.permissions)}</td></tr>)}
-    </tbody></table>{directory.entries.length === 0 && <div className="grid h-32 place-items-center text-sm text-[hsl(var(--muted))]">{t("files.empty")}</div>}</div>}
+    {!error && directory && <div className="relative min-h-0 flex-1">{dragUploadActive && <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-[hsl(var(--background))]/80 text-[hsl(var(--foreground))]" role="status"><span aria-hidden className="absolute left-1 top-1 h-14 w-14 rounded-tl-xl border-l-2 border-t-2 border-current" /><span aria-hidden className="absolute right-1 top-1 h-14 w-14 rounded-tr-xl border-r-2 border-t-2 border-current" /><span aria-hidden className="absolute bottom-1 left-1 h-14 w-14 rounded-bl-xl border-b-2 border-l-2 border-current" /><span aria-hidden className="absolute bottom-1 right-1 h-14 w-14 rounded-br-xl border-b-2 border-r-2 border-current" /><div className="flex -translate-y-4 flex-col items-center gap-4"><Download aria-hidden size={52} strokeWidth={1.8} /><strong className="text-base font-semibold">{t("files.dropToUpload")}</strong></div></div>}<div className="h-full overflow-auto" onContextMenu={(event) => { event.preventDefault(); setSelected(null); setContextMenu({ x: event.clientX, y: event.clientY }); }}><table className="w-full table-fixed text-left text-sm"><thead className="sticky top-0 z-10 bg-[hsl(var(--elevated))] text-xs text-[hsl(var(--secondary))]"><tr><th className="w-full px-4 py-2 font-medium md:w-[46%]">{t("files.name")}</th><th className="hidden w-[16%] px-3 py-2 font-medium sm:table-cell">{t("files.size")}</th><th className="hidden w-[24%] px-3 py-2 font-medium lg:table-cell">{t("files.modified")}</th><th className="hidden w-[14%] px-3 py-2 font-medium md:table-cell">{t("files.permissions")}</th></tr></thead><tbody>
+      {directory.entries.map((entry) => <tr key={entry.path} className={`border-b border-[hsl(var(--border-soft))] hover:bg-[hsl(var(--elevated))]/70 ${selected?.path === entry.path ? "bg-blue-500/10" : ""}`} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setSelected(entry); setContextMenu({ x: event.clientX, y: event.clientY }); }}><td className="px-3 py-1.5"><div className="flex items-center"><button type="button" className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" onDoubleClick={() => { if (entry.kind === "directory") navigate(entry.path); else if (entry.kind === "file") setFilePreview(entry); }} onClick={() => setSelected(entry)}>{entryIcon(entry.kind, entry.name)}<span className="truncate">{entry.name}</span></button>{entry.kind === "directory" && <button type="button" className="grid h-10 w-10 place-items-center rounded md:hidden" aria-label={t("files.openFolder", { name: entry.name })} onClick={() => navigate(entry.path)}><ChevronRight size={18} /></button>}</div></td><td className="hidden truncate px-3 py-2 font-mono text-xs text-[hsl(var(--secondary))] sm:table-cell">{entry.kind === "directory" ? "—" : formatFileSize(entry.size, i18n.language)}</td><td className="hidden truncate px-3 py-2 text-xs text-[hsl(var(--secondary))] lg:table-cell">{entry.modified === null ? "—" : new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(entry.modified * 1000)}</td><td className="hidden px-3 py-2 font-mono text-xs text-[hsl(var(--secondary))] md:table-cell">{formatPermissions(entry.permissions)}</td></tr>)}
+    </tbody></table>{directory.entries.length === 0 && <div className="grid h-32 place-items-center text-sm text-[hsl(var(--muted))]">{t("files.empty")}</div>}</div></div>}
     {queueOpen && <TransferQueue sessionId={sessionId} jobs={jobs} onClose={() => setQueueOpen(false)} onCancel={(id) => void cancelTransfer(sessionId, id)} onRetry={(id, overwrite) => void retryTransfer(sessionId, id, overwrite)} />}
     {contextMenu && <ContextMenu
       x={contextMenu.x}

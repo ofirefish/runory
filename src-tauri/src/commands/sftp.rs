@@ -4,13 +4,13 @@ use tauri_plugin_dialog::DialogExt;
 use crate::cloud::{CloudPolicyAction, CloudPolicyService};
 use crate::domain::{
     AppError, AppResult, LocalFileSelection, RemoteImagePreview, RemoteTextPreview,
-    RetryTransferRequest, SelectDownloadTargetRequest, SessionRequest, SftpCreateDirectoryRequest,
-    SftpDeleteRequest, SftpDirectory, SftpMetadata, SftpPathRequest, SftpRenameRequest,
-    StartDownloadRequest, StartUploadRequest, TransferDirection, TransferEvent, TransferJob,
-    TransferJobRequest,
+    RetryTransferRequest, SelectDownloadTargetRequest, SelectUploadFilesRequest, SessionRequest,
+    SftpCreateDirectoryRequest, SftpDeleteRequest, SftpDirectory, SftpMetadata, SftpPathRequest,
+    SftpRenameRequest, StartDownloadRequest, StartUploadRequest, TransferDirection, TransferEvent,
+    TransferJob, TransferJobRequest,
 };
 use crate::ssh::ServerSessionManager;
-use crate::transfers::{LocalFileGrantKind, LocalFileGrantService};
+use crate::transfers::{LocalFileGrantKind, LocalFileGrantService, UploadDirectoryHistoryService};
 
 async fn authorize(
     policies: &CloudPolicyService,
@@ -199,10 +199,24 @@ pub async fn delete(
 
 #[tauri::command]
 pub async fn sftp_select_upload_files(
+    request: SelectUploadFilesRequest,
     app: AppHandle,
     grants: State<'_, LocalFileGrantService>,
+    history: State<'_, UploadDirectoryHistoryService>,
+    sessions: State<'_, ServerSessionManager>,
 ) -> AppResult<Vec<LocalFileSelection>> {
-    let Some(paths) = app.dialog().file().blocking_pick_files() else {
+    let profile_id = sessions.profile_id(request.session_id).await?;
+    let mut dialog = app.dialog().file();
+    if let Some(directory) = history.find(profile_id, &request.remote_directory).await? {
+        let is_directory = tokio::fs::metadata(&directory)
+            .await
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false);
+        if is_directory {
+            dialog = dialog.set_directory(directory);
+        }
+    }
+    let Some(paths) = dialog.blocking_pick_files() else {
         return Ok(Vec::new());
     };
     let mut selections = Vec::with_capacity(paths.len());
@@ -214,6 +228,13 @@ pub async fn sftp_select_upload_files(
         );
     }
     Ok(selections)
+}
+
+#[tauri::command]
+pub async fn sftp_accept_latest_upload_drop(
+    grants: State<'_, LocalFileGrantService>,
+) -> AppResult<Vec<LocalFileSelection>> {
+    grants.accept_latest_upload_drop().await
 }
 
 #[tauri::command]
@@ -243,6 +264,7 @@ pub async fn sftp_select_download_target(
 pub async fn sftp_start_upload(
     request: StartUploadRequest,
     grants: State<'_, LocalFileGrantService>,
+    history: State<'_, UploadDirectoryHistoryService>,
     sessions: State<'_, ServerSessionManager>,
     policies: State<'_, CloudPolicyService>,
 ) -> AppResult<TransferJob> {
@@ -256,8 +278,11 @@ pub async fn sftp_start_upload(
     let grant = grants
         .consume(request.grant_id, LocalFileGrantKind::UploadSource)
         .await?;
+    let local_directory = grant.path.parent().map(ToOwned::to_owned);
+    let profile_id = sessions.profile_id(request.session_id).await?;
+    let remote_directory = request.remote_directory.clone();
     let sftp = sessions.sftp_channel(request.session_id).await?;
-    sessions
+    let job = sessions
         .transfer_queue()
         .enqueue_upload(
             request.session_id,
@@ -266,7 +291,17 @@ pub async fn sftp_start_upload(
             request.remote_directory,
             request.overwrite,
         )
-        .await
+        .await?;
+    if let Some(local_directory) = local_directory {
+        if history
+            .remember(profile_id, remote_directory, local_directory)
+            .await
+            .is_err()
+        {
+            tracing::warn!(profile_id = %profile_id, "failed to persist upload directory history");
+        }
+    }
+    Ok(job)
 }
 
 #[tauri::command]

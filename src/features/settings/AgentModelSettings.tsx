@@ -94,8 +94,10 @@ export function AgentModelSettings() {
         <p className="text-[11px] text-[hsl(var(--muted))]">{t("settings.modelSecurityHint")}</p>
       </>}
       {failed && <p className="text-xs text-red-500">{t("settings.modelError")}</p>}
+      {status?.apiKeyStored && !status.credentialVaultUnlocked && !status.apiKeyConfigured && <p className="text-xs text-amber-600">{t("settings.modelApiKeyVaultLocked")}</p>}
+      {status?.apiKeyStored && status.credentialVaultUnlocked && !status.apiKeyConfigured && <p className="text-xs text-red-500">{t("settings.modelApiKeyMissing")}</p>}
       {tested && <p className="text-xs text-emerald-600">{t("settings.modelTestSucceeded")}</p>}
-      <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>{t("common.save")}</Button><Button size="sm" variant="secondary" disabled={busy || !status?.apiKeyConfigured} onClick={() => void test()}>{t("settings.testModel")}</Button>{status?.apiKeyConfigured && kind !== "local" && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void clearKey()}>{t("settings.clearModelApiKey")}</Button>}</div>
+      <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>{t("common.save")}</Button><Button size="sm" variant="secondary" disabled={busy || !status?.apiKeyConfigured} onClick={() => void test()}>{t("settings.testModel")}</Button>{(status?.apiKeyConfigured || status?.apiKeyStored) && kind !== "local" && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void clearKey()}>{t("settings.clearModelApiKey")}</Button>}</div>
     </div>
   </section>;
 }

@@ -1,6 +1,7 @@
 import { CircleAlert } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { appErrorCode } from "../../../lib/app-error";
 import { approveChangeSet, approveChangeSetStep, cancelAgentRun, executeChangeSet, getChangeSet, rejectChangeSet, rollbackChangeSet, runDoctor } from "../../../lib/tauri/agentic";
 import type { ChangeSet, Incident } from "../../../types/agentic";
 import type { ServerProfile } from "../../../types/domain";
@@ -30,7 +31,6 @@ type ServerSessionModel = {
 const EMPTY_SESSION: ServerSessionModel = { items: [], running: false, failed: false, failureCode: null, changeBusyId: null, changeErrorId: null, changeErrorCode: null, awaiting: false, pendingText: "", activeRunId: null };
 
 const uid = () => `run-${crypto.randomUUID()}`;
-const errorCode = (error: unknown) => typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN";
 
 /**
  * Agent Tab — Conversation-first UI bound to the current server.
@@ -124,7 +124,7 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
       }
     } catch (error) {
       finishStatus(statusId);
-      update({ running: false, failed: true, failureCode: errorCode(error), activeRunId: null });
+      update({ running: false, failed: true, failureCode: appErrorCode(error), activeRunId: null });
     } finally {
       window.dispatchEvent(new Event("runory:agent-done"));
     }
@@ -192,7 +192,7 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
       update({ changeBusyId: null, changeErrorId: null, changeErrorCode: null });
     } catch (error) {
       try { replaceRunChangeSet(runId, await getChangeSet(changeSet.id)); } catch { /* Preserve the last known safe snapshot. */ }
-      update({ changeBusyId: null, changeErrorId: changeSet.id, changeErrorCode: errorCode(error) });
+      update({ changeBusyId: null, changeErrorId: changeSet.id, changeErrorCode: appErrorCode(error) });
     } finally {
       window.dispatchEvent(new Event("runory:agent-done"));
     }

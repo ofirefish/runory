@@ -16,6 +16,18 @@ pub async fn vault_unlock(
 }
 
 #[tauri::command]
+pub async fn vault_initialize(credentials: State<'_, CredentialService>) -> AppResult<()> {
+    credentials.initialize_with_platform_key().await
+}
+
+#[tauri::command]
+pub async fn vault_unlock_with_platform(
+    credentials: State<'_, CredentialService>,
+) -> AppResult<()> {
+    credentials.unlock_with_platform_key().await
+}
+
+#[tauri::command]
 pub async fn vault_lock(credentials: State<'_, CredentialService>) -> AppResult<()> {
     credentials.lock().await
 }

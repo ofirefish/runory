@@ -364,10 +364,10 @@ SSH window-change
 SSHService
    │
 CredentialService
-   │
-CredentialVault trait
-   │
-StrongholdCredentialVault
+   ├── PlatformKeyStore (system-owned Vault unlock secret)
+   └── CredentialVault trait
+       ├── Desktop: StrongholdCredentialVault
+       └── Mobile: PortableCredentialVault
 ```
 
 SSHService 不知道 Secret 实际存储方式。
@@ -531,10 +531,12 @@ iOS / Android React Interaction Layer
  └── Native File Picker Intent
               ↓ typed IPC
 Rust Core
- ├── CredentialService → CredentialVault
- │    ├── Desktop: StrongholdCredentialVault
- │    └── Mobile: PortableCredentialVault (Argon2id + AES-256-GCM)
-│    └── private-key:{key_id}
+ ├── CredentialService
+ │    ├── Desktop PlatformKeyStore: Credential Manager / Keychain / Secret Service
+ │    └── CredentialVault
+ │         ├── Desktop: StrongholdCredentialVault
+ │         ├── Mobile: PortableCredentialVault (Argon2id + AES-256-GCM)
+ │         └── private-key:{key_id}
  ├── LocalFileGrantService (single-use upload/download grants)
  └── ServerSessionManager
       ├── TerminalChannel
@@ -542,7 +544,7 @@ Rust Core
       └── ExecChannel
 ```
 
-移动私钥导入由 Rust 打开系统文件选择器、读取和校验最多 1 MiB 的私钥，再直接写入移动端加密 CredentialVault。React 只接收不透明 `key_id` 和显示名称。移动端仓库使用 Argon2id 派生密钥和 AES-256-GCM 认证加密，避免 Android/iOS 交叉构建依赖原生 libsodium；Desktop 继续使用 Stronghold。应用进程终止后 CredentialVault 必须重新通过主密码解锁；生物识别只解除当前存活应用会话的隐私遮罩，不持久化或返回 Vault Master Secret。
+移动私钥导入由 Rust 打开系统文件选择器、读取和校验最多 1 MiB 的私钥，再直接写入移动端加密 CredentialVault。React 只接收不透明 `key_id` 和显示名称。移动端仓库使用 Argon2id 派生密钥和 AES-256-GCM 认证加密，避免 Android/iOS 交叉构建依赖原生 libsodium；Desktop 继续使用 Stronghold。Desktop 的不透明 Vault 解锁 Secret 由 Rust 写入当前 OS 用户的 Credential Manager、Keychain 或 Secret Service；旧 Vault 首次成功解锁后迁移，以后可在启动时自动解锁。Rust 会先执行只读运行时探测，因为编译进应用的系统存储后端在某些登录会话中仍可能不可用；此时 UI 回退到本次会话密码解锁。Android/iOS 仍保留主密码回退，直到移动 PlatformKeyStore 门禁完成；生物识别不向 React 返回 Vault Master Secret。
 
 ## 26. AI Terminal
 
@@ -591,6 +593,8 @@ ServerSession
 ## 26.2 Optional Cloud Foundation
 
 Phase 9 使用 Supabase Auth 邮箱登录与 Postgres RLS，但 Local-only 始终是默认可用路径：
+
+跨设备 Credential / Private Key 同步与设备密钥信封仍不是当前基线；其兼容演进提案见 `docs/CLOUD_SYNC_SECURITY_ARCHITECTURE.md`。在该文档的迁移与安全门禁完成前，本节下述“凭据永不上传”规则继续强制生效。
 
 ```text
 React Auth UI → supabase-js (publishable key only)

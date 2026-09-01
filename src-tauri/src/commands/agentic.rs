@@ -59,8 +59,11 @@ pub async fn agent_doctor_run(
 }
 
 #[tauri::command]
-pub async fn agent_model_get(models: State<'_, ModelGateway>) -> AppResult<ModelProviderStatus> {
-    Ok(models.status().await)
+pub async fn agent_model_get(
+    models: State<'_, ModelGateway>,
+    credentials: State<'_, CredentialService>,
+) -> AppResult<ModelProviderStatus> {
+    models.status(&credentials).await
 }
 
 #[tauri::command]

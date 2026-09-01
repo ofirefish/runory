@@ -44,6 +44,9 @@ export type CredentialStatus = {
   vaultInitialized: boolean;
   vaultUnlocked: boolean;
   hasCredential: boolean;
+  platformUnlockSupported: boolean;
+  platformUnlockAvailable: boolean;
+  platformUnlockConfigured: boolean;
 };
 
 export type PrivateKeyImport = { keyId: string; name: string };

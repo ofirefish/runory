@@ -19,6 +19,7 @@ describe("i18n resources", () => {
       "files.modified",
       "files.permissions",
       "files.upload",
+      "files.dropToUpload",
       "files.download",
       "files.addFolder",
       "files.contextMenu",

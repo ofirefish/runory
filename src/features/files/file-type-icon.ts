@@ -1,0 +1,207 @@
+export type FileTypeIconName =
+  | "archive"
+  | "audio"
+  | "certificate"
+  | "database"
+  | "document"
+  | "docker"
+  | "email"
+  | "executable"
+  | "font"
+  | "git"
+  | "go"
+  | "html"
+  | "image"
+  | "java"
+  | "javascript"
+  | "json"
+  | "key"
+  | "library"
+  | "license"
+  | "lock"
+  | "log"
+  | "markdown"
+  | "pdf"
+  | "php"
+  | "powerpoint"
+  | "powershell"
+  | "python"
+  | "react"
+  | "ruby"
+  | "rust"
+  | "settings"
+  | "shell"
+  | "spreadsheet"
+  | "stylesheet"
+  | "toml"
+  | "typescript"
+  | "video"
+  | "word"
+  | "xml"
+  | "yaml";
+
+const fileNameIcons: Readonly<Record<string, FileTypeIconName>> = {
+  ".editorconfig": "settings",
+  ".env": "settings",
+  ".gitattributes": "git",
+  ".gitignore": "git",
+  ".gitmodules": "git",
+  "cargo.lock": "rust",
+  "cargo.toml": "rust",
+  ".dockerignore": "docker",
+  "dockerfile": "docker",
+  "go.mod": "go",
+  "go.sum": "go",
+  "license": "license",
+  "license.md": "license",
+  "license.txt": "license",
+  "notice": "license",
+};
+
+const extensionIcons: Readonly<Record<string, FileTypeIconName>> = {
+  "7z": "archive",
+  aac: "audio",
+  appimage: "executable",
+  avi: "video",
+  bash: "shell",
+  bat: "shell",
+  bmp: "image",
+  bz: "archive",
+  bz2: "archive",
+  cer: "certificate",
+  cfg: "settings",
+  cjs: "javascript",
+  cmd: "shell",
+  conf: "settings",
+  crt: "certificate",
+  css: "stylesheet",
+  csv: "spreadsheet",
+  cts: "typescript",
+  db: "database",
+  der: "certificate",
+  diff: "git",
+  dll: "library",
+  doc: "word",
+  docx: "word",
+  dylib: "library",
+  eml: "email",
+  env: "settings",
+  eot: "font",
+  exe: "executable",
+  fish: "shell",
+  flac: "audio",
+  flv: "video",
+  gif: "image",
+  go: "go",
+  gz: "archive",
+  heic: "image",
+  htm: "html",
+  html: "html",
+  ico: "image",
+  ini: "settings",
+  jar: "java",
+  java: "java",
+  jpeg: "image",
+  jpg: "image",
+  js: "javascript",
+  json: "json",
+  json5: "json",
+  jsonc: "json",
+  jsx: "react",
+  key: "key",
+  less: "stylesheet",
+  log: "log",
+  lock: "lock",
+  m4a: "audio",
+  m4v: "video",
+  md: "markdown",
+  mdx: "markdown",
+  mjs: "javascript",
+  mkv: "video",
+  mov: "video",
+  mp3: "audio",
+  mp4: "video",
+  mpeg: "video",
+  mpg: "video",
+  msg: "email",
+  msi: "executable",
+  mts: "typescript",
+  odp: "powerpoint",
+  ods: "spreadsheet",
+  odt: "word",
+  ogg: "audio",
+  opus: "audio",
+  otf: "font",
+  p12: "certificate",
+  patch: "git",
+  pdf: "pdf",
+  pem: "certificate",
+  pfx: "certificate",
+  php: "php",
+  png: "image",
+  ppt: "powerpoint",
+  pptx: "powerpoint",
+  properties: "settings",
+  ps1: "powershell",
+  psd1: "powershell",
+  psm1: "powershell",
+  ppk: "key",
+  pub: "key",
+  py: "python",
+  pyc: "python",
+  pyd: "python",
+  pyw: "python",
+  rar: "archive",
+  rb: "ruby",
+  rs: "rust",
+  rtf: "document",
+  sass: "stylesheet",
+  scss: "stylesheet",
+  sh: "shell",
+  so: "library",
+  sql: "database",
+  sqlite: "database",
+  sqlite3: "database",
+  svg: "image",
+  tar: "archive",
+  tgz: "archive",
+  tif: "image",
+  tiff: "image",
+  toml: "toml",
+  ts: "typescript",
+  tsv: "spreadsheet",
+  tsx: "react",
+  ttf: "font",
+  txt: "document",
+  wav: "audio",
+  webm: "video",
+  webp: "image",
+  wma: "audio",
+  wmv: "video",
+  woff: "font",
+  woff2: "font",
+  xls: "spreadsheet",
+  xlsx: "spreadsheet",
+  xml: "xml",
+  xsd: "xml",
+  xsl: "xml",
+  xslt: "xml",
+  xz: "archive",
+  yaml: "yaml",
+  yml: "yaml",
+  zip: "archive",
+  zsh: "shell",
+  zst: "archive",
+};
+
+export function resolveFileTypeIcon(fileName: string): FileTypeIconName {
+  const baseName = fileName.trim().replaceAll("\\", "/").split("/").pop()?.toLowerCase() ?? "";
+  const directMatch = fileNameIcons[baseName];
+  if (directMatch) return directMatch;
+  if (baseName.startsWith(".env.")) return "settings";
+  if (baseName === "docker-compose" || baseName.startsWith("docker-compose.")) return "docker";
+
+  const extensionSeparator = baseName.lastIndexOf(".");
+  if (extensionSeparator < 0 || extensionSeparator === baseName.length - 1) return "document";
+  return extensionIcons[baseName.slice(extensionSeparator + 1)] ?? "document";
+}

@@ -87,6 +87,8 @@ pub enum AppError {
     VaultLocked,
     #[error("credential vault password is invalid")]
     VaultInvalid,
+    #[error("platform secure storage is unavailable")]
+    PlatformKeyStoreUnavailable,
     #[error("credential was not found")]
     CredentialNotFound,
     #[error("cloud sync request is invalid")]
@@ -165,6 +167,7 @@ impl AppError {
             Self::InvalidOperation => "INVALID_OPERATION",
             Self::VaultLocked => "VAULT_LOCKED",
             Self::VaultInvalid => "VAULT_INVALID",
+            Self::PlatformKeyStoreUnavailable => "PLATFORM_KEY_STORE_UNAVAILABLE",
             Self::CredentialNotFound => "CREDENTIAL_NOT_FOUND",
             Self::CloudInvalid => "CLOUD_INVALID",
             Self::CloudCrypto => "CLOUD_CRYPTO_ERROR",

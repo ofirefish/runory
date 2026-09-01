@@ -23,7 +23,8 @@ export const refreshDirectory = (sessionId: string) => invoke<SftpDirectory>("re
 export const createRemoteDirectory = (sessionId: string, parent: string, name: string) => invoke<SftpDirectory>("create_directory", { request: { sessionId, parent, name } });
 export const renameRemoteEntry = (sessionId: string, path: string, newName: string) => invoke<SftpDirectory>("rename", { request: { sessionId, path, newName } });
 export const deleteRemoteEntry = (sessionId: string, path: string, recursive: boolean) => invoke<SftpDirectory>("delete", { request: { sessionId, path, recursive } });
-export const selectUploadFiles = () => invoke<LocalFileSelection[]>("sftp_select_upload_files");
+export const selectUploadFiles = (sessionId: string, remoteDirectory: string) => invoke<LocalFileSelection[]>("sftp_select_upload_files", { request: { sessionId, remoteDirectory } });
+export const acceptLatestUploadDrop = () => invoke<LocalFileSelection[]>("sftp_accept_latest_upload_drop");
 export const selectDownloadTarget = (suggestedName: string) => invoke<LocalFileSelection | null>("sftp_select_download_target", { request: { suggestedName } });
 export const startUpload = (sessionId: string, grantId: string, remoteDirectory: string, overwrite = false) => invoke<TransferJob>("sftp_start_upload", { request: { sessionId, grantId, remoteDirectory, overwrite } });
 export const startDownload = (sessionId: string, grantId: string, remotePath: string) => invoke<TransferJob>("sftp_start_download", { request: { sessionId, grantId, remotePath } });
@@ -32,6 +33,8 @@ export const subscribeTransfers = (sessionId: string, onEvent: (event: TransferE
 export const cancelTransfer = (sessionId: string, jobId: string) => invoke<void>("sftp_transfer_cancel", { request: { sessionId, jobId } });
 export const retryTransfer = (sessionId: string, jobId: string, overwrite = false) => invoke<TransferJob>("sftp_transfer_retry", { request: { sessionId, jobId, overwrite } });
 export const unlockVault = (masterPassword: string) => invoke<void>("vault_unlock", { request: { masterPassword } });
+export const initializeVault = () => invoke<void>("vault_initialize");
+export const unlockVaultWithPlatform = () => invoke<void>("vault_unlock_with_platform");
 export const lockVault = () => invoke<void>("vault_lock");
 export const credentialStatus = (profileId: string | null = null, kind: CredentialKind | null = null) => invoke<CredentialStatus>("credential_status", { request: { profileId, kind } });
 export const forgetCredential = (profileId: string, kind: CredentialKind) => invoke<void>("credential_forget", { request: { profileId, kind } });

@@ -73,6 +73,7 @@ pub(crate) struct ModelProviderStatus {
     pub max_context_tokens: u32,
     pub api_key_configured: bool,
     pub api_key_stored: bool,
+    pub credential_vault_unlocked: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,19 +128,36 @@ impl ModelGateway {
         Ok(())
     }
 
-    pub(crate) async fn status(&self) -> ModelProviderStatus {
+    pub(crate) async fn status(
+        &self,
+        credentials: &CredentialService,
+    ) -> AppResult<ModelProviderStatus> {
         let config = self.config.read().await.clone();
         let has_session_key = self.session_api_key.lock().await.is_some();
-        ModelProviderStatus {
+        let stored_status = if config.api_key_stored {
+            Some(
+                credentials
+                    .status(Some(MODEL_CREDENTIAL_ID), Some(CredentialKind::LlmApiKey))
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok(ModelProviderStatus {
             kind: config.kind,
             base_url: config.base_url,
             model: config.model,
             max_context_tokens: config.max_context_tokens,
             api_key_configured: config.kind == ModelProviderKind::Local
                 || has_session_key
-                || config.api_key_stored,
+                || stored_status
+                    .as_ref()
+                    .is_some_and(|status| status.has_credential),
             api_key_stored: config.api_key_stored,
-        }
+            credential_vault_unlocked: stored_status
+                .as_ref()
+                .is_some_and(|status| status.vault_unlocked),
+        })
     }
 
     pub(crate) async fn configure(
@@ -157,7 +175,12 @@ impl ModelGateway {
         apply_provider_defaults(&mut config);
         validate_config(&config)?;
 
-        if let Some(api_key) = request.api_key.filter(|value| !value.is_empty()) {
+        let supplied_api_key = request
+            .api_key
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let mut pending_session_api_key = None;
+        if let Some(api_key) = supplied_api_key {
             validate_api_key(&api_key)?;
             if request.remember_api_key {
                 credentials
@@ -167,15 +190,34 @@ impl ModelGateway {
                         Zeroizing::new(api_key),
                     )
                     .await?;
-                *self.session_api_key.lock().await = None;
                 config.api_key_stored = true;
             } else {
-                *self.session_api_key.lock().await = Some(Zeroizing::new(api_key));
+                pending_session_api_key = Some(Zeroizing::new(api_key));
+            }
+        } else if request.remember_api_key && !config.api_key_stored {
+            if let Some(api_key) = self.session_api_key.lock().await.as_ref() {
+                credentials
+                    .remember(
+                        MODEL_CREDENTIAL_ID,
+                        CredentialKind::LlmApiKey,
+                        Zeroizing::new(api_key.to_string()),
+                    )
+                    .await?;
+                config.api_key_stored = true;
+            }
+        }
+        if config.kind != ModelProviderKind::Local && pending_session_api_key.is_none() {
+            let has_session_api_key = self.session_api_key.lock().await.is_some();
+            if !has_session_api_key {
+                self.resolve_api_key(&config, credentials).await?;
             }
         }
         self.repository.save_atomic(&config).await?;
         *self.config.write().await = config;
-        Ok(self.status().await)
+        if pending_session_api_key.is_some() || request.remember_api_key {
+            *self.session_api_key.lock().await = pending_session_api_key;
+        }
+        self.status(credentials).await
     }
 
     pub(crate) async fn clear_api_key(
@@ -192,7 +234,7 @@ impl ModelGateway {
             self.repository.save_atomic(&config).await?;
             *self.config.write().await = config;
         }
-        Ok(self.status().await)
+        self.status(credentials).await
     }
 
     pub(crate) async fn id(&self) -> String {
@@ -475,7 +517,53 @@ const fn provider_label(kind: ModelProviderKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::credentials::CredentialVault;
+
+    struct LockedTestVault;
+
+    impl CredentialVault for LockedTestVault {
+        fn is_initialized(&self) -> bool {
+            false
+        }
+        fn is_unlocked(&self) -> bool {
+            false
+        }
+        fn unlock(&self, _master_password: Zeroizing<String>) -> AppResult<()> {
+            Err(AppError::VaultLocked)
+        }
+        fn lock(&self) -> AppResult<()> {
+            Ok(())
+        }
+        fn contains(&self, _profile_id: Uuid, _kind: CredentialKind) -> AppResult<bool> {
+            Err(AppError::VaultLocked)
+        }
+        fn get(&self, _profile_id: Uuid, _kind: CredentialKind) -> AppResult<Zeroizing<String>> {
+            Err(AppError::VaultLocked)
+        }
+        fn put(
+            &self,
+            _profile_id: Uuid,
+            _kind: CredentialKind,
+            _secret: Zeroizing<String>,
+        ) -> AppResult<()> {
+            Err(AppError::VaultLocked)
+        }
+        fn delete(&self, _profile_id: Uuid, _kind: CredentialKind) -> AppResult<()> {
+            Err(AppError::VaultLocked)
+        }
+        fn put_private_key(&self, _key_id: Uuid, _content: Zeroizing<Vec<u8>>) -> AppResult<()> {
+            Err(AppError::VaultLocked)
+        }
+        fn get_private_key(&self, _key_id: Uuid) -> AppResult<Zeroizing<Vec<u8>>> {
+            Err(AppError::VaultLocked)
+        }
+        fn delete_private_key(&self, _key_id: Uuid) -> AppResult<()> {
+            Err(AppError::VaultLocked)
+        }
+    }
 
     #[test]
     fn provider_endpoints_are_normalized_without_accepting_insecure_remote_http() {
@@ -508,5 +596,53 @@ mod tests {
         assert!(!serialized.contains("\"apiKey\":"));
         assert!(!serialized.contains("secret"));
         assert!(serialized.contains("apiKeyStored"));
+    }
+
+    #[tokio::test]
+    async fn remote_configuration_requires_an_available_key_and_keeps_session_key_usable() {
+        let directory = tempfile::tempdir().expect("temporary model directory");
+        let gateway = ModelGateway::at_path(directory.path().join("agent-model.json"))
+            .expect("model gateway");
+        let credentials = CredentialService::new(Arc::new(LockedTestVault));
+        let request = ModelConfigureRequest {
+            kind: ModelProviderKind::DeepSeek,
+            base_url: "https://api.deepseek.com".into(),
+            model: "deepseek-chat".into(),
+            max_context_tokens: 64_000,
+            api_key: None,
+            remember_api_key: false,
+        };
+
+        assert!(matches!(
+            gateway.configure(request, &credentials).await,
+            Err(AppError::ModelAuthFailed)
+        ));
+
+        let status = gateway
+            .configure(
+                ModelConfigureRequest {
+                    kind: ModelProviderKind::DeepSeek,
+                    base_url: "https://api.deepseek.com".into(),
+                    model: "deepseek-chat".into(),
+                    max_context_tokens: 64_000,
+                    api_key: Some("  valid-api-key  ".into()),
+                    remember_api_key: false,
+                },
+                &credentials,
+            )
+            .await
+            .expect("configure session key");
+
+        assert!(status.api_key_configured);
+        assert!(!status.api_key_stored);
+        assert_eq!(
+            gateway
+                .session_api_key
+                .lock()
+                .await
+                .as_ref()
+                .map(|value| value.as_str()),
+            Some("valid-api-key")
+        );
     }
 }

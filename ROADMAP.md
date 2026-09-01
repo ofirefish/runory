@@ -235,6 +235,8 @@ nginx.reload
 
 Status：Two-stage Production Promotion Gate Implemented（邮箱认证、Organization/RLS、Rust 端到端加密同步、tombstone、逐项冲突、成员角色、站内邀请、Access Policy、Audit 游标分页、Rust Typed Operation 强制、全设备持久绑定、新建/同步 Profile 自动纳管、短期令牌自动刷新、Ed25519 v2 签名离线策略、双 keyId 重叠轮换、真实 JWT/RLS/Edge 本地 E2E、五套双语 Auth 邮件模板、SMTP 配置验证工具、Postgres 17 Migration 重放、每日有界 Audit Retention Cron、63 项 pgTAP、Lint/Advisor 本地门禁、只读远端验证器、无秘密 schema v2 JSON 证据、完整应用源码 SHA-256、部署前候选批准与部署后 Production 复核；等待 Staging/Production 凭据执行）
 
+Future opt-in Credential / Private Key E2EE Sync 的分阶段设计见 `docs/CLOUD_SYNC_SECURITY_ARCHITECTURE.md`。它不改变当前 Phase 9 状态，也不得在 device trust、recovery、migration 与外部安全审查门禁完成前上传凭据。
+
 已交付：
 - Encrypted Profile/Group Sync + Tombstone
 - Team Inventory + In-app Invitation

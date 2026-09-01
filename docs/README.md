@@ -12,3 +12,8 @@ Root-level authoritative documents:
 - `AGENTS.md` — mandatory AI coding-agent constraints
 
 Brand concept images are under `docs/assets/brand/`.
+
+Additional architecture and operations documents:
+
+- `docs/CLOUD_SYNC_SECURITY_ARCHITECTURE.md` — proposed local Vault, device trust, recovery, and end-to-end encrypted credential sync architecture
+- `docs/CLOUD_DEPLOYMENT.md` — current Supabase Phase 9 deployment and production promotion gates

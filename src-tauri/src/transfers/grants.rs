@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex as StdMutex;
+use std::time::Duration;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::domain::{AppError, AppResult, LocalFileSelection};
@@ -19,12 +21,58 @@ pub(crate) struct LocalFileGrant {
     pub kind: LocalFileGrantKind,
 }
 
+struct PendingUploadDrop {
+    paths: Vec<PathBuf>,
+}
+
 #[derive(Default)]
 pub struct LocalFileGrantService {
     grants: Mutex<HashMap<Uuid, LocalFileGrant>>,
+    pending_upload_drop: StdMutex<Option<PendingUploadDrop>>,
+    upload_drop_ready: Notify,
 }
 
 impl LocalFileGrantService {
+    pub fn stage_upload_drop(&self, paths: Vec<PathBuf>) {
+        let mut pending = self
+            .pending_upload_drop
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *pending = Some(PendingUploadDrop { paths });
+        drop(pending);
+        self.upload_drop_ready.notify_one();
+    }
+
+    pub async fn accept_latest_upload_drop(&self) -> AppResult<Vec<LocalFileSelection>> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let pending = loop {
+            let ready = self.upload_drop_ready.notified();
+            let staged = {
+                let mut pending = self
+                    .pending_upload_drop
+                    .lock()
+                    .map_err(|_| AppError::LocalFileInvalid)?;
+                pending.take()
+            };
+            if let Some(pending) = staged {
+                break pending;
+            }
+            tokio::time::timeout_at(deadline, ready)
+                .await
+                .map_err(|_| AppError::LocalFileInvalid)?;
+        };
+        let mut selections = Vec::with_capacity(pending.paths.len());
+        for path in pending.paths {
+            if let Ok(selection) = self.grant_upload(path).await {
+                selections.push(selection);
+            }
+        }
+        if selections.is_empty() {
+            return Err(AppError::LocalFileInvalid);
+        }
+        Ok(selections)
+    }
+
     pub async fn grant_upload(&self, path: PathBuf) -> AppResult<LocalFileSelection> {
         let metadata = tokio::fs::metadata(&path)
             .await
@@ -132,5 +180,50 @@ mod tests {
                 .await,
             Err(AppError::LocalFileInvalid)
         ));
+    }
+
+    #[tokio::test]
+    async fn dropped_paths_are_consumed_as_scoped_grants_and_ignore_directories() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.txt");
+        tokio::fs::write(&source, b"runory")
+            .await
+            .expect("write fixture");
+        let service = LocalFileGrantService::default();
+        service.stage_upload_drop(vec![directory.path().to_path_buf(), source.clone()]);
+        let selected = service
+            .accept_latest_upload_drop()
+            .await
+            .expect("accept dropped paths");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "source.txt");
+    }
+
+    #[tokio::test]
+    async fn accept_waits_for_native_staging_when_drop_callbacks_race() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = directory.path().join("source.txt");
+        tokio::fs::write(&source, b"runory")
+            .await
+            .expect("write fixture");
+        let service = std::sync::Arc::new(LocalFileGrantService::default());
+        service.stage_upload_drop(vec![source.clone()]);
+        service
+            .accept_latest_upload_drop()
+            .await
+            .expect("consume initial drop");
+        let accepting = {
+            let service = std::sync::Arc::clone(&service);
+            tokio::spawn(async move { service.accept_latest_upload_drop().await })
+        };
+        tokio::task::yield_now().await;
+        service.stage_upload_drop(vec![source]);
+
+        let selected = accepting
+            .await
+            .expect("join accepting task")
+            .expect("accept staged drop");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "source.txt");
     }
 }

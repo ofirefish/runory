@@ -106,7 +106,8 @@ CredentialService
  ↓
 CredentialVault
  ↓
-StrongholdCredentialVault
+Desktop: StrongholdCredentialVault + PlatformKeyStore
+Mobile: PortableCredentialVault
 ```
 
 Session-only 只存内存。
@@ -326,9 +327,11 @@ Phase 6 已建立以下基线：
 - 进入后台后立即设置 App Switcher 隐私遮罩；返回时使用 iOS/Android 原生生物识别或设备凭据
 - 生物识别只恢复当前存活会话，不保存、不推导、不向 React 返回 Vault Master Secret
 - Desktop 使用 Stronghold；Android/iOS 使用 Argon2id + AES-256-GCM 的纯 Rust 加密仓库，两者实现相同 `CredentialVault` 接口
+- Desktop 的 Vault 解锁 Secret 只写入 OS 原生安全存储（Windows Credential Manager、Apple Keychain、Linux Secret Service/keyutils），不写入 Runory Repository、日志或 React 状态
+- 既有 Desktop Vault 只在用户成功输入一次原密码后迁移；运行时只读探测确认系统安全存储不可用时允许本次会话密码解锁，探测成功后若实际写入失败则立即重新锁定，不把“本次已解锁”误报为迁移成功
 - 私钥导入由 Rust 读取，限制为普通文件、非空且最多 1 MiB；React 仅持有不透明 `key_id`
 - 移动 SFTP 继续使用原生文件选择器与一次性、类型限定的 `LocalFileGrant`
-- 应用被系统终止后必须重新输入 Vault 主密码，不提供弱化的自动解锁路径
+- Desktop 进程重启后可从同一 OS 用户的系统安全存储自动解锁；免密码 UI 以运行时可用性而不是编译平台为准。Android/iOS 在移动 PlatformKeyStore 完成前仍必须重新输入 Vault 主密码
 
 ## 23. SFTP
 
@@ -480,6 +483,8 @@ Model/Tool/MCP/HTTP/SSH timeout 与 Agent cancellation 由 Rust 强制。收到 
 - 多目标真实测试仍执行 Mandatory Host Verification，并为每个端点扫描和绑定独立 fingerprint。
 
 ## 25. Supabase Cloud Foundation
+
+跨设备 Credential / Private Key 同步的 future proposal 见 `docs/CLOUD_SYNC_SECURITY_ARCHITECTURE.md`。在其 device trust、recovery、migration 与 production gate 完整落地前，当前 Phase 9 的凭据不上传边界不得放宽。
 
 - 客户端只允许 `sb_publishable_*` Key；禁止 service-role/secret key 进入 Vite 环境
 - Email Password Session 只驻留当前进程，关闭 `localStorage` 持久化

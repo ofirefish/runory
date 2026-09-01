@@ -24,7 +24,7 @@ mod transfers;
 use ssh::ServerSessionManager;
 use std::path::Path;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{DragDropEvent, Manager, WindowEvent};
 use tokio::sync::Mutex;
 
 use agentic::{
@@ -43,13 +43,13 @@ use settings::{SettingsRepository, SettingsService};
 use skills::SkillRegistry;
 use storage::JsonRepository;
 use tools::{NativeToolExecutionService, ToolAuditRepository};
-use transfers::LocalFileGrantService;
+use transfers::{LocalFileGrantService, UploadDirectoryHistoryService};
 
-#[cfg(mobile)]
-use credentials::PortableCredentialVault;
+use credentials::{CredentialService, CredentialVault, PlatformKeyStore};
 #[cfg(not(mobile))]
-use credentials::StrongholdCredentialVault;
-use credentials::{CredentialService, CredentialVault};
+use credentials::{NativePlatformKeyStore, StrongholdCredentialVault};
+#[cfg(mobile)]
+use credentials::{PortableCredentialVault, UnavailablePlatformKeyStore};
 
 fn credential_service(data_directory: &Path) -> CredentialService {
     #[cfg(not(mobile))]
@@ -62,7 +62,12 @@ fn credential_service(data_directory: &Path) -> CredentialService {
         data_directory.join("credentials.mobile.vault"),
     ));
 
-    CredentialService::new(vault)
+    #[cfg(not(mobile))]
+    let platform_key_store: Arc<dyn PlatformKeyStore> = Arc::new(NativePlatformKeyStore::new());
+    #[cfg(mobile)]
+    let platform_key_store: Arc<dyn PlatformKeyStore> = Arc::new(UnavailablePlatformKeyStore);
+
+    CredentialService::with_platform_key_store(vault, platform_key_store)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -75,11 +80,31 @@ pub fn run() {
         .manage(ServerSessionManager::default())
         .manage(AiService::new(Arc::new(LocalAssistantProvider)))
         .manage(LocalFileGrantService::default())
+        .on_window_event(|window, event| {
+            let WindowEvent::DragDrop(event) = event else {
+                return;
+            };
+            match event {
+                DragDropEvent::Drop { paths, .. } => {
+                    let paths = paths.clone();
+                    window
+                        .state::<LocalFileGrantService>()
+                        .stage_upload_drop(paths);
+                }
+                _ => {}
+            }
+        })
         .setup(|app| {
             #[cfg(mobile)]
             app.handle().plugin(tauri_plugin_biometric::init())?;
             let data_directory = app.path().app_data_dir()?;
             let credentials = credential_service(&data_directory);
+            if let Err(error) = tauri::async_runtime::block_on(credentials.auto_unlock()) {
+                tracing::warn!(
+                    error_code = error.code(),
+                    "credential Vault automatic unlock was unavailable"
+                );
+            }
             let models = ModelGateway::at_path(data_directory.join("agent-model.json"))?;
             tauri::async_runtime::block_on(models.load())?;
             app.manage(models);
@@ -157,6 +182,9 @@ pub fn run() {
                 Arc::new(Mutex::new(())),
             ));
             app.manage(credentials);
+            app.manage(UploadDirectoryHistoryService::at_path(
+                data_directory.join("upload-directory-history.json"),
+            ));
             app.manage(DeploymentService::new(DeploymentHistoryRepository::new(
                 JsonRepository::new(data_directory.join("deployment-history.json")),
             )));
@@ -239,6 +267,8 @@ pub fn run() {
             commands::known_hosts::known_host_list,
             commands::known_hosts::known_host_remove,
             commands::credentials::vault_unlock,
+            commands::credentials::vault_initialize,
+            commands::credentials::vault_unlock_with_platform,
             commands::credentials::vault_lock,
             commands::credentials::credential_status,
             commands::credentials::credential_forget,
@@ -261,6 +291,7 @@ pub fn run() {
             commands::sftp::rename,
             commands::sftp::delete,
             commands::sftp::sftp_select_upload_files,
+            commands::sftp::sftp_accept_latest_upload_drop,
             commands::sftp::sftp_select_download_target,
             commands::sftp::sftp_start_upload,
             commands::sftp::sftp_start_download,

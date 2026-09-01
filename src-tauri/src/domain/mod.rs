@@ -64,8 +64,8 @@ pub use session::{
 pub use settings::{AppSettings, Language, Theme};
 pub use sftp::{
     LocalFileSelection, RemoteImagePreview, RemoteTextPreview, RetryTransferRequest,
-    SelectDownloadTargetRequest, SftpCreateDirectoryRequest, SftpDeleteRequest, SftpDirectory,
-    SftpEntry, SftpEntryKind, SftpMetadata, SftpPathRequest, SftpRenameRequest,
-    StartDownloadRequest, StartUploadRequest, TransferDirection, TransferEvent, TransferJob,
-    TransferJobId, TransferJobRequest, TransferState,
+    SelectDownloadTargetRequest, SelectUploadFilesRequest, SftpCreateDirectoryRequest,
+    SftpDeleteRequest, SftpDirectory, SftpEntry, SftpEntryKind, SftpMetadata, SftpPathRequest,
+    SftpRenameRequest, StartDownloadRequest, StartUploadRequest, TransferDirection, TransferEvent,
+    TransferJob, TransferJobId, TransferJobRequest, TransferState,
 };

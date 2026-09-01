@@ -37,6 +37,9 @@ pub struct CredentialStatus {
     pub vault_initialized: bool,
     pub vault_unlocked: bool,
     pub has_credential: bool,
+    pub platform_unlock_supported: bool,
+    pub platform_unlock_available: bool,
+    pub platform_unlock_configured: bool,
 }
 
 #[derive(Deserialize)]
