@@ -1,0 +1,1 @@
+{"id":"runory.nginx-doctor","version":"1.0.0","publisher":"Runory","requiredTools":["service.status","service.logs","nginx.test"],"optionalTools":["file.patch","nginx.reload"],"riskCeiling":"R3"}

@@ -1,0 +1,47 @@
+services:
+  openssh:
+    build:
+      context: ./tests/ssh-server
+    ports:
+      - "2222:22"
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+    volumes:
+      - ./tests/ssh-server/generated:/fixtures
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+  fault-healthy:
+    build:
+      context: ./tests/ssh-server
+    profiles: ["fault-lab"]
+    ports:
+      - "2223:22"
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_SERVICE_STATE: active
+    volumes:
+      - ./tests/ssh-server/generated:/fixtures
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+  fault-failed:
+    build:
+      context: ./tests/ssh-server
+    profiles: ["fault-lab"]
+    ports:
+      - "2224:22"
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_SERVICE_STATE: failed
+    volumes:
+      - ./tests/ssh-server/generated:/fixtures
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

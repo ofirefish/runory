@@ -1,0 +1,1 @@
+{"pack":"docker","signal":{"kind":"docker-inspect","state":"exited","restartCount":0},"expectedRootCause":"docker-exited"}

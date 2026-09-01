@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mobile-security",
+  "description": "Biometric session unlock is available only to the bundled mobile webview.",
+  "windows": ["main"],
+  "platforms": ["iOS", "android"],
+  "permissions": ["biometric:default"]
+}

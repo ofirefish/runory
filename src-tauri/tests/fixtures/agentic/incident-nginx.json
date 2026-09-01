@@ -1,0 +1,1 @@
+{"pack":"nginx","signal":{"kind":"nginx-test","valid":false},"expectedRootCause":"nginx-invalid-config"}

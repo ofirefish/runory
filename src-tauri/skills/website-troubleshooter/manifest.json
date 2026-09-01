@@ -1,0 +1,1 @@
+{"id":"runory.website-troubleshooter","version":"1.0.0","publisher":"Runory","requiredTools":["network.port_check","http.request"],"optionalTools":["nginx.test"],"riskCeiling":"R1"}

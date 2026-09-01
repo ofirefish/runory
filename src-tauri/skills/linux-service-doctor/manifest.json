@@ -1,0 +1,1 @@
+{"id":"runory.linux-service-doctor","version":"1.0.0","publisher":"Runory","requiredTools":["service.status","service.logs"],"optionalTools":["service.restart","service.reload"],"riskCeiling":"R3"}

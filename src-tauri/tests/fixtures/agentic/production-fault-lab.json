@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "ports": [2222, 2223, 2224],
+  "service": "runory-fixture.service",
+  "expectedRootCause": "service-not-active",
+  "expectedComparison": "service-status:runory-fixture.service",
+  "expectedStates": ["active", "active", "failed"]
+}

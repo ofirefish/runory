@@ -1,0 +1,62 @@
+import { Bot, Cloud, Palette, ShieldCheck, Trash2, type LucideIcon } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Button } from "../../components/ui/button";
+import { DialogShell } from "../../components/ui/dialog-shell";
+import { Input } from "../../components/ui/input";
+import { credentialStatus, listKnownHosts, lockVault, removeKnownHost, unlockVault } from "../../lib/tauri/ssh";
+import { useSettingsStore, type Language, type ThemeMode } from "../../stores/settings-store";
+import type { KnownHost } from "../../types/session";
+import type { CredentialStatus } from "../../types/session";
+import { AgentModelSettings } from "./AgentModelSettings";
+
+const CloudPanel = lazy(() => import("./CloudPanel").then((module) => ({ default: module.CloudPanel })));
+
+type SettingsSection = "general" | "agent" | "security" | "cloud";
+
+const sections: { id: SettingsSection; icon: LucideIcon; label: string }[] = [
+  { id: "general", icon: Palette, label: "settings.section.general" },
+  { id: "agent", icon: Bot, label: "settings.section.agent" },
+  { id: "security", icon: ShieldCheck, label: "settings.section.security" },
+  { id: "cloud", icon: Cloud, label: "settings.section.cloud" },
+];
+
+export function SettingsPanel({ onClose }: { onClose: () => void }) {
+  const { t, i18n } = useTranslation();
+  const { theme, language, setTheme, setLanguage } = useSettingsStore();
+  const [knownHosts, setKnownHosts] = useState<KnownHost[]>([]);
+  const [vault, setVault] = useState<CredentialStatus | null>(null);
+  const [vaultFailure, setVaultFailure] = useState(false);
+  const vaultPassword = useRef<HTMLInputElement>(null);
+  const vaultPasswordConfirmation = useRef<HTMLInputElement>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [activeSection, setActiveSection] = useState<SettingsSection>("general");
+  useEffect(() => { void i18n.changeLanguage(language); document.documentElement.lang = language; }, [i18n, language]);
+  useEffect(() => { void listKnownHosts().then(setKnownHosts).catch(() => setLoadFailed(true)); }, []);
+  useEffect(() => { void credentialStatus().then(setVault).catch(() => setVaultFailure(true)); }, []);
+  const remove = async (knownHost: KnownHost) => { try { await removeKnownHost(knownHost.host, knownHost.port); setKnownHosts((hosts) => hosts.filter((host) => host.host !== knownHost.host || host.port !== knownHost.port)); } catch { setLoadFailed(true); } };
+  const unlock = async () => { const input = vaultPassword.current; const confirmation = vaultPasswordConfirmation.current; if (!input?.value || (!vault?.vaultInitialized && input.value !== confirmation?.value)) { setVaultFailure(true); return; } setVaultFailure(false); try { await unlockVault(input.value); input.value = ""; if (confirmation) confirmation.value = ""; setVault(await credentialStatus()); } catch { input.value = ""; if (confirmation) confirmation.value = ""; setVaultFailure(true); } };
+  const lock = async () => { setVaultFailure(false); try { await lockVault(); setVault(await credentialStatus()); } catch { setVaultFailure(true); } };
+  const heading = t(`settings.section.${activeSection}`);
+  return <DialogShell title={t("sidebar.settings")} onClose={onClose} size="wide" contentClassName="settings-layout">
+    <nav className="settings-navigation" aria-label={t("settings.navigation")}>
+      <p className="settings-navigation-label">{t("settings.projectSettings")}</p>
+      <div className="settings-navigation-items">
+        {sections.map(({ id, icon: Icon, label }) => <button key={id} type="button" className="settings-navigation-item" data-active={activeSection === id} aria-current={activeSection === id ? "page" : undefined} onClick={() => setActiveSection(id)}><Icon size={16} /><span>{t(label)}</span></button>)}
+      </div>
+    </nav>
+    <main className="settings-content">
+      <header className="settings-content-header"><h3>{heading}</h3><p>{t(`settings.section.${activeSection}Hint`)}</p></header>
+      {activeSection === "general" && <div className="settings-group">
+        <label className="settings-field"><span>{t("settings.theme")}</span><select value={theme} onChange={(event) => setTheme(event.target.value as ThemeMode)}><option value="system">{t("settings.system")}</option><option value="light">{t("settings.light")}</option><option value="dark">{t("settings.dark")}</option></select></label>
+        <label className="settings-field"><span>{t("settings.language")}</span><select value={language} onChange={(event) => setLanguage(event.target.value as Language)}><option value="en-US">{t("settings.english")}</option><option value="zh-CN">{t("settings.chinese")}</option></select></label>
+      </div>}
+      {activeSection === "agent" && <div className="settings-section-reset"><AgentModelSettings /></div>}
+      {activeSection === "security" && <div className="settings-stack">
+        <section className="settings-card"><h4>{t("settings.credentialVault")}</h4><p>{vault?.vaultInitialized ? (vault.vaultUnlocked ? t("settings.vaultUnlocked") : t("settings.vaultLocked")) : t("settings.vaultNotCreated")}</p>{vault && !vault.vaultUnlocked && <div className="mt-3 space-y-2"><Input ref={vaultPassword} type="password" autoComplete={vault.vaultInitialized ? "current-password" : "new-password"} aria-label={t("settings.vaultPassword")} placeholder={t("settings.vaultPassword")} />{!vault.vaultInitialized && <Input ref={vaultPasswordConfirmation} type="password" autoComplete="new-password" aria-label={t("connection.confirmVaultPassword")} placeholder={t("connection.confirmVaultPassword")} />}<Button size="sm" onClick={() => void unlock()}>{t(vault.vaultInitialized ? "settings.unlockVault" : "settings.createVault")}</Button></div>}{vault?.vaultUnlocked && <Button className="mt-3" size="sm" variant="secondary" onClick={() => void lock()}>{t("settings.lockVault")}</Button>}{vaultFailure && <p className="mt-2 text-xs text-red-500">{t("settings.vaultError")}</p>}</section>
+        <section className="settings-card"><h4>{t("settings.trustedHosts")}</h4><p>{t("settings.trustedHostsHint")}</p>{knownHosts.length === 0 && !loadFailed && <p className="mt-3">{t("settings.noTrustedHosts")}</p>}<div className="mt-3 space-y-2">{knownHosts.map((knownHost) => <div key={`${knownHost.host}:${knownHost.port}`} className="flex items-start gap-2 rounded-md border p-2"><div className="min-w-0 flex-1"><div className="truncate text-xs font-medium">{knownHost.host}:{knownHost.port}</div><div className="mt-1 truncate font-mono text-[10px] text-[hsl(var(--muted))]" title={knownHost.fingerprint}>{knownHost.fingerprint}</div></div><Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-red-500" aria-label={t("settings.removeTrustedHost", { host: knownHost.host })} onClick={() => void remove(knownHost)}><Trash2 size={14} /></Button></div>)}</div>{loadFailed && <p className="mt-2 text-xs text-red-500">{t("settings.trustedHostsError")}</p>}</section>
+      </div>}
+      {activeSection === "cloud" && <div className="settings-section-reset"><Suspense fallback={<p className="text-xs text-[hsl(var(--muted))]">{t("common.loading")}</p>}><CloudPanel /></Suspense></div>}
+    </main>
+  </DialogShell>;
+}

@@ -1,0 +1,15 @@
+export type DiskUsage = { mount: string; usedBytes: number; totalBytes: number; usagePercent: number };
+export type ServerDashboard = { cpuUsagePercent: number; memoryUsedBytes: number; memoryTotalBytes: number; uptimeSeconds: number; networkReceivedBytes: number; networkTransmittedBytes: number; disks: DiskUsage[] };
+export type ProcessInfo = { pid: number; user: string; cpuPercent: number; memoryPercent: number; command: string };
+export type ServiceHealth = { name: string; status: "active" | "inactive" | "failed" | "unknown" };
+export type ResourceAction = "start" | "stop" | "restart";
+export type DockerContainer = { id: string; name: string; image: string; state: string; status: string };
+export type Pm2Process = { id: number; name: string; status: string; cpuPercent: number; memoryBytes: number };
+export type LogSource = "system" | "auth" | "nginx-access" | "nginx-error" | "docker" | "pm2" | "service";
+export type OperationResult = { success: boolean; output: string };
+export type BuildPreset = "none" | "npm" | "pnpm" | "cargo";
+export type RestartTarget = { kind: "none" } | { kind: "systemd"; service: string } | { kind: "pm2"; process: string } | { kind: "dockerCompose"; service: string };
+export type CronSchedule = "hourly" | "daily" | "weekly";
+export type CronTask = { kind: "backup"; sourcePath: string; destinationDirectory: string } | { kind: "serviceRestart"; service: string } | { kind: "gitPull"; repositoryPath: string; branch: string };
+export type CronEntry = { id: string; schedule: CronSchedule; taskKind: string };
+export type DeploymentRecord = { id: string; profileId: string; operation: string; target: string; startedAtEpochSeconds: number; success: boolean; errorCode: string | null };

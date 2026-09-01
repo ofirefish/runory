@@ -1,0 +1,23 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { BuildPreset, CronEntry, CronSchedule, CronTask, DeploymentRecord, DockerContainer, LogSource, OperationResult, Pm2Process, ProcessInfo, ResourceAction, RestartTarget, ServerDashboard, ServiceHealth } from "../../types/infrastructure";
+
+const request = (sessionId: string) => ({ request: { sessionId } });
+export const loadDashboard = (sessionId: string) => invoke<ServerDashboard>("dashboard_overview", request(sessionId));
+export const loadProcesses = (sessionId: string) => invoke<ProcessInfo[]>("dashboard_processes", request(sessionId));
+export const loadServiceHealth = (sessionId: string, services: string[]) => invoke<ServiceHealth[]>("dashboard_service_health", { request: { sessionId, services } });
+export const listDocker = (sessionId: string) => invoke<DockerContainer[]>("docker_list", request(sessionId));
+export const actOnDocker = (sessionId: string, container: string, action: ResourceAction) => invoke<OperationResult>("docker_action", { request: { sessionId, container, action } });
+export const listPm2 = (sessionId: string) => invoke<Pm2Process[]>("pm2_list", request(sessionId));
+export const actOnPm2 = (sessionId: string, process: string, action: ResourceAction) => invoke<OperationResult>("pm2_action", { request: { sessionId, process, action } });
+export const actOnNginx = (sessionId: string, action: "test" | "reload") => invoke<OperationResult>("nginx_action", { request: { sessionId, action } });
+export const readLogs = (sessionId: string, source: LogSource, target: string | null, lines: number) => invoke<OperationResult>("logs_read", { request: { sessionId, source, target, lines } });
+export const setupGit = (sessionId: string, repositoryPath: string, remoteUrl: string, branch: string) => invoke<OperationResult>("deployment_git_setup", { request: { sessionId, repositoryPath, remoteUrl, branch } });
+export const runDeployment = (sessionId: string, repositoryPath: string, branch: string, build: BuildPreset, restart: RestartTarget) => invoke<OperationResult>("deployment_run", { request: { sessionId, repositoryPath, branch, build, restart } });
+export const writeEnvironment = (sessionId: string, path: string, entries: { key: string; value: string }[]) => invoke<OperationResult>("deployment_environment_write", { request: { sessionId, path, entries } });
+export const inspectSsl = (sessionId: string, domain: string) => invoke<OperationResult>("deployment_ssl_inspect", { request: { sessionId, domain } });
+export const issueSsl = (sessionId: string, domain: string, email: string, webroot: string) => invoke<OperationResult>("deployment_ssl_issue", { request: { sessionId, domain, email, webroot } });
+export const createBackup = (sessionId: string, sourcePath: string, destinationDirectory: string) => invoke<OperationResult>("deployment_backup", { request: { sessionId, sourcePath, destinationDirectory } });
+export const listCron = (sessionId: string) => invoke<CronEntry[]>("deployment_cron_list", request(sessionId));
+export const addCron = (sessionId: string, schedule: CronSchedule, task: CronTask) => invoke<CronEntry>("deployment_cron_add", { request: { sessionId, schedule, task } });
+export const removeCron = (sessionId: string, cronId: string) => invoke<OperationResult>("deployment_cron_remove", { request: { sessionId, cronId } });
+export const listDeploymentHistory = (profileId: string | null) => invoke<DeploymentRecord[]>("deployment_history", { request: { profileId } });
