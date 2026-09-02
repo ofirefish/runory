@@ -6,7 +6,7 @@ import { DialogShell } from "../../components/ui/dialog-shell";
 import { Input } from "../../components/ui/input";
 import { approveChangeSet, approveChangeSetStep, approveFleetChangeSet, draftChangeSet, draftFleetChangeSet, executeChangeSet, executeFleetChangeSet, listChangeSets, listFleetChangeSets, rollbackChangeSet } from "../../lib/tauri/agentic";
 import type { ChangeSet, ChangeStepDraft, ExecutionStrategy, FailurePolicy, FleetChangeSet, PolicyEvaluation } from "../../types/agentic";
-import type { AgentSessionOption } from "./AgenticWorkspaceView";
+import type { AgentSessionOption } from "./types";
 
 export default function ChangeSetWorkspace({ sessions, activeSessionId, agentRunId }: { sessions: AgentSessionOption[]; activeSessionId: string | null; agentRunId: string | null }) {
   const { t } = useTranslation();

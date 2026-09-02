@@ -53,7 +53,7 @@ pub struct ServiceHealth {
     pub status: ServiceStatus,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ServiceStatus {
     Active,

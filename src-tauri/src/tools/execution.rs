@@ -244,6 +244,7 @@ impl NativeToolExecutionService {
                 },
                 tool: tool_name,
                 risk_level: descriptor.risk_level,
+                resource_impact: descriptor.resource_impact,
                 target_count: 1,
                 execution_strategy: PolicyExecutionStrategy::Sequential,
                 source: PolicyInvocationSource::NativeTool,
@@ -443,7 +444,9 @@ impl NativeToolInvocation {
             | Self::NginxReload
             | Self::NetworkListeners
             | Self::ProcessList
-            | Self::DockerList => SanitizedToolInput::None,
+            | Self::DockerList
+            | Self::FilesystemInodeUsage
+            | Self::BlockDevicesList => SanitizedToolInput::None,
             Self::ServiceStatus { service } => SanitizedToolInput::Service {
                 name: sanitized_identifier(service, 128),
                 lines: None,
@@ -489,6 +492,10 @@ impl NativeToolInvocation {
                     lines: None,
                 }
             }
+            Self::TerminalExecReadonly { command } => SanitizedToolInput::HttpOrigin {
+                origin: (command.len() <= 256 && !command.chars().any(char::is_control))
+                    .then(|| command.to_owned()),
+            },
         }
     }
 }

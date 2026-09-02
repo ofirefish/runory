@@ -27,6 +27,11 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown); return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+  useEffect(() => {
+    const onOpenSettings = () => setSettingsRequest((value) => value + 1);
+    window.addEventListener("runory:open-settings", onOpenSettings);
+    return () => window.removeEventListener("runory:open-settings", onOpenSettings);
+  }, []);
   const selectNavigation = (item: "servers" | "sessions" | "settings") => {
     setActiveNavigation(item);
     if (item === "servers" || item === "settings") setExplorerOpen(true);

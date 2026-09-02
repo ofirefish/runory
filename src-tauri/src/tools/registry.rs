@@ -7,11 +7,11 @@ use crate::domain::{AppError, AppResult, SessionId};
 use crate::ssh::ServerSessionManager;
 
 use super::{
-    change, http, incident, native_descriptors, network, nginx, service, system, NativeToolName,
-    ToolData, ToolDescriptor, ToolResult,
+    change, http, incident, native_descriptors, network, nginx, service, system, terminal,
+    NativeToolName, ToolData, ToolDescriptor, ToolResult,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) enum NativeToolInvocation {
     SystemInfo,
     SystemDisk,
@@ -72,6 +72,11 @@ pub(crate) enum NativeToolInvocation {
     DockerRestart {
         container: String,
     },
+    FilesystemInodeUsage,
+    BlockDevicesList,
+    TerminalExecReadonly {
+        command: String,
+    },
 }
 
 impl NativeToolInvocation {
@@ -99,6 +104,9 @@ impl NativeToolInvocation {
             Self::ServiceReload { .. } => NativeToolName::ServiceReload,
             Self::NginxReload => NativeToolName::NginxReload,
             Self::DockerRestart { .. } => NativeToolName::DockerRestart,
+            Self::FilesystemInodeUsage => NativeToolName::FilesystemInodeUsage,
+            Self::BlockDevicesList => NativeToolName::BlockDevicesList,
+            Self::TerminalExecReadonly { .. } => NativeToolName::TerminalExecReadonly,
         }
     }
 
@@ -158,6 +166,15 @@ impl NativeToolInvocation {
                 container: identifier(required_string(arguments, "container")?, 256)?,
                 lines: bounded_u32(arguments, "lines", 20, 500)?,
             }),
+            NativeToolName::FilesystemInodeUsage => {
+                empty(arguments).map(|()| Self::FilesystemInodeUsage)
+            }
+            NativeToolName::BlockDevicesList => empty(arguments).map(|()| Self::BlockDevicesList),
+            NativeToolName::TerminalExecReadonly => {
+                let command = bounded_string(only_string(arguments, "command")?, 1, 256)?;
+                terminal::validate_readonly_command(&command)?;
+                Ok(Self::TerminalExecReadonly { command })
+            }
             NativeToolName::FilePatch
             | NativeToolName::ServiceRestart
             | NativeToolName::ServiceReload
@@ -448,6 +465,18 @@ impl NativeToolRegistry {
                     "docker-restarted",
                     false,
                 ),
+                NativeToolInvocation::FilesystemInodeUsage => diagnostic(
+                    incident::inode_usage(sessions, session_id).await?,
+                    "inode-usage-collected",
+                ),
+                NativeToolInvocation::BlockDevicesList => diagnostic(
+                    incident::block_devices_list(sessions, session_id).await?,
+                    "block-devices-collected",
+                ),
+                NativeToolInvocation::TerminalExecReadonly { command } => diagnostic(
+                    terminal::exec_readonly(sessions, session_id, command).await?,
+                    "terminal-readonly-completed",
+                ),
             })
         }
         .await;
@@ -548,6 +577,11 @@ mod tests {
             NativeToolInvocation::DockerLogs {
                 container: "web".into(),
                 lines: 20,
+            },
+            NativeToolInvocation::FilesystemInodeUsage,
+            NativeToolInvocation::BlockDevicesList,
+            NativeToolInvocation::TerminalExecReadonly {
+                command: "uptime".into(),
             },
         ];
         assert_eq!(

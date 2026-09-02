@@ -510,11 +510,11 @@ Phase 10K Context / Cache / Model / Budget 优化不得改变 Tool Permission、
 
 未来 Agentic 开发必须同时遵循 `AGENTIC.md` 与 `SECURITY.md`：
 
-1. LLM 不得直接访问 russh、CredentialVault、任意 Shell 或任意 Filesystem。
-2. Agent 只能调用 Rust Tool Registry 中注册的 Typed Tool。
-3. 有 Typed Tool 时不得用 Shell 绕过 Risk / Policy。
-4. Tool 必须声明 Risk、Mutability、Scope 和 Approval Policy。
-5. 默认 Read-only。所有远程状态修改必须进入 ChangeSet。
+1. LLM 不得直接访问 russh、CredentialVault、ServerSession、任意 Filesystem 或前端 Shell；只能向 Rust Runtime 返回结构化 Decision。
+2. Agent Runtime V2 对话主链可返回单条 `CommandProposal`；Rust 必须验证、分类、精确绑定审批，并将批准的原始命令加 Enter 写入绑定 ServerSession 的交互式 Terminal。不得暴露通用 Shell IPC，也不得由 React 注入 PTY。
+3. 现有 Native Typed Tool 继续服务 Incident、Operations Pack、ChangeSet Preconditions、Verification、Rollback 与其它结构化子系统；不得借命令提案绕过这些子系统自身的 Tool / Policy 边界。
+4. Command 的 Risk / Mutability 由 Rust 保守判定，模型声明不具权限意义；Critical 命令必须 fail-closed。
+5. V2 中每条命令（包括只读命令）均须明确审批。写入或未知命令执行后必须再经审批执行成功的只读验证命令，才允许 Final；结构化修复工作流继续使用 ChangeSet。
 6. R3/R4 操作必须明确审批；审批绑定 ChangeSet Version。
 7. 修复流程必须包含 Verification。
 8. 支持 Rollback 时必须真实实现；不支持时不得向 UI 声称可回滚。
@@ -535,3 +535,24 @@ Phase 10K Context / Cache / Model / Budget 优化不得改变 Tool Permission、
 - 测试/Lint 不通过
 - 新增无必要依赖
 - 没有理由地只支持单桌面平台
+
+## 28. Agent Runtime V2 Hard Rules
+
+详细规范见 `AGENT_RUNTIME_V2.md`。
+
+当旧 Agent orchestration 规则与 Runtime V2 冲突时，V2 的迭代式运行语义优先，但不得削弱 `SECURITY.md`、Tool、Policy、Approval、ChangeSet、Verification 和 Rollback。
+
+1. 对话 Agent 必须采用 `Reason → CommandProposal → Approval → ServerSession Terminal → Observation → Reason` 迭代循环，不得由固定未来命令队列驱动。
+2. Reasoner 每轮最多提议一条非交互式 Linux 命令；命令必须在执行前原样展示，所有命令均由用户 Run / Cancel，不存在 R0/R1 自动执行。
+3. 命令失败、被 Policy 阻止或被用户 Cancel 都是 Observation，不默认等同于 AgentRun Failure；Reasoner 可基于真实结果寻找替代方案。
+4. 审批必须绑定 exact command hash、run、target、session 与 policy snapshot；任一绑定变化都使审批失效。
+5. `AwaitingApproval` / `AwaitingUser` 是可持久化、可恢复的正式 Runtime State。
+6. Approval 后必须 Resume 同一个 `AgentRun`，不得重新创建任务伪装恢复。
+7. React 只渲染 `AgentEvent` 并发送 Run / Cancel 等用户动作，不拥有调度、命令执行、Policy、SSH、PTY 注入或 Resume 逻辑。
+8. 不展示、不持久化模型完整 private chain-of-thought；只展示 concise progress summary、action、evidence 和 execution-relevant decision。
+9. `Continue next step`、固定 `Plan & commands` 队列不得作为 Runtime V2 主交互机制。
+10. Rust 是命令 Risk / Mutability 的唯一权威；Critical 命令必须阻止，写入/未知命令后必须完成新的只读验证命令才能 Final。
+11. Terminal 流必须在 Rust 内有界、脱敏并作为 Untrusted Observation 返回下一轮；原始流只经 Terminal Channel 到 xterm。AgentEvent 仅可携带单次命令最多 8 KiB 的脱敏 `output_preview`，不得携带 stdout/stderr transcript，也不得 `CommandResult → UI → RunCompleted`。
+12. `RunCompleted` 只能由 `AgentDecision::Final` 产生，且不得仍有 Command、Observation processing、Approval、User input、ChangeSet 或 Verification 待处理。
+13. Agent Run / Event / Checkpoint 持久化不得包含 Credential、Private Key、Passphrase、Vault Secret 或模型 private chain-of-thought。
+14. Runtime V2 不要求维护覆盖所有 Linux 能力的 Typed Tool catalog；但迁移不得删除或破坏稳定 SSH、SFTP、Incident、Operations Pack、ChangeSet、Typed Tool 或 Phase 10K Context 能力。

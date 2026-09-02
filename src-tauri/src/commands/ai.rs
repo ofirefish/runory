@@ -36,7 +36,7 @@ pub async fn ai_generate_command(
             CloudPolicyAction::AiExecute,
         )
         .await?;
-    assistant.generate(request.intent)
+    assistant.generate(request.intent).await
 }
 
 #[tauri::command]

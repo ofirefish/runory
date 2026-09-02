@@ -8,9 +8,9 @@ import { ContextPanelTabs, type ContextTab } from "./ContextPanelTabs";
 import { InspectorPanel } from "./inspector/InspectorPanel";
 import { useContextPanelStore } from "./context-panel-store";
 
-const MIN_WIDTH = 320;
-const MAX_WIDTH = 480;
-const DEFAULT_WIDTH = 360;
+const MIN_WIDTH = 360;
+const MAX_WIDTH = 600;
+const DEFAULT_WIDTH = 420;
 const WIDTH_KEY = "runory.contextPanelWidth";
 
 function loadWidth(): number {
@@ -28,7 +28,7 @@ function loadWidth(): number {
  * no session change, no reconnection. Panel visibility / width / active tab
  * persist to localStorage. UI preferences only — never LLM context or secrets.
  */
-export function ContextPanel({ profile, sessionId, state, connected, onNewTerminal, onDisconnect, onEdit, onResize, onSelectServer, onReviewPlan }: {
+export function ContextPanel({ profile, sessionId, state, connected, onNewTerminal, onDisconnect, onEdit, onResize, onSelectServer }: {
   profile: ServerProfile | null;
   sessionId: string | null;
   state: SessionState;
@@ -39,7 +39,6 @@ export function ContextPanel({ profile, sessionId, state, connected, onNewTermin
   /** Fired continuously during width drag so Main Workspace (xterm) can fit. */
   onResize: () => void;
   onSelectServer: () => void;
-  onReviewPlan: (runId: string) => void;
 }) {
   const { t } = useTranslation();
   const open = useContextPanelStore((store) => store.visible);
@@ -111,7 +110,7 @@ export function ContextPanel({ profile, sessionId, state, connected, onNewTermin
       <div className="context-panel-content" id="context-panel-content">
         {tab === "inspector"
           ? <InspectorPanel profile={profile} state={state} connected={connected} onNewTerminal={onNewTerminal} onDisconnect={onDisconnect} onEdit={onEdit} />
-          : <AgentPanel profile={profile} sessionId={sessionId} state={state} connected={connected} onNewTerminal={onNewTerminal} onSelectServer={onSelectServer} onReviewPlan={onReviewPlan} />}
+          : <AgentPanel profile={profile} sessionId={sessionId} state={state} connected={connected} onNewTerminal={onNewTerminal} onSelectServer={onSelectServer} />}
       </div>
     </aside>
   ) : (

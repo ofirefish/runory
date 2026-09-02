@@ -1,5 +1,4 @@
 mod ai;
-mod ai_agent;
 mod cloud;
 mod credential;
 mod dashboard;
@@ -15,12 +14,7 @@ mod sftp;
 
 pub use ai::{
     AiAssistantResponse, AiCommandProposal, AiCommandRequest, AiDiagnosis, AiGenerateRequest,
-    AiOutputRequest, AiPurpose, AiRisk, AiSignal, AiTask,
-};
-pub use ai_agent::{
-    AiAgentPlan, AiAuditListRequest, AiAuditRecord, AiPlanGetRequest, AiPlanRequest, AiPlanStep,
-    AiPlanStepRequest, AiStepStatus, AiTerminalPreset, AiToolExecution, AiToolInput, AiToolOutput,
-    AiToolSummary,
+    AiOutputRequest, AiPlanProposal, AiPurpose, AiRisk, AiSignal, AiTask,
 };
 pub use cloud::{
     CloudApplyRequest, CloudApplyResult, CloudConflictDecision, CloudConflictItem,
@@ -67,5 +61,5 @@ pub use sftp::{
     SelectDownloadTargetRequest, SelectUploadFilesRequest, SftpCreateDirectoryRequest,
     SftpDeleteRequest, SftpDirectory, SftpEntry, SftpEntryKind, SftpMetadata, SftpPathRequest,
     SftpRenameRequest, StartDownloadRequest, StartUploadRequest, TransferDirection, TransferEvent,
-    TransferJob, TransferJobId, TransferJobRequest, TransferState,
+    TransferJob, TransferJobId, TransferJobRequest, TransferState, UploadDirectoryHistoryEntry,
 };

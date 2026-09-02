@@ -7,7 +7,7 @@ use crate::domain::{
     RetryTransferRequest, SelectDownloadTargetRequest, SelectUploadFilesRequest, SessionRequest,
     SftpCreateDirectoryRequest, SftpDeleteRequest, SftpDirectory, SftpMetadata, SftpPathRequest,
     SftpRenameRequest, StartDownloadRequest, StartUploadRequest, TransferDirection, TransferEvent,
-    TransferJob, TransferJobRequest,
+    TransferJob, TransferJobRequest, UploadDirectoryHistoryEntry,
 };
 use crate::ssh::ServerSessionManager;
 use crate::transfers::{LocalFileGrantKind, LocalFileGrantService, UploadDirectoryHistoryService};
@@ -228,6 +228,16 @@ pub async fn sftp_select_upload_files(
         );
     }
     Ok(selections)
+}
+
+#[tauri::command]
+pub async fn sftp_list_upload_directories(
+    request: SessionRequest,
+    history: State<'_, UploadDirectoryHistoryService>,
+    sessions: State<'_, ServerSessionManager>,
+) -> AppResult<Vec<UploadDirectoryHistoryEntry>> {
+    let profile_id = sessions.profile_id(request.session_id).await?;
+    history.list(profile_id).await
 }
 
 #[tauri::command]

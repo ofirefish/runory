@@ -144,7 +144,7 @@ impl ObservationCache {
 pub(crate) fn cache_key(target_id: Uuid, invocation: &NativeToolInvocation) -> Option<String> {
     let suffix = match invocation {
         NativeToolInvocation::SystemInfo => "system.info".into(),
-        NativeToolInvocation::SystemDisk => "system.disk".into(),
+        NativeToolInvocation::SystemDisk => "system.disk_usage".into(),
         NativeToolInvocation::ServiceStatus { service } => format!("service.status:{service}"),
         NativeToolInvocation::ServiceLogs { service, lines } => {
             format!("service.logs:{service}:{lines}")
@@ -168,6 +168,11 @@ pub(crate) fn cache_key(target_id: Uuid, invocation: &NativeToolInvocation) -> O
         NativeToolInvocation::DockerInspect { container } => format!("docker.inspect:{container}"),
         NativeToolInvocation::DockerLogs { container, lines } => {
             format!("docker.logs:{container}:{lines}")
+        }
+        NativeToolInvocation::FilesystemInodeUsage => "filesystem.inode_usage".into(),
+        NativeToolInvocation::BlockDevicesList => "block_devices.list".into(),
+        NativeToolInvocation::TerminalExecReadonly { command } => {
+            format!("terminal.exec_readonly:{command}")
         }
         NativeToolInvocation::FilePatch { .. }
         | NativeToolInvocation::ServiceRestart { .. }

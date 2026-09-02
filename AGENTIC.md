@@ -6,6 +6,8 @@
 
 > Implementation boundary: 当前仓库已按 10A–10K 建立 Rust Agentic Foundation：封闭 Registry、Descriptor / Result、R0–R3 Policy、sanitized Audit、Timeout / Cancellation、目标驱动的只读调查循环、结构化 Context / Diagnosis / Evidence、版本化 ChangeSet、Approval / Verification / truthful Rollback、Observation Cache / Context Compaction / Budget、四个 Built-in Skills、只读 MCP Gateway、最多 10 Target 的 Drift/ChangeSet、Production Hardening、五类证据驱动 Operations Pack、Incident Lifecycle 与 Production Qualification。对话中的模型只能基于成功 Tool Evidence 提议受限写步骤；Rust 会重新校验证据、风险、目标和 Policy，并创建真实 ChangeSet Draft。没有通用 Tool/MCP/Shell IPC；Managed AI、Marketplace、Signed Skill Package 与 Trusted Automation 仍为 future。
 
+> Runtime V2 Note (2026-09-02): `AGENT_RUNTIME_V2.md` defines the current conversation orchestration baseline: `Reason → single CommandProposal → exact Approval → Rust ServerSession exec → bounded/redacted Observation → Reason`. All commands require approval and Critical commands fail closed. Where older sections say the conversational Runtime must use Typed Tools or auto-run safe reads, this note takes precedence. Typed Tools remain authoritative for Incident, Operations Pack, ChangeSet Preconditions, Verification and Rollback.
+
 ---
 
 ## 1. 产品方向
@@ -56,28 +58,25 @@ Rollback / Commit
 强约束：
 
 ```text
-LLM
+LLM → structured CommandProposal
  ↓
-Agent Runtime
+Rust Agent Runtime validation / conservative Risk
  ↓
-Typed Tool
+Exact user Approval
  ↓
-Policy / Risk
+AgentCommandExecutionService
  ↓
-Approval
+ServerSessionManager.exec
  ↓
-Rust Domain Service
- ↓
-ServerSession
- ↓
-SSH / SFTP
+SSH exec channel
 ```
 
 禁止：
 
 ```text
 LLM → russh
-LLM → unrestricted shell
+LLM → direct/unapproved shell
+React → shell / PTY injection
 LLM → unrestricted filesystem
 LLM → credential vault
 ```
@@ -92,9 +91,11 @@ Diagnose + Plan
 
 所有会改变远程服务器状态的动作，默认必须进入 ChangeSet，并经过明确审批。
 
-## 2.3 Typed Tool First
+## 2.3 Command Proposal for Conversation; Typed Tools for Structured Subsystems
 
-如果存在领域 Tool：
+对话式诊断不再要求维护覆盖所有 Linux 操作的 Typed Tool catalog。Reasoner 每轮提议一条命令，Rust 完成校验、Risk/Mutability 分类、精确审批绑定和 ServerSession 执行。
+
+以下既有领域仍使用 Typed Tool：
 
 ```text
 nginx.test
@@ -103,9 +104,7 @@ file.patch
 http.request
 ```
 
-Agent 必须优先调用领域 Tool，而不是自己拼接 Shell。
-
-`terminal.exec` 只是 Escape Hatch。
+Incident、Operations Pack、ChangeSet Preconditions、Verification、Rollback 不得改用自由命令绕过其 Registry / Policy / Evidence 约束。现有 Typed Tool 暂不物理删除。
 
 ## 2.4 Verify, Do Not Assume
 

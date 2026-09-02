@@ -1186,3 +1186,68 @@ Context Inspector
 ```
 
 Runory 应看起来像一款真正可以每天使用 8 小时的专业基础设施工具，而不是一张只适合展示的概念图。
+
+---
+
+## 44. Agent Runtime V2 Right Panel
+
+Agent 保持在 Desktop Shell 右侧 Context Panel：
+
+```text
+[ AI Agent ] [ Inspect ]
+```
+
+Runtime V2 废弃当前旧式：
+
+```text
+Plan & commands
+Awaiting confirmation
+Approve/Edit/Skip command queue
+Continue next step
+```
+
+新结构：
+
+```text
+Agent Header
+  ↓
+Agent Timeline
+  ↓
+Composer
+```
+
+Timeline 类型：
+
+```text
+User Message
+Progress Summary
+Command Proposal
+Command Approval（exact command + why + Rust risk/mutability）
+Command Result（status + duration + Agent analysis；raw output remains in Terminal）
+Observation / Evidence
+Diagnosis
+ChangeSet
+Verification
+Final Answer
+```
+
+规则：
+
+- 每条命令都使用高显著度 Approval Card，不自动执行 R0/R1。
+- Card 必须原样显示单条命令、执行原因、Rust Risk / Mutability，以及 Run / Cancel。
+- 成功/失败后同一命令 Card 原位展示状态、耗时和最多 8 KiB 的脱敏结果预览；完整 stdout/stderr 流仍只在主 Terminal。随后进入 Analyzing，并把 Agent 解读显示为独立结论 Card。
+- 不显示完整 private chain-of-thought。
+- 不提供 `Continue next step`。
+- Panel 折叠或切换 `Inspect` 不停止 AgentRun。
+- 默认宽度约 420px，建议范围 360–600px，支持 Resize。
+- 复杂 ChangeSet / Evidence 可通过 Expand 打开 Focus Workspace。
+- Panel Resize 必须正确触发 Terminal/xterm fit。
+- React 只渲染 `AgentEvent`，不拥有 Agent orchestration、Shell 执行或 PTY 注入。
+
+当前旧 UI 参考：
+
+```text
+docs/assets/agent/agent-panel-before-runtime-v2.png
+```
+
+详细规范见 `AGENT_RUNTIME_V2.md`。

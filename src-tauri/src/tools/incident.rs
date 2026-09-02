@@ -16,6 +16,10 @@ const FILE_SCRIPT: &str = "test -f \"$1\" || exit 91; test -r \"$1\" || exit 92;
 const DIRECTORY_SCRIPT: &str =
     "test -d \"$1\" || exit 91; du -x -B1 -d1 \"$1\" 2>/dev/null | sort -nr | head -n 100";
 const LARGE_FILES_SCRIPT: &str = "test -d \"$1\" || exit 91; find \"$1\" -xdev -type f -size +\"$2\"c -printf '%s\\t%p\\n' 2>/dev/null | sort -nr | head -n 100";
+const INODE_SCRIPT: &str =
+    "df -iP 2>/dev/null | awk 'NR>1 {print $1\"\\t\"$2\"\\t\"$3\"\\t\"$4\"\\t\"$6}' | head -n 64";
+const LSBLK_SCRIPT: &str =
+    "command -v lsblk >/dev/null 2>&1 || exit 90; lsblk -b -J -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null";
 const DOCKER_INSPECT_SCRIPT: &str =
     "command -v docker >/dev/null 2>&1 || exit 90; docker inspect \"$1\"";
 
@@ -173,6 +177,27 @@ pub(super) async fn large_files(
     ))
 }
 
+pub(super) async fn inode_usage(
+    sessions: &ServerSessionManager,
+    session_id: SessionId,
+) -> AppResult<DiagnosticData> {
+    let output = exec(sessions, session_id, INODE_SCRIPT, Vec::new(), 64 * 1024).await?;
+    Ok(data(
+        "inode-usage",
+        json!({"filesystems": parse_inode_rows(&output)}),
+    ))
+}
+
+pub(super) async fn block_devices_list(
+    sessions: &ServerSessionManager,
+    session_id: SessionId,
+) -> AppResult<DiagnosticData> {
+    let output = exec(sessions, session_id, LSBLK_SCRIPT, Vec::new(), 256 * 1024).await?;
+    let devices: Value = serde_json::from_str(&output)
+        .unwrap_or_else(|_| json!({"raw": bounded_lines(&output, 128)}));
+    Ok(data("block-devices", json!({"devices": devices})))
+}
+
 pub(super) async fn docker_list(
     sessions: &ServerSessionManager,
     session_id: SessionId,
@@ -314,6 +339,26 @@ fn parse_size_paths(value: &str) -> Vec<Value> {
         .filter_map(|line| {
             let (size, path) = line.split_once('\t')?;
             Some(json!({"sizeBytes":size.parse::<u64>().ok()?,"path":path}))
+        })
+        .collect()
+}
+
+fn parse_inode_rows(value: &str) -> Vec<Value> {
+    value
+        .lines()
+        .take(64)
+        .filter_map(|line| {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            if fields.len() != 5 {
+                return None;
+            }
+            Some(json!({
+                "filesystem": fields[0],
+                "inodes": fields[1].parse::<u64>().ok()?,
+                "used": fields[2].parse::<u64>().ok()?,
+                "available": fields[3].parse::<u64>().ok()?,
+                "mount": fields[4],
+            }))
         })
         .collect()
 }

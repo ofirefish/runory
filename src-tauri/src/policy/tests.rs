@@ -1,6 +1,6 @@
 use super::*;
 use crate::agentic::PolicyCheckContext;
-use crate::tools::{NativeToolName, RiskLevel};
+use crate::tools::{NativeToolName, ResourceImpact, RiskLevel};
 use uuid::Uuid;
 
 fn rule(id: &str, scope: PolicyScope, decision: PolicyDecision) -> PolicyRule {
@@ -26,6 +26,7 @@ fn request(server_id: Uuid, tool: NativeToolName) -> super::model::PolicyEvaluat
         },
         tool,
         risk_level: RiskLevel::R3,
+        resource_impact: ResourceImpact::Medium,
         target_count: 1,
         execution_strategy: PolicyExecutionStrategy::Sequential,
         source: PolicyInvocationSource::NativeTool,
@@ -338,4 +339,50 @@ async fn require_step_approval_cannot_be_satisfied_by_blanket_approval() {
         .expect("second step");
     assert_eq!(second.approval_state, ApprovalState::Approved);
     assert_eq!(second.approved_step_ids.len(), 2);
+}
+
+#[test]
+fn high_io_resource_impact_requires_approval_over_baseline_allow() {
+    let target = Uuid::new_v4();
+    let evaluation = evaluate(
+        vec![
+            rule(
+                "global-agent-baseline",
+                PolicyScope::Global,
+                PolicyDecision::Allow,
+            ),
+            PolicyRule {
+                id: "high-io-scan-approval".into(),
+                scope: PolicyScope::Global,
+                condition: PolicyCondition {
+                    tool: None,
+                    risk_level: None,
+                    minimum_target_count: None,
+                    execution_strategy: None,
+                    resource_impact: Some(ResourceImpact::HighIo),
+                },
+                effect: PolicyEffect {
+                    decision: PolicyDecision::RequireApproval,
+                    max_targets: None,
+                    reason: "POLICY_HIGH_IO_APPROVAL_REQUIRED".into(),
+                },
+                enabled: true,
+            },
+        ],
+        &super::model::PolicyEvaluationRequest {
+            target: PolicyTarget {
+                server_id: target,
+                group_id: None,
+                environment: None,
+            },
+            tool: NativeToolName::SystemLargeFiles,
+            risk_level: RiskLevel::R1,
+            resource_impact: ResourceImpact::HighIo,
+            target_count: 1,
+            execution_strategy: PolicyExecutionStrategy::Sequential,
+            source: PolicyInvocationSource::AgentRuntime,
+        },
+    );
+    assert_eq!(evaluation.decision, PolicyDecision::RequireApproval);
+    assert_eq!(evaluation.reason, "POLICY_HIGH_IO_APPROVAL_REQUIRED");
 }

@@ -704,7 +704,72 @@ Agentic Core 的目标边界包括 Agent Runtime、Context Manager、Tool Regist
 
 推荐目录是目标边界而不是迁移要求；不得为了匹配目录树批量移动现有模块，也不得直接把现有 `AiAgentService` 改名冒充完整 Agent Runtime。
 
-## 27. Architecture Invariants
+## 27. Agent Runtime V2
+
+详细规范见 `AGENT_RUNTIME_V2.md`。
+
+Runtime V2 将 Agent orchestration 从固定 Plan / Command Queue 升级为单命令提案驱动、可中断、可恢复的运行时：
+
+```text
+User Goal
+ ↓
+Agent Controller
+ ↓
+Context Manager
+ ↓
+Reasoner
+ ↓
+AgentDecision::CommandProposal
+ ↓
+Rust Command Validation + Risk / Mutability
+ ↓
+Exact Approval Binding
+ ↓
+AwaitingApproval → Run / Cancel
+ ↓
+AgentCommandExecutionService
+ ↓
+ServerSessionManager interactive Terminal writer
+ ↓
+Terminal Channel → xterm（原始显示）
+ ↓
+Rust bounded / redacted capture → Observation
+ └────────────────────→ Reasoner
+```
+
+关键语义：
+
+- 每轮基于最新 Observation 最多提议一条非交互式 Linux 命令，不预生成 command queue。
+- 每条命令均须用户明确审批；Rust 的 Risk / Mutability 标签不授予自动执行权限，Critical 命令 fail-closed。
+- 命令失败或 Cancel 是 Observation，不自动结束 AgentRun。
+- Approval / AskUser 是正式 Interrupt。
+- Approve / Reject 后 Resume 同一个 AgentRun。
+- 审批绑定 exact command hash、run、target、session 与 policy snapshot。
+- Rust 通过 `AgentEvent` 流向 React；React 只渲染 Timeline，不执行 Shell、不写 PTY。批准后的 PTY 写入由 Rust Runtime 完成。
+- 原始命令流只通过 Terminal Channel 到 xterm；AgentEvent 可携带单次命令最多 8 KiB 的脱敏结果预览。命令卡显示状态、耗时与预览，下一轮 Reasoner 的分析作为独立结论卡。
+- `AwaitingApproval`、`AwaitingUser` 支持 durable checkpoint。
+- 写入/Unknown command 后必须追加一次成功的审批只读验证，才能 Final；既有结构化 Repair 继续复用 ChangeSet / Verification / Rollback。
+- Phase 10K Context Budget / Freshness / Cache / Compaction 继续复用。
+
+推荐对象：
+
+```text
+AgentRun
+AgentEvent
+AgentCheckpoint
+AgentDecision
+CommandProposal
+CommandApproval
+CommandOutcome
+Observation
+WorkingFact
+ApprovalRequest
+ToolArtifact
+```
+
+Agent Runtime 复杂状态建议使用 SQLite；普通 Host/Profile 配置继续遵循现有 Repository 设计。
+
+## 28. Architecture Invariants
 
 1. Secret 不进入 Profile JSON。
 2. Terminal Output 不进入 React Global State。
@@ -715,7 +780,7 @@ Agentic Core 的目标边界包括 Agent Runtime、Context Manager、Tool Regist
 7. ServerSession 不等于永久的一对一 Terminal Tab。
 8. Core 不依赖 Node.js。
 9. Capability Least Privilege。
-10. AI / Agent 必须经过 Tool Registry、Policy 和正常 Domain Service。
+10. V2 Command 必须经过 Rust validation、Policy、exact Approval，并由 Rust 写入绑定 `ServerSession` 的 interactive Terminal；其它 Agentic 子系统继续经过 Tool Registry 与正常 Domain Service。
 11. Agent 不拥有 Credential / Vault Secret。
 12. 所有 Agent Write Operation 默认进入 ChangeSet。
 13. Skill / MCP 不得绕过 Tool Permission。

@@ -184,7 +184,7 @@ mod tests {
         let invocation_id = Uuid::new_v4();
         let evidence = Evidence {
             id: Uuid::new_v4(),
-            source: "tool.system.disk".into(),
+            source: "tool.system.disk_usage".into(),
             invocation_id,
             trust: ContextTrust::UntrustedRemoteData,
             summary: "system-disk-collected",

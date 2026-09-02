@@ -16,14 +16,13 @@ const ChangeSetWorkspace = lazy(() => import("../../features/agentic/ChangeSetWo
  *  ChangeSet Review workspace opened by the Agent's Review Plan action. */
 export type WorkspaceView = "terminal" | "files" | "assistant" | "changes" | "dashboard" | "operations" | "deployment";
 
-export function ContextDock({ view, terminalContent, sessionId, profileId, profile, active, reviewRunId, onViewChange, onInsertCommand }: {
+export function ContextDock({ view, terminalContent, sessionId, profileId, profile, active, onViewChange, onInsertCommand }: {
   view: WorkspaceView;
   terminalContent: ReactNode;
   sessionId: string | null;
   profileId: string;
   profile: ServerProfile | null;
   active: boolean;
-  reviewRunId: string | null;
   onViewChange: (view: WorkspaceView) => void;
   onInsertCommand: (command: string) => void;
 }) {
@@ -50,7 +49,7 @@ export function ContextDock({ view, terminalContent, sessionId, profileId, profi
       {view === "files" && <FilesView sessionId={sessionId} profileId={profileId} active={active && view === "files"} />}
       {view === "assistant" && <AiTerminalView sessionId={sessionId} onInsertCommand={onInsertCommand} />}
       {view === "changes" && <Suspense fallback={<p className="p-4 text-sm text-[hsl(var(--muted))]">{t("common.loading")}</p>}>
-        <ChangeSetWorkspace sessions={sessionId ? [{ sessionId, profileId, label: profile?.name ?? sessionId }] : []} activeSessionId={sessionId} agentRunId={reviewRunId} />
+        <ChangeSetWorkspace sessions={sessionId ? [{ sessionId, profileId, label: profile?.name ?? sessionId }] : []} activeSessionId={sessionId} agentRunId={null} />
       </Suspense>}
       {view === "dashboard" && <DashboardView sessionId={sessionId} active={active && view === "dashboard"} />}
       {view === "operations" && <OperationsView sessionId={sessionId} active={active && view === "operations"} />}

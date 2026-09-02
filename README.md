@@ -48,7 +48,7 @@ Runory 是一款 Local-first、跨平台的 SSH 与服务器运维客户端。�
 - 有限类型化 AI Plan：用户选择工具与活动会话，逐项审批、一次性执行并写入本地审计
 - 可选 Supabase 邮箱登录、Organization/RLS、Rust 端到端加密同步、团队治理与审计（默认保持 Local-only）
 
-AI Terminal 与 Phase 8 有限 AI Plan 继续独立保留。Phase 10 Agentic Foundation 通过 Rust Tool Registry 实现只读 Server Doctor、Diagnosis / Evidence、版本化 ChangeSet、精确审批、验证与真实可用时的回滚、受限 Skills、只读 MCP 外部上下文和多服务器 Drift；Production Hardening 进一步加入无内容 ChangeSet 崩溃恢复、审批失效/中断语义、现代与初始化型 MCP 双协议适配，以及 Agentic UI 按需加载。不接受任意 Shell，也不向 React 暴露通用 Tool/MCP 执行 API。Cloud Sync 当前同步不含凭据的 Profile/Group 清单，支持加密 tombstone、预览式安全合并、逐项冲突决策、成员角色、Access Policy 和 Audit 分页。Managed AI、Marketplace、Signed Skill Package、Trusted Automation、Editor、Drag & Drop 与 Port Forwarding 仍不在当前实现范围。
+AI Terminal 与 Phase 8 有限 AI Plan 继续独立保留。Agent Runtime V2 对话主链采用单条 Linux Command Proposal：每条命令原样展示并经用户审批，由 Rust 将命令和 Enter 写入绑定 ServerSession 的可见交互式 Terminal；原始流只显示在 xterm，Rust 内部有界、脱敏的副本作为 Observation 回到下一轮，命令卡只接收最多 8 KiB 的脱敏结果预览，随后显示独立分析结论。不向 React 暴露 Shell/Tool 执行 API。Phase 10 Agentic Foundation 的 Typed Tool 继续服务 Incident、Operations Pack、ChangeSet Preconditions、Verification、Rollback、只读 MCP 与多服务器 Drift，不再作为 V2 覆盖所有 Linux 能力的对话 Tool catalog。Cloud Sync 当前同步不含凭据的 Profile/Group 清单，支持加密 tombstone、预览式安全合并、逐项冲突决策、成员角色、Access Policy 和 Audit 分页。Managed AI、Marketplace、Signed Skill Package、Trusted Automation、Editor、Drag & Drop 与 Port Forwarding 仍不在当前实现范围。
 
 Supabase 生产部署、SMTP 配置、远端发布门禁、schema v2 无秘密 JSON 证据与 Production 部署前/后两阶段门禁见 [`docs/CLOUD_DEPLOYMENT.md`](docs/CLOUD_DEPLOYMENT.md)。
 
@@ -190,6 +190,8 @@ runory/
 - [DESIGN.md](./DESIGN.md)
 - [SECURITY.md](./SECURITY.md)
 - [AGENTS.md](./AGENTS.md)
+- [AGENT_RUNTIME_V2.md](./AGENT_RUNTIME_V2.md)
+- [CODEX_AGENT_RUNTIME_V2.md](./CODEX_AGENT_RUNTIME_V2.md)
 - [ROADMAP.md](./ROADMAP.md)
 - [AGENTIC.md](./AGENTIC.md)（future architecture）
 - [CODEX_AGENTIC_MERGE.md](./CODEX_AGENTIC_MERGE.md)

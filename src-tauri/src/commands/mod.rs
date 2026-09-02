@@ -1,6 +1,6 @@
+pub mod agent_v2;
 pub mod agentic;
 pub mod ai;
-pub mod ai_agent;
 pub mod catalog;
 pub mod cloud;
 pub mod cloud_policy;

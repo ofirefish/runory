@@ -99,6 +99,7 @@ export type RemoteTextPreview = {
 };
 
 export type LocalFileSelection = { grantId: string; name: string; size: number };
+export type UploadDirectoryHistoryEntry = { remoteDirectory: string; lastUploadedAtMs: number };
 export type TransferDirection = "upload" | "download";
 export type TransferState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type TransferJob = {

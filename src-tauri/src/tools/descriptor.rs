@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 pub(crate) enum NativeToolName {
     #[serde(rename = "system.info")]
     SystemInfo,
-    #[serde(rename = "system.disk")]
+    #[serde(rename = "system.disk_usage", alias = "system.disk")]
     SystemDisk,
     #[serde(rename = "service.status")]
     ServiceStatus,
@@ -47,10 +47,16 @@ pub(crate) enum NativeToolName {
     NginxReload,
     #[serde(rename = "docker.restart")]
     DockerRestart,
+    #[serde(rename = "filesystem.inode_usage")]
+    FilesystemInodeUsage,
+    #[serde(rename = "block_devices.list")]
+    BlockDevicesList,
+    #[serde(rename = "terminal.exec_readonly")]
+    TerminalExecReadonly,
 }
 
 impl NativeToolName {
-    pub(crate) const READ_ONLY: [Self; 17] = [
+    pub(crate) const READ_ONLY: [Self; 20] = [
         Self::SystemInfo,
         Self::SystemDisk,
         Self::ServiceStatus,
@@ -68,9 +74,12 @@ impl NativeToolName {
         Self::DockerList,
         Self::DockerInspect,
         Self::DockerLogs,
+        Self::FilesystemInodeUsage,
+        Self::BlockDevicesList,
+        Self::TerminalExecReadonly,
     ];
 
-    pub(crate) const ALL: [Self; 22] = [
+    pub(crate) const ALL: [Self; 25] = [
         Self::SystemInfo,
         Self::SystemDisk,
         Self::ServiceStatus,
@@ -88,6 +97,9 @@ impl NativeToolName {
         Self::DockerList,
         Self::DockerInspect,
         Self::DockerLogs,
+        Self::FilesystemInodeUsage,
+        Self::BlockDevicesList,
+        Self::TerminalExecReadonly,
         Self::FilePatch,
         Self::ServiceRestart,
         Self::ServiceReload,
@@ -98,7 +110,7 @@ impl NativeToolName {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::SystemInfo => "system.info",
-            Self::SystemDisk => "system.disk",
+            Self::SystemDisk => "system.disk_usage",
             Self::ServiceStatus => "service.status",
             Self::ServiceLogs => "service.logs",
             Self::NetworkPortCheck => "network.port_check",
@@ -119,6 +131,9 @@ impl NativeToolName {
             Self::ServiceReload => "service.reload",
             Self::NginxReload => "nginx.reload",
             Self::DockerRestart => "docker.restart",
+            Self::FilesystemInodeUsage => "filesystem.inode_usage",
+            Self::BlockDevicesList => "block_devices.list",
+            Self::TerminalExecReadonly => "terminal.exec_readonly",
         }
     }
 }
@@ -145,6 +160,17 @@ pub(crate) enum Mutability {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
+pub(crate) enum ResourceImpact {
+    Low,
+    Medium,
+    HighIo,
+    HighCpu,
+    LongRunning,
+    ExternalCost,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 #[allow(dead_code)]
 pub(crate) enum ToolScope {
     Server,
@@ -165,7 +191,16 @@ pub(crate) struct ToolDescriptor {
     pub requires_approval: bool,
     pub supports_rollback: bool,
     pub scope: ToolScope,
+    pub resource_impact: ResourceImpact,
     pub timeout_ms: u64,
+}
+
+pub(crate) fn resource_impact_for(name: NativeToolName) -> ResourceImpact {
+    native_descriptors()
+        .into_iter()
+        .find(|descriptor| descriptor.name == name)
+        .map(|descriptor| descriptor.resource_impact)
+        .unwrap_or(ResourceImpact::Medium)
 }
 
 pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
@@ -181,6 +216,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
                 ("architecture", json!({ "type": "string" })),
             ]),
             RiskLevel::R0,
+            ResourceImpact::Low,
         ),
         descriptor(
             NativeToolName::SystemDisk,
@@ -204,6 +240,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
                 }),
             )]),
             RiskLevel::R0,
+            ResourceImpact::Low,
         ),
         descriptor(
             NativeToolName::ServiceStatus,
@@ -225,6 +262,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
                 }),
             )]),
             RiskLevel::R0,
+            ResourceImpact::Low,
         ),
         descriptor(
             NativeToolName::ServiceLogs,
@@ -247,6 +285,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
                 ),
             ]),
             RiskLevel::R1,
+            ResourceImpact::LongRunning,
         ),
         descriptor(
             NativeToolName::NetworkPortCheck,
@@ -270,6 +309,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
                 ("reachable", json!({ "type": "boolean" })),
             ]),
             RiskLevel::R1,
+            ResourceImpact::Medium,
         ),
         descriptor(
             NativeToolName::HttpRequest,
@@ -288,6 +328,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
                 ("bodyBytes", json!({ "type": "integer", "minimum": 0 })),
             ]),
             RiskLevel::R1,
+            ResourceImpact::ExternalCost,
         ),
         descriptor(
             NativeToolName::NginxTest,
@@ -308,6 +349,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
                 ),
             ]),
             RiskLevel::R1,
+            ResourceImpact::Low,
         ),
         descriptor(
             NativeToolName::DnsResolve,
@@ -318,6 +360,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             )]),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::Medium,
         ),
         descriptor(
             NativeToolName::TlsInspect,
@@ -334,6 +377,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             ]),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::ExternalCost,
         ),
         descriptor(
             NativeToolName::NetworkListeners,
@@ -341,6 +385,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             empty_input(),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::Medium,
         ),
         descriptor(
             NativeToolName::ProcessList,
@@ -348,6 +393,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             empty_input(),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::HighCpu,
         ),
         descriptor(
             NativeToolName::FileInspect,
@@ -358,6 +404,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             )]),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::Medium,
         ),
         descriptor(
             NativeToolName::SystemDirectoryUsage,
@@ -368,6 +415,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             )]),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::HighIo,
         ),
         descriptor(
             NativeToolName::SystemLargeFiles,
@@ -384,6 +432,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             ]),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::HighIo,
         ),
         descriptor(
             NativeToolName::DockerList,
@@ -391,6 +440,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             empty_input(),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::Medium,
         ),
         descriptor(
             NativeToolName::DockerInspect,
@@ -401,6 +451,7 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             )]),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::Medium,
         ),
         descriptor(
             NativeToolName::DockerLogs,
@@ -417,6 +468,34 @@ pub(crate) fn native_descriptors() -> Vec<ToolDescriptor> {
             ]),
             generic_object_output(),
             RiskLevel::R1,
+            ResourceImpact::LongRunning,
+        ),
+        descriptor(
+            NativeToolName::FilesystemInodeUsage,
+            "Collect inode utilization for mounted filesystems (df -i).",
+            empty_input(),
+            generic_object_output(),
+            RiskLevel::R0,
+            ResourceImpact::Low,
+        ),
+        descriptor(
+            NativeToolName::BlockDevicesList,
+            "List block devices and mount relationships (lsblk).",
+            empty_input(),
+            generic_object_output(),
+            RiskLevel::R0,
+            ResourceImpact::Low,
+        ),
+        descriptor(
+            NativeToolName::TerminalExecReadonly,
+            "Execute one allowlisted read-only command when no typed tool exists.",
+            object_input(&[(
+                "command",
+                json!({"type":"string","minLength":1,"maxLength":256}),
+            )]),
+            generic_object_output(),
+            RiskLevel::R1,
+            ResourceImpact::Medium,
         ),
     ];
     descriptors.extend([
@@ -470,6 +549,7 @@ fn write_descriptor(
         requires_approval: true,
         supports_rollback,
         scope: ToolScope::Session,
+        resource_impact: ResourceImpact::Medium,
         timeout_ms: 30_000,
     }
 }
@@ -521,6 +601,7 @@ fn descriptor(
     input_schema: Value,
     output_schema: Value,
     risk_level: RiskLevel,
+    resource_impact: ResourceImpact,
 ) -> ToolDescriptor {
     ToolDescriptor {
         name,
@@ -532,6 +613,7 @@ fn descriptor(
         requires_approval: false,
         supports_rollback: false,
         scope: ToolScope::Session,
+        resource_impact,
         timeout_ms: 30_000,
     }
 }
@@ -629,5 +711,20 @@ mod tests {
                     .is_some_and(|name| properties.contains_key(name))
             }));
         }
+    }
+
+    #[test]
+    fn high_io_tools_carry_high_io_resource_impact() {
+        let descriptors = native_descriptors();
+        let directory = descriptors
+            .iter()
+            .find(|item| item.name == NativeToolName::SystemDirectoryUsage)
+            .expect("directory usage descriptor");
+        let disk = descriptors
+            .iter()
+            .find(|item| item.name == NativeToolName::SystemDisk)
+            .expect("disk descriptor");
+        assert_eq!(directory.resource_impact, ResourceImpact::HighIo);
+        assert_eq!(disk.resource_impact, ResourceImpact::Low);
     }
 }

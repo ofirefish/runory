@@ -1,3 +1,6 @@
+// Agent Runtime V2 domain contracts (AR2-A). Public library API with no
+// production caller yet; the legacy Agent paths run unchanged until AR2-B+.
+pub mod agent;
 mod agentic;
 mod ai;
 mod cloud;
@@ -27,11 +30,12 @@ use std::sync::Arc;
 use tauri::{DragDropEvent, Manager, WindowEvent};
 use tokio::sync::Mutex;
 
+use agent::AgentRuntimeV2Service;
 use agentic::{
     AgentRuntimeService, ChangeSetService, FleetExecutionService, IncidentService, ModelGateway,
     ObservationCache,
 };
-use ai::{AiAgentService, AiAuditRepository, AiService, LocalAssistantProvider};
+use ai::{AiService, GatewayAssistantProvider};
 use cloud::{CloudPolicyService, CloudSyncService, CloudSyncStateRepository};
 use deployment::{DeploymentHistoryRepository, DeploymentService};
 use groups::{GroupRepository, GroupService};
@@ -78,7 +82,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(ServerSessionManager::default())
-        .manage(AiService::new(Arc::new(LocalAssistantProvider)))
+        // The assistant panel is LLM-backed: the provider talks to the
+        // configured model through ModelGateway and only classifies its
+        // output. Registration happens in `setup` once the gateway exists.
         .manage(LocalFileGrantService::default())
         .on_window_event(|window, event| {
             let WindowEvent::DragDrop(event) = event else {
@@ -105,9 +111,16 @@ pub fn run() {
                     "credential Vault automatic unlock was unavailable"
                 );
             }
-            let models = ModelGateway::at_path(data_directory.join("agent-model.json"))?;
+            let models = Arc::new(ModelGateway::at_path(
+                data_directory.join("agent-model.json"),
+            )?);
             tauri::async_runtime::block_on(models.load())?;
             app.manage(models);
+            // The assistant panel shares the same gateway; it only classifies
+            // the model's output — the model itself never touches the shell.
+            app.manage(AiService::new(Arc::new(GatewayAssistantProvider::new(
+                app.state::<Arc<ModelGateway>>().inner().clone(),
+            ))));
             let agent_policy = AgentPolicyService::at_path(
                 data_directory.join("agent-policy.json"),
                 data_directory.join("agent-policy-audit.json"),
@@ -123,6 +136,10 @@ pub fn run() {
                 ),
             );
             app.manage(AgentRuntimeService::default());
+            app.manage(
+                AgentRuntimeV2Service::open(&data_directory)
+                    .expect("agent runtime v2 database must open"),
+            );
             app.manage(ObservationCache::default());
             app.manage(agent_policy);
             let incidents = IncidentService::at_path(data_directory.join("agentic-incidents.json"));
@@ -188,9 +205,6 @@ pub fn run() {
             app.manage(DeploymentService::new(DeploymentHistoryRepository::new(
                 JsonRepository::new(data_directory.join("deployment-history.json")),
             )));
-            app.manage(AiAgentService::new(AiAuditRepository::new(
-                JsonRepository::new(data_directory.join("ai-audit.json")),
-            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -198,13 +212,6 @@ pub fn run() {
             commands::ai::ai_generate_command,
             commands::ai::ai_diagnose_output,
             commands::ai::ai_propose_fix,
-            commands::ai_agent::ai_agent_plan_create,
-            commands::ai_agent::ai_agent_plan_get,
-            commands::ai_agent::ai_agent_plan_discard,
-            commands::ai_agent::ai_agent_step_approve,
-            commands::ai_agent::ai_agent_step_execute,
-            commands::ai_agent::ai_agent_audit_list,
-            commands::agentic::agent_doctor_run,
             commands::agentic::agent_model_get,
             commands::agentic::agent_model_configure,
             commands::agentic::agent_model_clear_api_key,
@@ -217,8 +224,16 @@ pub fn run() {
             commands::agentic::agent_incident_handoff,
             commands::agentic::agent_incident_close,
             commands::agentic::agent_incident_export,
-            commands::agentic::agent_run_cancel,
-            commands::agentic::agent_multi_doctor_run,
+            commands::agent_v2::agent_v2_run_start,
+            commands::agent_v2::agent_v2_run_subscribe,
+            commands::agent_v2::agent_v2_run_approve,
+            commands::agent_v2::agent_v2_run_reject,
+            commands::agent_v2::agent_v2_run_reply,
+            commands::agent_v2::agent_v2_run_cancel,
+            commands::agent_v2::agent_v2_run_pause,
+            commands::agent_v2::agent_v2_run_resume,
+            commands::agent_v2::agent_v2_list_resumable_runs,
+            commands::agent_v2::agent_v2_bind_resumable_run,
             commands::agentic::agent_changeset_draft,
             commands::agentic::agent_multi_changeset_draft,
             commands::agentic::agent_fleet_changeset_get,
@@ -291,6 +306,7 @@ pub fn run() {
             commands::sftp::rename,
             commands::sftp::delete,
             commands::sftp::sftp_select_upload_files,
+            commands::sftp::sftp_list_upload_directories,
             commands::sftp::sftp_accept_latest_upload_drop,
             commands::sftp::sftp_select_download_target,
             commands::sftp::sftp_start_upload,

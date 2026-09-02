@@ -57,7 +57,7 @@ pub(crate) struct AgentModelTurn {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RemoteDecision {
     action: String,
     #[serde(default)]
@@ -232,6 +232,21 @@ fn local_initial_decision(request: &str, hints: &PlanningHints) -> AgentDecision
     if contains_any(&lower, &["disk", "磁盘", "空间", "storage"]) {
         return AgentDecision::ToolCalls(vec![call(NativeToolName::SystemDisk, json!({}))]);
     }
+    if contains_any(
+        &lower,
+        &["inode", "inodes", "索引节点", "df -i", "inode usage"],
+    ) {
+        return AgentDecision::ToolCalls(vec![call(
+            NativeToolName::FilesystemInodeUsage,
+            json!({}),
+        )]);
+    }
+    if contains_any(
+        &lower,
+        &["lsblk", "block device", "块设备", "block devices"],
+    ) {
+        return AgentDecision::ToolCalls(vec![call(NativeToolName::BlockDevicesList, json!({}))]);
+    }
     if contains_any(&lower, &["nginx"]) {
         return AgentDecision::ToolCalls(vec![call(NativeToolName::NginxTest, json!({}))]);
     }
@@ -244,7 +259,80 @@ fn local_initial_decision(request: &str, hints: &PlanningHints) -> AgentDecision
     if contains_any(&lower, &["listener", "listening", "监听", "端口"]) {
         return AgentDecision::ToolCalls(vec![call(NativeToolName::NetworkListeners, json!({}))]);
     }
+    if let Some(command) = readonly_shell_fallback(&lower) {
+        return AgentDecision::ToolCalls(vec![call(
+            NativeToolName::TerminalExecReadonly,
+            json!({"command": command}),
+        )]);
+    }
     AgentDecision::ToolCalls(vec![call(NativeToolName::SystemInfo, json!({}))])
+}
+
+fn readonly_shell_fallback(lower: &str) -> Option<String> {
+    if contains_any(lower, &["uptime", "运行时间", "负载"]) {
+        return Some("uptime".into());
+    }
+    if contains_any(lower, &["whoami", "当前用户"]) {
+        return Some("whoami".into());
+    }
+    None
+}
+
+fn disk_related_goal(request: &str) -> bool {
+    let lower = request.to_ascii_lowercase();
+    contains_any(
+        &lower,
+        &[
+            "disk", "磁盘", "空间", "storage", "capacity", "usage", "占用", "容量",
+        ],
+    )
+}
+
+fn local_disk_followup(request: &str, evidence: &[Evidence]) -> Option<AgentDecision> {
+    if !disk_related_goal(request) {
+        return None;
+    }
+    let disk = evidence.iter().find(|item| {
+        item.result.success && matches!(item.result.data.as_ref(), Some(ToolData::SystemDisk(_)))
+    })?;
+    let disk_data = match disk.result.data.as_ref() {
+        Some(ToolData::SystemDisk(data)) => data,
+        _ => return None,
+    };
+    let critical = disk_data
+        .disks
+        .iter()
+        .max_by(|left, right| left.usage_percent.total_cmp(&right.usage_percent))
+        .filter(|mount| mount.usage_percent >= 85.0)?;
+    let mount = critical.mount.clone();
+    let has_directory = evidence.iter().any(|item| {
+        item.result.success && item.result.tool_name == NativeToolName::SystemDirectoryUsage
+    });
+    let has_large_files = evidence.iter().any(|item| {
+        item.result.success && item.result.tool_name == NativeToolName::SystemLargeFiles
+    });
+    let call = |name, arguments| ModelToolCall { name, arguments };
+    let mut calls = Vec::new();
+    if !has_directory {
+        calls.push(call(
+            NativeToolName::SystemDirectoryUsage,
+            json!({"path": mount}),
+        ));
+    }
+    if !has_large_files {
+        calls.push(call(
+            NativeToolName::SystemLargeFiles,
+            json!({
+                "path": mount,
+                "minimumBytes": DEFAULT_LARGE_FILE_BYTES
+            }),
+        ));
+    }
+    if calls.is_empty() {
+        None
+    } else {
+        Some(AgentDecision::ToolCalls(calls))
+    }
 }
 
 fn local_answer(request: &str, evidence: &[Evidence]) -> AgentDecision {
@@ -252,6 +340,9 @@ fn local_answer(request: &str, evidence: &[Evidence]) -> AgentDecision {
         if let Some(decision) = local_change_proposal(request, evidence) {
             return decision;
         }
+    }
+    if let Some(decision) = local_disk_followup(request, evidence) {
+        return decision;
     }
     evidence_answer(request, evidence)
 }
@@ -661,6 +752,54 @@ mod tests {
     }
 
     #[test]
+    fn disk_goal_prefers_typed_tool_over_readonly_shell() {
+        let turn = local_turn("check disk usage", &[], &PlanningHints::default());
+        let AgentDecision::ToolCalls(calls) = turn.decision else {
+            panic!("expected tool calls");
+        };
+        assert_eq!(calls[0].name, NativeToolName::SystemDisk);
+        assert_ne!(calls[0].name, NativeToolName::TerminalExecReadonly);
+    }
+
+    #[test]
+    fn readonly_shell_fallback_routes_uptime_without_typed_tool() {
+        let turn = local_turn("show uptime on the server", &[], &PlanningHints::default());
+        let AgentDecision::ToolCalls(calls) = turn.decision else {
+            panic!("expected tool calls");
+        };
+        assert_eq!(calls[0].name, NativeToolName::TerminalExecReadonly);
+        assert_eq!(calls[0].arguments["command"], "uptime");
+    }
+
+    #[test]
+    fn high_disk_usage_triggers_directory_and_large_file_followup() {
+        let disk = evidence(
+            NativeToolName::SystemDisk,
+            ToolData::SystemDisk(SystemDiskData {
+                disks: vec![DiskUsage {
+                    mount: "/data".into(),
+                    used_bytes: 96,
+                    total_bytes: 100,
+                    usage_percent: 96.0,
+                }],
+            }),
+        );
+        let turn = local_turn(
+            "检查磁盘使用情况并诊断问题",
+            std::slice::from_ref(&disk),
+            &PlanningHints::default(),
+        );
+        let AgentDecision::ToolCalls(calls) = turn.decision else {
+            panic!("expected follow-up tool calls");
+        };
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, NativeToolName::SystemDirectoryUsage);
+        assert_eq!(calls[0].arguments["path"], "/data");
+        assert_eq!(calls[1].name, NativeToolName::SystemLargeFiles);
+        assert_eq!(calls[1].arguments["path"], "/data");
+    }
+
+    #[test]
     fn repeated_disk_call_can_fall_back_to_an_evidence_bound_diagnosis() {
         let disk = evidence(
             NativeToolName::SystemDisk,
@@ -681,19 +820,36 @@ mod tests {
                 ],
             }),
         );
+        let directory = evidence(
+            NativeToolName::SystemDirectoryUsage,
+            ToolData::Diagnostic(DiagnosticData {
+                category: "directory-usage",
+                fields: serde_json::json!({"path":"/data","entries":[]}),
+            }),
+        );
+        let large_files = evidence(
+            NativeToolName::SystemLargeFiles,
+            ToolData::Diagnostic(DiagnosticData {
+                category: "large-files",
+                fields: serde_json::json!({"path":"/data","files":[]}),
+            }),
+        );
 
         let AgentDecision::Answer {
             text,
             evidence_ids,
             goal_achieved,
-        } = evidence_answer("检查磁盘使用情况并诊断问题", std::slice::from_ref(&disk))
+        } = evidence_answer(
+            "检查磁盘使用情况并诊断问题",
+            &[disk.clone(), directory, large_files],
+        )
         else {
             panic!("expected deterministic evidence answer");
         };
         assert!(text.contains("严重磁盘容量风险"));
         assert!(text.contains("/data"));
         assert!(text.contains("96.0%"));
-        assert_eq!(evidence_ids, vec![disk.id]);
+        assert_eq!(evidence_ids.len(), 3);
         assert!(goal_achieved);
     }
 

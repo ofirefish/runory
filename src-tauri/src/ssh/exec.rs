@@ -38,6 +38,19 @@ impl RemoteCommand {
             .with_timeout(Duration::from_secs(30))
     }
 
+    /// Build a command from a raw shell line. The line is passed to `sh -c`
+    /// exactly as the user typed it (intentional: an interactive shell would
+    /// resolve the same quoting), so it must not be re-quoted here. Only callers
+    /// that display the command for review may construct this.
+    pub(crate) fn freeform(script: String) -> AppResult<Self> {
+        if script.trim().is_empty() || script.len() > 16 * 1024 || script.as_bytes().contains(&0) {
+            return Err(AppError::InvalidOperation);
+        }
+        Ok(Self::program("sh", vec!["-c".to_owned()])
+            .with_args(vec![script])
+            .with_timeout(Duration::from_secs(120)))
+    }
+
     pub(crate) fn with_stdin(mut self, stdin: Vec<u8>) -> AppResult<Self> {
         if stdin.len() > MAX_INPUT_BYTES {
             return Err(AppError::InvalidOperation);

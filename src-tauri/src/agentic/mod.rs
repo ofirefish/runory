@@ -12,11 +12,10 @@ mod planning;
 mod runtime;
 mod state;
 
-#[cfg(test)]
 pub(crate) use changes::ChangeStepDraft;
 pub(crate) use changes::{
-    ApprovalState, ChangeSet, ChangeSetDraftRequest, ChangeSetService, ExecutionState,
-    PolicyCheckContext,
+    ApprovalState, ChangeSet, ChangeSetDraftRequest, ChangeSetRecoveryState, ChangeSetService,
+    ExecutionState, PolicyCheckContext,
 };
 pub(crate) use fleet::{
     ExecutionStrategy, FleetExecutionService, MultiChangeSet, MultiChangeSetDraftRequest,
@@ -27,8 +26,16 @@ pub(crate) use incident::{
 };
 #[cfg(test)]
 pub(crate) use incident::{IncidentSeverity, OperationsPack};
-pub(crate) use model_gateway::{ModelConfigureRequest, ModelGateway, ModelProviderStatus};
+pub(crate) use model_gateway::{
+    normalized_json_response, ModelConfigureRequest, ModelGateway, ModelProviderKind,
+    ModelProviderStatus,
+};
 pub(crate) use multi::{MultiServerDoctorRequest, MultiServerRun};
 pub(crate) use optimization::ObservationCache;
+pub(crate) use planning::{
+    change_proposal_is_evidence_bound, local_turn, AgentDecision as PlanningAgentDecision,
+    PlanningHints,
+};
 pub(crate) use runtime::AgentRuntimeService;
+pub(crate) use state::Evidence;
 pub(crate) use state::{AgentDoctorRequest, AgentProgress, AgentRun};

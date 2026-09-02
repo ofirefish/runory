@@ -6,6 +6,7 @@ use russh::client;
 use russh::{ChannelMsg, ChannelWriteHalf, Disconnect};
 use tauri::ipc::Channel;
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::{sleep, Instant};
 
 use super::os_detection::{parse_os_release, parse_uname};
 use crate::domain::{
@@ -16,14 +17,21 @@ use crate::ssh::{ExecChannel, RemoteCommand, RemoteExecResult, SftpChannel, SshS
 use crate::transfers::TransferQueue;
 
 const TERMINAL_CONTEXT_LIMIT: usize = 32 * 1024;
+const AGENT_TERMINAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const AGENT_TERMINAL_IDLE_FALLBACK: Duration = Duration::from_secs(4);
+const AGENT_TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(75);
 
 #[derive(Default)]
 struct TerminalContextBuffer {
     bytes: Vec<u8>,
+    total_bytes: u64,
 }
 
 impl TerminalContextBuffer {
     fn append(&mut self, data: &[u8]) {
+        self.total_bytes = self
+            .total_bytes
+            .saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
         if data.len() >= TERMINAL_CONTEXT_LIMIT {
             self.bytes.clear();
             self.bytes
@@ -44,6 +52,29 @@ impl TerminalContextBuffer {
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.bytes).into_owned()
     }
+
+    fn mark(&self) -> u64 {
+        self.total_bytes
+    }
+
+    fn text_since(&self, mark: u64) -> String {
+        let retained_start = self
+            .total_bytes
+            .saturating_sub(u64::try_from(self.bytes.len()).unwrap_or(u64::MAX));
+        let offset = mark.saturating_sub(retained_start);
+        let offset = usize::try_from(offset)
+            .unwrap_or(self.bytes.len())
+            .min(self.bytes.len());
+        String::from_utf8_lossy(&self.bytes[offset..]).into_owned()
+    }
+}
+
+/// Output captured from a command entered into the visible interactive PTY.
+/// The same bytes continue to flow to xterm through `TerminalEvent::Output`;
+/// this copy stays inside Rust and is used only as untrusted model evidence.
+pub(crate) struct TerminalCommandResult {
+    pub output: String,
+    pub timed_out: bool,
 }
 
 struct SessionHandle {
@@ -52,6 +83,7 @@ struct SessionHandle {
     writer: Arc<ChannelWriteHalf<client::Msg>>,
     sftp: Arc<Mutex<Option<Arc<SftpChannel>>>>,
     terminal_context: Arc<Mutex<TerminalContextBuffer>>,
+    agent_command_lock: Arc<Mutex<()>>,
     output: Option<Channel<TerminalEvent>>,
 }
 
@@ -109,6 +141,7 @@ impl ServerSessionManager {
                 writer: Arc::clone(&writer),
                 sftp: Arc::new(Mutex::new(None)),
                 terminal_context: Arc::clone(&terminal_context),
+                agent_command_lock: Arc::new(Mutex::new(())),
                 output: Some(output.clone()),
             },
         );
@@ -143,6 +176,73 @@ impl ServerSessionManager {
             .data(&data[..])
             .await
             .map_err(|_| AppError::ConnectionLost)
+    }
+
+    /// Enters an approved command into the existing interactive terminal and
+    /// sends Enter. Completion is detected from the returning shell prompt;
+    /// a bounded idle fallback supports shells with unusual prompts. No
+    /// frontend shell API or secondary SSH exec channel is involved.
+    pub(crate) async fn execute_terminal_command(
+        &self,
+        session_id: SessionId,
+        command: &str,
+    ) -> AppResult<TerminalCommandResult> {
+        let (writer, context, command_lock) = {
+            let sessions = self.sessions.read().await;
+            let session = sessions.get(&session_id).ok_or(AppError::SessionNotFound)?;
+            if session.client.is_closed() {
+                return Err(AppError::ConnectionLost);
+            }
+            (
+                Arc::clone(&session.writer),
+                Arc::clone(&session.terminal_context),
+                Arc::clone(&session.agent_command_lock),
+            )
+        };
+        let _exclusive = command_lock.lock().await;
+        let (mark, prompt_hint) = {
+            let current = context.lock().await;
+            (current.mark(), last_terminal_line(&current.text()))
+        };
+
+        let input = terminal_command_input(command);
+        writer
+            .data(&input[..])
+            .await
+            .map_err(|_| AppError::ConnectionLost)?;
+
+        let started = Instant::now();
+        let mut last_change = started;
+        let mut last_len = 0usize;
+        loop {
+            sleep(AGENT_TERMINAL_POLL_INTERVAL).await;
+            let captured = context.lock().await.text_since(mark);
+            if captured.len() != last_len {
+                last_len = captured.len();
+                last_change = Instant::now();
+            }
+            if !captured.is_empty() && terminal_prompt_returned(&captured, prompt_hint.as_deref()) {
+                return Ok(TerminalCommandResult {
+                    output: clean_terminal_capture(&captured, command, prompt_hint.as_deref()),
+                    timed_out: false,
+                });
+            }
+            if !captured.is_empty()
+                && (captured.contains('\r') || captured.contains('\n'))
+                && last_change.elapsed() >= AGENT_TERMINAL_IDLE_FALLBACK
+            {
+                return Ok(TerminalCommandResult {
+                    output: clean_terminal_capture(&captured, command, prompt_hint.as_deref()),
+                    timed_out: false,
+                });
+            }
+            if started.elapsed() >= AGENT_TERMINAL_COMMAND_TIMEOUT {
+                return Ok(TerminalCommandResult {
+                    output: clean_terminal_capture(&captured, command, prompt_hint.as_deref()),
+                    timed_out: true,
+                });
+            }
+        }
     }
 
     pub async fn resize(&self, session_id: SessionId, cols: u32, rows: u32) -> AppResult<()> {
@@ -430,6 +530,19 @@ impl ServerSessionManager {
         Ok(text)
     }
 
+    /// Extracts only the working-directory metadata from the current shell
+    /// prompt. Raw terminal content never crosses this boundary.
+    pub(crate) async fn current_terminal_directory(
+        &self,
+        session_id: SessionId,
+        username: &str,
+    ) -> AppResult<Option<String>> {
+        let recent = self.recent_terminal_output(session_id).await?;
+        Ok(last_terminal_line(&recent)
+            .as_deref()
+            .and_then(|line| prompt_directory(line, username)))
+    }
+
     async fn sftp_state(
         &self,
         session_id: SessionId,
@@ -441,6 +554,112 @@ impl ServerSessionManager {
         }
         Ok(Arc::clone(&session.sftp))
     }
+}
+
+fn last_terminal_line(value: &str) -> Option<String> {
+    let plain = strip_terminal_control(value);
+    plain
+        .split(['\r', '\n'])
+        .rev()
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
+
+fn terminal_command_input(command: &str) -> Vec<u8> {
+    let mut input = command.as_bytes().to_vec();
+    input.push(b'\r');
+    input
+}
+
+fn prompt_directory(prompt: &str, username: &str) -> Option<String> {
+    let after_host = prompt.rsplit_once(':')?.1;
+    let directory = after_host
+        .trim_end_matches(|character: char| {
+            character.is_whitespace() || matches!(character, '$' | '#' | '%')
+        })
+        .trim();
+    if directory == "~" {
+        return Some(if username == "root" {
+            "/root".into()
+        } else {
+            format!("/home/{username}")
+        });
+    }
+    if let Some(relative) = directory.strip_prefix("~/") {
+        let home = if username == "root" {
+            "/root".to_owned()
+        } else {
+            format!("/home/{username}")
+        };
+        return Some(format!("{home}/{relative}"));
+    }
+    directory.starts_with('/').then(|| directory.to_owned())
+}
+
+fn terminal_prompt_returned(captured: &str, prompt_hint: Option<&str>) -> bool {
+    let plain = strip_terminal_control(captured);
+    let tail = plain
+        .split(['\r', '\n'])
+        .rev()
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if let Some(prompt) = prompt_hint.filter(|prompt| prompt.len() >= 2) {
+        if tail.ends_with(prompt) {
+            return true;
+        }
+    }
+    let trimmed = tail.trim_end();
+    (tail.ends_with("$ ") || tail.ends_with("# ") || tail.ends_with("% "))
+        || (trimmed.ends_with('$') || trimmed.ends_with('#') || trimmed.ends_with('%'))
+            && (captured.contains('\r') || captured.contains('\n'))
+}
+
+fn clean_terminal_capture(captured: &str, command: &str, prompt_hint: Option<&str>) -> String {
+    let plain = strip_terminal_control(captured).replace('\r', "");
+    let mut lines = plain.lines().collect::<Vec<_>>();
+    if lines
+        .first()
+        .is_some_and(|line| line.trim() == command.trim())
+    {
+        lines.remove(0);
+    }
+    if let Some(prompt) = prompt_hint {
+        if lines.last().is_some_and(|line| line.ends_with(prompt)) {
+            lines.pop();
+        }
+    }
+    lines.join("\n").trim().to_owned()
+}
+
+fn strip_terminal_control(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\u{1b}' {
+            output.push(character);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                let mut previous_escape = false;
+                for next in chars.by_ref() {
+                    if next == '\u{7}' || (previous_escape && next == '\\') {
+                        break;
+                    }
+                    previous_escape = next == '\u{1b}';
+                }
+            }
+            Some(_) | None => {}
+        }
+    }
+    output
 }
 
 async fn stream_output(
@@ -500,5 +719,32 @@ mod terminal_context_tests {
 
         context.append(&vec![b'b'; TERMINAL_CONTEXT_LIMIT + 10]);
         assert_eq!(context.bytes, vec![b'b'; TERMINAL_CONTEXT_LIMIT]);
+    }
+
+    #[test]
+    fn terminal_capture_removes_echo_and_prompt_but_keeps_output() {
+        let captured = "df -h\r\n/dev/sda2 100G 94G 6G 94% /\r\nzzly@host:~$ ";
+        assert!(terminal_prompt_returned(captured, Some("zzly@host:~$ ")));
+        assert_eq!(
+            clean_terminal_capture(captured, "df -h", Some("zzly@host:~$ ")),
+            "/dev/sda2 100G 94G 6G 94% /"
+        );
+    }
+
+    #[test]
+    fn approved_agent_command_is_sent_to_terminal_with_enter() {
+        assert_eq!(terminal_command_input("df -h"), b"df -h\r");
+    }
+
+    #[test]
+    fn prompt_metadata_resolves_the_remote_working_directory() {
+        assert_eq!(
+            prompt_directory("zzly@server:~$ ", "zzly").as_deref(),
+            Some("/home/zzly")
+        );
+        assert_eq!(
+            prompt_directory("root@server:~/logs# ", "root").as_deref(),
+            Some("/root/logs")
+        );
     }
 }

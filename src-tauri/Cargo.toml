@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 aes-gcm = "0.10.3"
 argon2 = "0.5.3"
+async-trait = "0.1"
 base64 = "0.22.1"
 futures-util = "0.3"
 getrandom = { version = "0.4.3", features = ["sys_rng"] }
@@ -24,6 +25,7 @@ rand = "0.8.5"
 rand_chacha = { version = "0.10.0", default-features = false }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 ring = "0.17.14"
+rusqlite = { version = "0.32", features = ["bundled"] }
 russh = { version = "0.63.1", default-features = false, features = ["ring"] }
 russh-sftp = "2.3.0"
 serde = { version = "1", features = ["derive"] }

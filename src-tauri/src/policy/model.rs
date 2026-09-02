@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::tools::{NativeToolName, RiskLevel};
+use crate::tools::{NativeToolName, ResourceImpact, RiskLevel};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -89,6 +89,8 @@ pub(crate) struct PolicyCondition {
     pub minimum_target_count: Option<usize>,
     #[serde(default)]
     pub execution_strategy: Option<PolicyExecutionStrategy>,
+    #[serde(default)]
+    pub resource_impact: Option<ResourceImpact>,
 }
 
 impl PolicyCondition {
@@ -99,6 +101,7 @@ impl PolicyCondition {
             risk_level: None,
             minimum_target_count: None,
             execution_strategy: None,
+            resource_impact: None,
         }
     }
 }
@@ -150,6 +153,7 @@ pub(crate) struct PolicyEvaluationRequest {
     pub target: PolicyTarget,
     pub tool: NativeToolName,
     pub risk_level: RiskLevel,
+    pub resource_impact: ResourceImpact,
     /// Always the complete requested target set, never the current execution batch.
     pub target_count: usize,
     pub execution_strategy: PolicyExecutionStrategy,

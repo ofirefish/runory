@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::domain::AppResult;
 use crate::storage::JsonRepository;
+use crate::tools::ResourceImpact;
 
 use super::engine::PolicyEngine;
 use super::model::{
@@ -90,6 +91,14 @@ impl AgentPolicyService {
         set.policy_version == snapshot.policy_version && set.policy_hash == snapshot.policy_hash
     }
 
+    /// Sealed policy identity used to bind a user-approved Runtime V2 command.
+    /// Command execution is always approval-gated; this snapshot ensures a
+    /// policy change between display and execution invalidates the approval.
+    pub(crate) async fn command_approval_identity(&self) -> (u64, String) {
+        let set = self.set.read().await;
+        (set.policy_version, set.policy_hash.clone())
+    }
+
     pub(crate) async fn evaluate(
         &self,
         request: &PolicyEvaluationRequest,
@@ -134,6 +143,7 @@ impl AgentPolicyService {
                         target: target.clone(),
                         tool: descriptor.name,
                         risk_level: descriptor.risk_level,
+                        resource_impact: descriptor.resource_impact,
                         target_count: 1,
                         execution_strategy: PolicyExecutionStrategy::Sequential,
                         source: super::model::PolicyInvocationSource::NativeTool,
@@ -166,22 +176,24 @@ impl AgentPolicyService {
 }
 
 fn default_policy() -> PolicySet {
-    let global = |id: &str, risk_level, decision, reason: &str, max_targets| PolicyRule {
-        id: id.to_owned(),
-        scope: PolicyScope::Global,
-        condition: PolicyCondition {
-            tool: None,
-            risk_level,
-            minimum_target_count: None,
-            execution_strategy: None,
-        },
-        effect: PolicyEffect {
-            decision,
-            max_targets,
-            reason: reason.to_owned(),
-        },
-        enabled: true,
-    };
+    let global =
+        |id: &str, risk_level, resource_impact, decision, reason: &str, max_targets| PolicyRule {
+            id: id.to_owned(),
+            scope: PolicyScope::Global,
+            condition: PolicyCondition {
+                tool: None,
+                risk_level,
+                minimum_target_count: None,
+                execution_strategy: None,
+                resource_impact,
+            },
+            effect: PolicyEffect {
+                decision,
+                max_targets,
+                reason: reason.to_owned(),
+            },
+            enabled: true,
+        };
     PolicySet {
         policy_version: 1,
         policy_hash: String::new(),
@@ -189,13 +201,23 @@ fn default_policy() -> PolicySet {
             global(
                 "global-agent-baseline",
                 None,
+                None,
                 PolicyDecision::Allow,
                 "POLICY_GLOBAL_ALLOW",
                 Some(10),
             ),
             global(
+                "high-io-scan-approval",
+                None,
+                Some(ResourceImpact::HighIo),
+                PolicyDecision::RequireApproval,
+                "POLICY_HIGH_IO_APPROVAL_REQUIRED",
+                None,
+            ),
+            global(
                 "risk-r2-approval",
                 Some(crate::tools::RiskLevel::R2),
+                None,
                 PolicyDecision::RequireApproval,
                 "POLICY_RISK_APPROVAL_REQUIRED",
                 None,
@@ -203,6 +225,7 @@ fn default_policy() -> PolicySet {
             global(
                 "risk-r3-approval",
                 Some(crate::tools::RiskLevel::R3),
+                None,
                 PolicyDecision::RequireApproval,
                 "POLICY_RISK_APPROVAL_REQUIRED",
                 None,
@@ -210,6 +233,7 @@ fn default_policy() -> PolicySet {
             global(
                 "risk-r4-step-approval",
                 Some(crate::tools::RiskLevel::R4),
+                None,
                 PolicyDecision::RequireStepApproval,
                 "POLICY_STEP_APPROVAL_REQUIRED",
                 None,
@@ -224,6 +248,7 @@ fn default_policy() -> PolicySet {
                     risk_level: None,
                     minimum_target_count: Some(2),
                     execution_strategy: Some(PolicyExecutionStrategy::Parallel),
+                    resource_impact: None,
                 },
                 effect: PolicyEffect {
                     decision: PolicyDecision::Deny,

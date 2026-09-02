@@ -1,4 +1,4 @@
-import { Ban, ChevronRight, Download, Eye, FileQuestion, Folder, FolderPlus, Link, Pencil, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
+import { Ban, ChevronRight, Download, Eye, FileQuestion, Folder, FolderClock, FolderPlus, Link, Pencil, RefreshCw, RotateCcw, Trash2, Upload, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -8,8 +8,8 @@ import { ContextMenu } from "../../components/ui/context-menu";
 import { DialogShell } from "../../components/ui/dialog-shell";
 import { Input } from "../../components/ui/input";
 import { appErrorCode } from "../../lib/app-error";
-import { acceptLatestUploadDrop, cancelTransfer, changeDirectory, createRemoteDirectory, deleteRemoteEntry, listTransfers, openSftp, refreshDirectory, renameRemoteEntry, retryTransfer, selectDownloadTarget, selectUploadFiles, startDownload, startUpload, subscribeTransfers } from "../../lib/tauri/ssh";
-import type { LocalFileSelection, SftpDirectory, SftpEntry, SftpEntryKind, TransferJob } from "../../types/session";
+import { acceptLatestUploadDrop, cancelTransfer, changeDirectory, createRemoteDirectory, deleteRemoteEntry, listTransfers, listUploadDirectories, openSftp, refreshDirectory, renameRemoteEntry, retryTransfer, selectDownloadTarget, selectUploadFiles, startDownload, startUpload, subscribeTransfers } from "../../lib/tauri/ssh";
+import type { LocalFileSelection, SftpDirectory, SftpEntry, SftpEntryKind, TransferJob, UploadDirectoryHistoryEntry } from "../../types/session";
 import { FileTypeIcon } from "./FileTypeIcon";
 import { RemoteImagePreview, type RemoteFileRequest } from "./RemoteImagePreview";
 import { RemoteTextPreview } from "./RemoteTextPreview";
@@ -40,14 +40,33 @@ function NameDialog({ title, label, initial = "", onSave, onClose }: { title: st
   </DialogShell>;
 }
 
-function RemotePathBar({ path, loading, onNavigate }: { path: string; loading: boolean; onNavigate: (path: string) => void }) {
-  const { t } = useTranslation();
+function RemotePathBar({ path, loading, uploadHistory, uploadHistoryLoading, onNavigate, onOpenUploadHistory, onSelectUploadDirectory }: {
+  path: string;
+  loading: boolean;
+  uploadHistory: UploadDirectoryHistoryEntry[];
+  uploadHistoryLoading: boolean;
+  onNavigate: (path: string) => void;
+  onOpenUploadHistory: () => void;
+  onSelectUploadDirectory: (remoteDirectory: string) => void;
+}) {
+  const { t, i18n } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(path);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!editing) setDraft(path);
   }, [editing, path]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!historyRef.current?.contains(event.target as Node)) setHistoryOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [historyOpen]);
 
   const startEditing = () => {
     if (loading) return;
@@ -61,12 +80,13 @@ function RemotePathBar({ path, loading, onNavigate }: { path: string; loading: b
     if (nextPath !== path) onNavigate(nextPath);
   };
 
-  if (editing) {
-    return <Input
+  const crumbs = breadcrumbPaths(path);
+  return <div className="relative flex min-w-0 flex-1 items-center">
+    {editing ? <Input
       autoFocus
       autoCapitalize="none"
       aria-label={t("files.pathInput")}
-      className="h-8 w-full min-w-0 flex-1 font-mono"
+      className="h-8 min-w-0 flex-1 font-mono"
       disabled={loading}
       spellCheck={false}
       value={draft}
@@ -82,35 +102,69 @@ function RemotePathBar({ path, loading, onNavigate }: { path: string; loading: b
           setEditing(false);
         }
       }}
-    />;
-  }
-
-  const crumbs = breadcrumbPaths(path);
-  return <nav
-    className="flex w-full min-w-0 flex-1 cursor-text items-center overflow-x-auto font-mono text-sm"
-    aria-label={t("files.breadcrumb")}
-    onClick={startEditing}
-  >
-    {crumbs.map((crumb, index) => {
-      const current = index === crumbs.length - 1;
-      return <span key={crumb.path} className="flex shrink-0 items-center">
-        {index > 0 && <ChevronRight aria-hidden size={14} className="mx-0.5 text-[hsl(var(--muted))]" />}
-        <button
+    /> : <nav
+      className="flex min-w-0 flex-1 cursor-text items-center overflow-x-auto font-mono text-sm"
+      aria-label={t("files.breadcrumb")}
+      onClick={startEditing}
+    >
+      {crumbs.map((crumb, index) => {
+        const current = index === crumbs.length - 1;
+        return <span key={crumb.path} className="flex shrink-0 items-center">
+          {index > 0 && <ChevronRight aria-hidden size={14} className="mx-0.5 text-[hsl(var(--muted))]" />}
+          <button
+            type="button"
+            className="rounded px-1.5 py-1 hover:bg-[hsl(var(--elevated))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            aria-label={current ? t("files.editPath") : undefined}
+            title={current ? t("files.editPath") : undefined}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (current) startEditing();
+              else onNavigate(crumb.path);
+            }}
+          >
+            {crumb.label}
+          </button>
+        </span>;
+      })}
+    </nav>}
+    <div ref={historyRef} className="relative ml-1 shrink-0">
+      <button
+        type="button"
+        className="grid h-8 w-8 place-items-center rounded hover:bg-[hsl(var(--elevated))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+        aria-label={t("files.uploadHistory")}
+        aria-expanded={historyOpen}
+        title={t("files.uploadHistory")}
+        disabled={loading}
+        onClick={(event) => {
+          event.stopPropagation();
+          const nextOpen = !historyOpen;
+          setHistoryOpen(nextOpen);
+          if (nextOpen) onOpenUploadHistory();
+        }}
+      >
+        <FolderClock aria-hidden size={16} />
+      </button>
+      {historyOpen && <div className="absolute right-0 top-full z-40 mt-1 w-80 overflow-hidden rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--surface))] p-1 shadow-lg" role="menu" aria-label={t("files.uploadHistory")}>
+        {uploadHistoryLoading && <p className="px-3 py-2 text-sm text-[hsl(var(--muted))]">{t("common.loading")}</p>}
+        {!uploadHistoryLoading && uploadHistory.length === 0 && <p className="px-3 py-2 text-sm text-[hsl(var(--muted))]">{t("files.noUploadHistory")}</p>}
+        {!uploadHistoryLoading && uploadHistory.map((entry) => <button
+          key={entry.remoteDirectory}
           type="button"
-          className="rounded px-1.5 py-1 hover:bg-[hsl(var(--elevated))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-          aria-label={current ? t("files.editPath") : undefined}
-          title={current ? t("files.editPath") : undefined}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (current) startEditing();
-            else onNavigate(crumb.path);
+          role="menuitem"
+          className="flex w-full min-w-0 items-center gap-2 rounded px-2.5 py-2 text-left hover:bg-[hsl(var(--elevated))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          title={t("files.openUploadDirectory", { path: entry.remoteDirectory })}
+          onClick={() => {
+            setHistoryOpen(false);
+            onSelectUploadDirectory(entry.remoteDirectory);
           }}
         >
-          {crumb.label}
-        </button>
-      </span>;
-    })}
-  </nav>;
+          <Folder aria-hidden size={15} className="shrink-0 text-blue-500" />
+          <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.remoteDirectory}</span>
+          {entry.lastUploadedAtMs > 0 && <span className="shrink-0 text-[10px] text-[hsl(var(--muted))]">{new Intl.DateTimeFormat(i18n.language, { dateStyle: "short", timeStyle: "short" }).format(entry.lastUploadedAtMs)}</span>}
+        </button>)}
+      </div>}
+    </div>
+  </div>;
 }
 
 function TransferQueue({ sessionId, jobs, onCancel, onRetry, onClose }: { sessionId: string; jobs: TransferJob[]; onCancel: (id: string) => void; onRetry: (id: string, overwrite: boolean) => void; onClose: () => void }) {
@@ -150,6 +204,8 @@ export function FilesView({ sessionId, profileId, active }: { sessionId: string 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [filePreview, setFilePreview] = useState<RemoteFileRequest | null>(null);
   const [dragUploadActive, setDragUploadActive] = useState(false);
+  const [uploadHistory, setUploadHistory] = useState<UploadDirectoryHistoryEntry[]>([]);
+  const [uploadHistoryLoading, setUploadHistoryLoading] = useState(false);
   const pendingUploadDirectories = useRef(new Map<string, string>());
 
   const load = useCallback(async (operation: () => Promise<SftpDirectory>) => {
@@ -245,6 +301,11 @@ export function FilesView({ sessionId, profileId, active }: { sessionId: string 
     if (!sessionId || !directory) return;
     try { await startUploads(await selectUploadFiles(sessionId, directory.path)); } catch (cause) { setOperationError(appErrorCode(cause)); }
   };
+  const openUploadHistory = async () => {
+    if (!sessionId) return;
+    setUploadHistoryLoading(true);
+    try { setUploadHistory(await listUploadDirectories(sessionId)); } catch (cause) { setOperationError(appErrorCode(cause)); } finally { setUploadHistoryLoading(false); }
+  };
   const download = async () => {
     if (!sessionId || selected?.kind !== "file") return;
     setOperationError(null);
@@ -254,7 +315,7 @@ export function FilesView({ sessionId, profileId, active }: { sessionId: string 
   if (!sessionId) return <div className="grid h-full place-items-center text-sm text-[hsl(var(--muted))]">{t("files.connectRequired")}</div>;
   return <section className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[hsl(var(--surface))]" aria-label={t("files.title")}>
     <div className="flex h-11 shrink-0 items-center gap-1 border-b px-3">
-      <RemotePathBar path={directory?.path ?? "/"} loading={loading} onNavigate={navigate} />
+      <RemotePathBar path={directory?.path ?? "/"} loading={loading} uploadHistory={uploadHistory} uploadHistoryLoading={uploadHistoryLoading} onNavigate={navigate} onOpenUploadHistory={() => void openUploadHistory()} onSelectUploadDirectory={navigate} />
       <Button variant="ghost" size="sm" disabled={!directory} aria-label={t("files.upload")} onClick={() => void upload()}><Upload size={15} /><span className="hidden sm:inline">{t("files.upload")}</span></Button>
       <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!directory} aria-label={t("files.newFolder")} title={t("files.newFolder")} onClick={() => setDialog("mkdir")}><FolderPlus size={16} /></Button>
       <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!selected} aria-label={t("files.rename")} title={t("files.rename")} onClick={() => setDialog("rename")}><Pencil size={16} /></Button>

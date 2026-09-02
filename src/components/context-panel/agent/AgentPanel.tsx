@@ -1,244 +1,277 @@
 import { CircleAlert } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { appErrorCode } from "../../../lib/app-error";
-import { approveChangeSet, approveChangeSetStep, cancelAgentRun, executeChangeSet, getChangeSet, rejectChangeSet, rollbackChangeSet, runDoctor } from "../../../lib/tauri/agentic";
-import type { ChangeSet, Incident } from "../../../types/agentic";
+import {
+  approveAgentV2Run,
+  bindResumableAgentV2Run,
+  cancelAgentV2Run,
+  listResumableAgentV2Runs,
+  pauseAgentV2Run,
+  rejectAgentV2Run,
+  replyAgentV2Run,
+  resumeAgentV2Run,
+  startAgentV2Run,
+  subscribeAgentV2Run,
+} from "../../../lib/tauri/agent-v2";
+import type { AgentTimelineView } from "../../../types/agent-v2";
 import type { ServerProfile } from "../../../types/domain";
 import type { SessionState } from "../../../types/session";
 import { AgentComposer } from "./AgentComposer";
-import { AgentConversation } from "./AgentConversation";
 import { AgentEmptyState } from "./AgentEmptyState";
 import { AgentHeader } from "./AgentHeader";
+import { AgentTimeline } from "./AgentTimeline";
 import { IncidentHistoryPopover } from "./IncidentHistoryPopover";
-import type { InlineChangeSetAction } from "./InlineChangeSetCard";
-import type { AgentConversationItem } from "./agent-state";
-import { inferDiagnosticInputs } from "./agent-routing";
+import {
+  deriveRunState,
+  AGENT_MAX_ROUNDS,
+  emptyTimeline,
+  isRunningState,
+  mergeAgentEvent,
+  pendingApprovalFromEvents,
+  reasoningRound,
+  runElapsedSeconds,
+  timelinePhase,
+} from "./agent-timeline-utils";
+import { useAgentViewStore } from "./agent-view-store";
 
-type ServerSessionModel = {
-  items: AgentConversationItem[];
-  running: boolean;
-  failed: boolean;
-  failureCode: string | null;
-  changeBusyId: string | null;
-  changeErrorId: string | null;
-  changeErrorCode: string | null;
-  awaiting: boolean;
-  pendingText: string;
-  activeRunId: string | null;
-};
+type ServerTimeline = AgentTimelineView;
 
-const EMPTY_SESSION: ServerSessionModel = { items: [], running: false, failed: false, failureCode: null, changeBusyId: null, changeErrorId: null, changeErrorCode: null, awaiting: false, pendingText: "", activeRunId: null };
-
-const uid = () => `run-${crypto.randomUUID()}`;
+const EMPTY: ServerTimeline = emptyTimeline();
 
 /**
- * Agent Tab — Conversation-first UI bound to the current server.
- *
- * - Composer sends natural language to the Rust Agent Runtime and the active
- *   model provider. No provider secret or tool orchestration lives in React.
- * - Missing parameters surface as an in-conversation question block, never
- *   a huge form.
- * - Tool calls render as an ActivityTimeline (no raw JSON in the panel).
- * - Diagnosis and evidence come from a typed Doctor run. Existing incident
- *   history and ChangeSet review remain available as separate workflows.
- * - Per-server conversation state is memory-only. Model context and remote
- *   evidence are never persisted to browser storage.
+ * Agent Tab — event-driven Timeline bound to Runtime V2 IPC.
+ * React renders AgentEvent streams only; orchestration stays in Rust.
  */
-export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal, onSelectServer, onReviewPlan }: {
+export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal, onSelectServer }: {
   profile: ServerProfile | null;
   sessionId: string | null;
   connected: boolean;
   state: SessionState;
   onNewTerminal: () => void;
   onSelectServer: () => void;
-  onReviewPlan: (runId: string) => void;
 }) {
   const { t } = useTranslation();
-  const [sessions, setSessions] = useState<Record<string, ServerSessionModel>>({});
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [byServer, setByServer] = useState<Record<string, ServerTimeline>>({});
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [nowEpochMs, setNowEpochMs] = useState(Date.now());
+  const expanded = useAgentViewStore((store) => store.expanded);
+  const toggleExpanded = useAgentViewStore((store) => store.toggleExpanded);
+  const lastSeqRef = useRef<Record<string, number>>({});
 
-  // The Agent binds to the current server profile id — switching servers
-  // switches the conversation context explicitly (scenario 10).
   const serverKey = profile?.id ?? "none";
-  const model = sessions[serverKey] ?? EMPTY_SESSION;
+  const model = byServer[serverKey] ?? EMPTY;
+  const phase = timelinePhase(model.events);
 
-  const update = (patch: Partial<ServerSessionModel>) => {
-    setSessions((current) => ({ ...current, [serverKey]: { ...(current[serverKey] ?? EMPTY_SESSION), ...patch } }));
-  };
-  const pushItem = (item: AgentConversationItem) => {
-    setSessions((current) => {
-      const base = current[serverKey] ?? EMPTY_SESSION;
-      return { ...current, [serverKey]: { ...base, items: [...base.items, item] } };
-    });
-  };
-  const finishStatus = (statusId: string, item?: AgentConversationItem) => {
-    setSessions((current) => {
-      const base = current[serverKey] ?? EMPTY_SESSION;
-      const items = base.items.filter((candidate) => candidate.id !== statusId);
-      return { ...current, [serverKey]: { ...base, items: item ? [...items, item] : items } };
-    });
-  };
-  const updateStatus = (statusId: string, state: "routing" | "investigating" | "diagnosing", text: string) => {
-    setSessions((current) => {
-      const base = current[serverKey] ?? EMPTY_SESSION;
-      return { ...current, [serverKey]: { ...base, items: base.items.map((item) => item.kind === "status" && item.id === statusId ? { ...item, state, text } : item) } };
-    });
-  };
+  useEffect(() => {
+    if (model.events.length === 0 || ["completed", "failed", "cancelled"].includes(phase)) return;
+    setNowEpochMs(Date.now());
+    const timer = window.setInterval(() => setNowEpochMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [model.events.length, phase]);
 
-  const runIntent = async (text: string) => {
-    if (!sessionId) return;
-    const activeRunId = crypto.randomUUID();
-    update({ activeRunId });
-    const statusId = uid();
-    pushItem({ kind: "status", id: statusId, state: "investigating", text: "", at: Date.now() });
-    window.dispatchEvent(new Event("runory:agent-run"));
-    try {
-      const inferred = inferDiagnosticInputs(text);
-      const run = await runDoctor({
-        runId: activeRunId,
-        sessionId,
-        userRequest: text,
-        service: inferred.service,
-        httpUrl: inferred.url,
-        portHost: null,
-        port: null,
-        includeNginxTest: inferred.includeNginxTest,
-        skillId: null,
-        mcpContext: null,
-      }, (event) => {
-        const state = event.stage === "planning" ? "routing" : event.stage === "drafting-change-set" ? "diagnosing" : "investigating";
-        const detail = event.stage === "running-tools"
-          ? t("contextPanel.progress.runningTools", { tools: event.toolNames.join(", ") })
-          : t(`contextPanel.progress.${event.stage}`);
-        updateStatus(statusId, state, detail);
-      });
-      finishStatus(statusId, { kind: "run", id: uid(), run, at: Date.now() });
-      if (run.state === "needs-input" && run.clarificationQuestion) {
-        pushItem({ kind: "question", id: uid(), text: run.clarificationQuestion, answered: false, at: Date.now() });
-        update({ running: false, awaiting: true, pendingText: text, failed: false, failureCode: null, activeRunId: null });
-      } else {
-        const runFailureCode = run.failureCode ?? failureCodeForState(run.state);
-        update({ running: false, awaiting: false, pendingText: "", failed: runFailureCode !== null, failureCode: runFailureCode, activeRunId: null });
+  const patch = useCallback((update: Partial<ServerTimeline>) => {
+    setByServer((current) => ({
+      ...current,
+      [serverKey]: { ...(current[serverKey] ?? EMPTY), ...update },
+    }));
+  }, [serverKey]);
+
+  const appendEvent = useCallback((envelope: Parameters<typeof mergeAgentEvent>[1]) => {
+    setByServer((current) => {
+      const base = current[serverKey] ?? EMPTY;
+      const merged = mergeAgentEvent(base, envelope);
+      lastSeqRef.current[serverKey] = Math.max(lastSeqRef.current[serverKey] ?? 0, envelope.seq);
+      const next: ServerTimeline = {
+        ...merged,
+        runState: deriveRunState(merged.events),
+        pendingApproval: pendingApprovalFromEvents(merged.events),
+      };
+      if (next.runState === "completed" || next.runState === "failed" || next.runState === "cancelled") {
+        next.running = false;
+        window.dispatchEvent(new Event("runory:agent-done"));
       }
-    } catch (error) {
-      finishStatus(statusId);
-      update({ running: false, failed: true, failureCode: appErrorCode(error), activeRunId: null });
-    } finally {
-      window.dispatchEvent(new Event("runory:agent-done"));
-    }
-  };
+      return { ...current, [serverKey]: next };
+    });
+  }, [serverKey]);
 
-  const beginRun = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || model.running) return;
-    if (model.awaiting && model.pendingText) {
-      // Answer to the engine's in-conversation question: merge and re-run.
-      setSessions((current) => {
-        const base = current[serverKey] ?? EMPTY_SESSION;
-        let marked = false;
-        const items = [...base.items].reverse().map((item) => {
-          if (!marked && item.kind === "question" && !item.answered) { marked = true; return { ...item, answered: true }; }
-          return item;
-        }).reverse();
-        return { ...current, [serverKey]: { ...base, items } };
+  const bindSubscription = useCallback(async (runId: string) => {
+    const afterSeq = lastSeqRef.current[serverKey] ?? 0;
+    await subscribeAgentV2Run(runId, afterSeq, appendEvent);
+  }, [appendEvent, serverKey]);
+
+  useEffect(() => {
+    if (!sessionId || !profile) return;
+    let cancelled = false;
+    void listResumableAgentV2Runs().then(async (items) => {
+      if (cancelled || items.length === 0) return;
+      const matches = items.filter((item) => item.targetIds.length === 1 && item.targetIds[0] === profile.id);
+      const match = matches[matches.length - 1];
+      if (!match) return;
+      if (["completed", "cancelled", "failed"].includes(match.run.state)) return;
+      await bindResumableAgentV2Run(match.run.id, sessionId);
+      patch({
+        runId: match.run.id,
+        running: ["running", "reasoning", "acting"].includes(match.run.state),
+        runState: match.run.state,
+        displayContext: {
+          os: "Linux",
+          user: profile.username,
+          directory: profile.username === "root" ? "/root" : `/home/${profile.username}`,
+        },
       });
-      pushItem({ kind: "user", id: uid(), text: trimmed, at: Date.now() });
-      update({ awaiting: false, running: true, failed: false, failureCode: null });
-      void runIntent(`${model.pendingText} — ${trimmed}`);
+      void bindSubscription(match.run.id);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [bindSubscription, patch, profile, sessionId]);
+
+  const beginRun = async (text: string) => {
+    if (!sessionId || model.running || actionBusy) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (model.pendingQuestion && model.runId) {
+      setActionBusy(true);
+      window.dispatchEvent(new Event("runory:agent-run"));
+      try {
+        await replyAgentV2Run(model.runId, trimmed);
+      } catch (error) {
+        patch({ lastErrorCode: appErrorCode(error), running: false });
+      } finally {
+        setActionBusy(false);
+      }
       return;
     }
-    pushItem({ kind: "user", id: uid(), text: trimmed, at: Date.now() });
-    update({ running: true, failed: false, failureCode: null, pendingText: trimmed });
-    void runIntent(trimmed);
-  };
-
-  const newConversation = () => {
-    setSessions((current) => ({ ...current, [serverKey]: { ...EMPTY_SESSION } }));
-    setExpanded({});
+    patch({ running: true, lastErrorCode: null, events: [], currentApproach: undefined, pendingApproval: undefined, pendingQuestion: undefined });
+    window.dispatchEvent(new Event("runory:agent-run"));
+    try {
+      const response = await startAgentV2Run(sessionId, trimmed);
+      lastSeqRef.current[serverKey] = 0;
+      patch({ runId: response.runId, running: true, displayContext: response.context });
+      await bindSubscription(response.runId);
+    } catch (error) {
+      patch({ running: false, lastErrorCode: appErrorCode(error) });
+      window.dispatchEvent(new Event("runory:agent-done"));
+    }
   };
 
   const cancelRun = () => {
-    if (!model.activeRunId) return;
-    const runId = model.activeRunId;
-    update({ activeRunId: null });
-    void cancelAgentRun(runId).catch(() => update({ activeRunId: runId }));
-  };
-  const toggleItem = (id: string) => setExpanded((current) => ({ ...current, [id]: !current[id] }));
-
-  const replaceRunChangeSet = (runId: string, changeSet: ChangeSet) => {
-    setSessions((current) => {
-      const base = current[serverKey] ?? EMPTY_SESSION;
-      return { ...current, [serverKey]: { ...base, items: base.items.map((item) => item.kind === "run" && item.run.id === runId ? { ...item, run: { ...item.run, changeSet } } : item) } };
+    if (!model.runId) return;
+    void cancelAgentV2Run(model.runId).finally(() => {
+      patch({ running: false });
+      window.dispatchEvent(new Event("runory:agent-done"));
     });
   };
 
-  const changeSetAction = async (runId: string, action: InlineChangeSetAction, stepId?: string) => {
-    const runItem = model.items.find((item) => item.kind === "run" && item.run.id === runId);
-    const changeSet = runItem?.kind === "run" ? runItem.run.changeSet : null;
-    if (!changeSet || model.changeBusyId) return;
-    update({ changeBusyId: changeSet.id, changeErrorId: null, changeErrorCode: null });
+  const pauseRun = () => {
+    if (!model.runId || actionBusy) return;
+    setActionBusy(true);
+    void pauseAgentV2Run(model.runId)
+      .catch((error) => patch({ lastErrorCode: appErrorCode(error) }))
+      .finally(() => setActionBusy(false));
+  };
+
+  const resumeRun = () => {
+    if (!model.runId || actionBusy) return;
+    setActionBusy(true);
+    window.dispatchEvent(new Event("runory:agent-run"));
+    void resumeAgentV2Run(model.runId)
+      .catch((error) => patch({ lastErrorCode: appErrorCode(error), running: false }))
+      .finally(() => setActionBusy(false));
+  };
+
+  const approvalAction = async (approve: boolean) => {
+    if (!model.runId || !model.pendingApproval || actionBusy) return;
+    setActionBusy(true);
     window.dispatchEvent(new Event("runory:agent-run"));
     try {
-      let next: ChangeSet;
-      if (action === "approve") next = await approveChangeSet(changeSet.id, changeSet.version);
-      else if (action === "approve-step" && stepId) next = await approveChangeSetStep(changeSet.id, changeSet.version, stepId);
-      else if (action === "reject") next = await rejectChangeSet(changeSet.id, changeSet.version);
-      else if (action === "execute") next = await executeChangeSet(changeSet.id, changeSet.version);
-      else if (action === "rollback") next = await rollbackChangeSet(changeSet.id, changeSet.version);
-      else return;
-      replaceRunChangeSet(runId, next);
-      update({ changeBusyId: null, changeErrorId: null, changeErrorCode: null });
+      if (approve) await approveAgentV2Run(model.runId);
+      else await rejectAgentV2Run(model.runId);
     } catch (error) {
-      try { replaceRunChangeSet(runId, await getChangeSet(changeSet.id)); } catch { /* Preserve the last known safe snapshot. */ }
-      update({ changeBusyId: null, changeErrorId: changeSet.id, changeErrorCode: appErrorCode(error) });
+      patch({ lastErrorCode: appErrorCode(error) });
     } finally {
-      window.dispatchEvent(new Event("runory:agent-done"));
+      setActionBusy(false);
     }
   };
 
-  const resumeIncident = (incident: Incident) => {
-    pushItem({ kind: "incident", id: uid(), incident, at: Date.now() });
+  const newConversation = () => {
+    if (model.runId) void cancelAgentV2Run(model.runId).catch(() => undefined);
+    setByServer((current) => ({ ...current, [serverKey]: emptyTimeline() }));
+    lastSeqRef.current[serverKey] = 0;
+    window.dispatchEvent(new Event("runory:agent-done"));
   };
 
   const disconnected = profile !== null && !connected;
+  const running = isRunningState(model.runState, model.running);
+  const paused = model.runState === "paused";
+  const hasTimeline = model.events.length > 0;
+  const displayContext = model.displayContext ?? (profile ? {
+    os: "Linux",
+    user: profile.username,
+    directory: profile.username === "root" ? "/root" : `/home/${profile.username}`,
+  } : undefined);
 
   return <div className="agent-panel">
-    <AgentHeader profile={profile} connected={connected} state={state} onNewConversation={newConversation} onOpenHistory={() => setHistoryOpen(true)} />
-    <IncidentHistoryPopover open={historyOpen} onClose={() => setHistoryOpen(false)} onSelect={resumeIncident} />
+    <AgentHeader
+      profile={profile}
+      connected={connected}
+      state={state}
+      runState={model.runState}
+      running={running}
+      onNewConversation={newConversation}
+      onOpenHistory={() => setHistoryOpen(true)}
+      onCancel={cancelRun}
+      onPause={running && !paused ? pauseRun : undefined}
+      onResume={paused ? resumeRun : undefined}
+    />
+    <IncidentHistoryPopover open={historyOpen} onClose={() => setHistoryOpen(false)} onSelect={() => undefined} />
 
     <div className="agent-panel-main">
       {!profile && <AgentNoServerState onSelect={onSelectServer} />}
       {disconnected && <AgentDisconnectedPanel state={state} onReconnect={onNewTerminal} />}
-      {profile && connected && model.items.length === 0 && <AgentEmptyState onPrompt={beginRun} />}
-      {profile && connected && model.items.length > 0 && (
-        <>
-          <AgentConversation
-            items={model.items}
-            expanded={expanded}
-            onToggle={toggleItem}
-            onReviewPlan={onReviewPlan}
-            onAnswerQuestion={beginRun}
-            changeBusyId={model.changeBusyId}
-            changeErrorId={model.changeErrorId}
-            changeErrorCode={model.changeErrorCode}
-            onChangeSetAction={changeSetAction}
-          />
-        </>
-      )}
-      {model.failed && !model.running && <div className="agent-error" role="alert"><CircleAlert size={14} aria-hidden /><span>{t(`contextPanel.error.${model.failureCode ?? "UNKNOWN"}`, { defaultValue: t("contextPanel.runFailed") })}</span></div>}
+      {profile && connected && !hasTimeline && <AgentEmptyState onPrompt={beginRun} />}
+      {profile && connected && hasTimeline && <>
+        <AgentTimeline
+          events={model.events}
+          displayContext={displayContext}
+          pendingApproval={model.pendingApproval}
+          busy={actionBusy}
+          expanded={expanded}
+          onToggle={toggleExpanded}
+          onApprove={() => void approvalAction(true)}
+          onReject={() => void approvalAction(false)}
+        />
+        <AgentRunFooter events={model.events} nowEpochMs={nowEpochMs} />
+      </>}
+      {model.lastErrorCode && !running && <div className="agent-error" role="alert"><CircleAlert size={14} aria-hidden /><span>{t(`contextPanel.error.${model.lastErrorCode}`, { defaultValue: t("contextPanel.runFailed") })}</span></div>}
     </div>
 
-    <AgentComposer onSubmit={beginRun} onCancel={cancelRun} running={model.running} disabled={!profile || !connected} />
+    <AgentComposer
+      onSubmit={beginRun}
+      onCancel={cancelRun}
+      running={(running || actionBusy) && !paused}
+      disabled={!profile || !connected || paused}
+      placeholder={model.pendingQuestion ? t("contextPanel.answerPlaceholder") : t("contextPanel.composerPlaceholder")}
+    />
   </div>;
 }
 
-function failureCodeForState(state: string): string | null {
-  if (state === "timed-out") return "AGENT_TIMEOUT";
-  if (state === "budget-exceeded") return "BUDGET_EXCEEDED";
-  if (state === "policy-blocked") return "POLICY_BLOCKED";
-  return state === "failed" ? "UNKNOWN" : null;
+function AgentRunFooter({ events, nowEpochMs }: { events: AgentTimelineView["events"]; nowEpochMs: number }) {
+  const { t } = useTranslation();
+  const phase = timelinePhase(events);
+  if (["completed", "failed", "cancelled"].includes(phase)) return null;
+  const label = phase === "awaiting_approval"
+    ? t("contextPanel.timeline.phaseAwaitingApproval")
+    : phase === "executing"
+      ? t("contextPanel.timeline.phaseExecuting")
+      : phase === "analyzing"
+        ? t("contextPanel.timeline.phaseAnalyzing")
+        : t("contextPanel.timeline.phaseThinking");
+  return <div className="agent-run-footer" aria-live="polite">
+    <span>{reasoningRound(events)}/{AGENT_MAX_ROUNDS}</span>
+    <span>{runElapsedSeconds(events, nowEpochMs)}s</span>
+    <span>{label}</span>
+  </div>;
 }
 
 function AgentNoServerState({ onSelect }: { onSelect: () => void }) {

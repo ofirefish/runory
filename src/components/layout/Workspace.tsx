@@ -26,7 +26,6 @@ export function Workspace({ onOpenNavigation, connectProfileRequest }: { onOpenN
   const [editProfile, setEditProfile] = useState(false);
   const [tabMenu, setTabMenu] = useState<WorkspaceTabMenuState | null>(null);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
-  const [reviewRunId, setReviewRunId] = useState<string | null>(null);
   const toggleContextPanel = useContextPanelStore((store) => store.setVisible);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => { const saved = localStorage.getItem("runory.workspaceView") as WorkspaceView | null; return saved && workspaceViews.includes(saved) ? saved : "terminal"; });
   const terminalRefs = useRef(new Map<string, TerminalHandle>());
@@ -88,13 +87,6 @@ export function Workspace({ onOpenNavigation, connectProfileRequest }: { onOpenN
     setTabMenu({ tabId, x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)) });
   };
   const test = async (values: Omit<ConnectRequest, "cols" | "rows">) => (await testSsh(values)).credentialSaved;
-  /** Review Plan (方案 A): open the ChangeSet Review in the central Main
-   *  Workspace while the right Agent panel stays open. */
-  const openChangeSetReview = (runId: string) => {
-    setReviewRunId(runId);
-    setWorkspaceView("changes");
-    window.setTimeout(fitTerminals, 0);
-  };
   /** Right Panel width changes trigger xterm fit so the terminal never
    *  stays mis-sized when the Inspector / Agent panel resizes or collapses. */
   const fitTerminals = () => {
@@ -121,12 +113,12 @@ export function Workspace({ onOpenNavigation, connectProfileRequest }: { onOpenN
       <div className="workspace-main-column">
         {tabs.length === 0 && <div className="empty-workspace"><span className="empty-terminal-icon"><SquareTerminal size={24} /></span><strong>{t("terminal.readyTitle")}</strong><span>{t("terminal.ready")}</span><Button size="sm" disabled={!selectedProfile} onClick={openConnectDialog}><CirclePlus size={15} />{t("terminal.connect")}</Button></div>}
         {tabs.map((tab) => { const profile = profiles.find((candidate) => candidate.id === tab.profileId) ?? null; const active = tab.id === activeTabId; return <section key={tab.id} className={`session-workspace ${active ? "active" : ""}`} aria-hidden={!active}>
-          <ContextDock view={workspaceView} sessionId={tab.sessionId} profileId={tab.profileId} profile={profile} active={active} reviewRunId={reviewRunId} onViewChange={setWorkspaceView} onInsertCommand={(command) => { terminalRefs.current.get(tab.id)?.insert(command); setWorkspaceView("terminal"); }} terminalContent={<div className="terminal-panel"><div className="terminal-panel-content"><TerminalView ref={(handle) => { if (handle) terminalRefs.current.set(tab.id, handle); else terminalRefs.current.delete(tab.id); }} sessionId={tab.sessionId} active={active && workspaceView === "terminal"} onTransportError={() => markError(tab.id, tab.connectionAttemptId)} /></div></div>} />
+          <ContextDock view={workspaceView} sessionId={tab.sessionId} profileId={tab.profileId} profile={profile} active={active} onViewChange={setWorkspaceView} onInsertCommand={(command) => { terminalRefs.current.get(tab.id)?.insert(command); setWorkspaceView("terminal"); }} terminalContent={<div className="terminal-panel"><div className="terminal-panel-content"><TerminalView ref={(handle) => { if (handle) terminalRefs.current.set(tab.id, handle); else terminalRefs.current.delete(tab.id); }} sessionId={tab.sessionId} active={active && workspaceView === "terminal"} onTransportError={() => markError(tab.id, tab.connectionAttemptId)} /></div></div>} />
         </section>; })}
       </div>
       {/* ContextPanel owns its open/collapsed rail states; it must stay mounted
         so the collapsed rail remains clickable after hide. */}
-      {tabs.length > 0 && <ContextPanel profile={activeProfile ?? selectedProfile} sessionId={activeTab?.sessionId ?? null} state={activeTab?.state ?? "idle"} connected={Boolean(activeTab?.sessionId)} onNewTerminal={() => activeTab && !activeTab.sessionId ? openReconnectDialog(activeTab.id) : openConnectDialog()} onDisconnect={() => { if (activeTab) void disconnectTab(activeTab.id); }} onEdit={() => setEditProfile(true)} onResize={fitTerminals} onSelectServer={openExplorerAndSelect} onReviewPlan={openChangeSetReview} />}
+      {tabs.length > 0 && <ContextPanel profile={activeProfile ?? selectedProfile} sessionId={activeTab?.sessionId ?? null} state={activeTab?.state ?? "idle"} connected={Boolean(activeTab?.sessionId)} onNewTerminal={() => activeTab && !activeTab.sessionId ? openReconnectDialog(activeTab.id) : openConnectDialog()} onDisconnect={() => { if (activeTab) void disconnectTab(activeTab.id); }} onEdit={() => setEditProfile(true)} onResize={fitTerminals} onSelectServer={openExplorerAndSelect} />}
     </div>
     <footer className="terminal-status-bar" aria-label={t("a11y.connectionStatus")}><span><i className={statusColor(activeTab?.state ?? "idle")} />{t(`status.${activeTab?.state ?? "idle"}`)}</span><span>SSH</span><span>UTF-8</span><span className="status-spacer" /><span>{activeProfile?.name ?? t("terminal.noActiveSession")}</span><span className="font-mono">xterm-256color</span></footer>
     {tabMenu && <WorkspaceTabMenu menu={tabMenu} onClose={() => setTabMenu(null)} onCopy={() => { const tab = tabs.find((candidate) => candidate.id === tabMenu.tabId); setTabMenu(null); if (tab) setDialog({ mode: "connect", profileId: tab.profileId, title: tab.title }); }} onRename={() => { setRenamingTabId(tabMenu.tabId); setTabMenu(null); }} onCloseTab={() => { const tabId = tabMenu.tabId; setTabMenu(null); void closeTab(tabId); }} />}

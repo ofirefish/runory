@@ -18,7 +18,6 @@ export function AgentModelSettings() {
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("runory-local-doctor-v2");
   const [maxContextTokens, setMaxContextTokens] = useState(8192);
-  const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [tested, setTested] = useState(false);
@@ -54,7 +53,7 @@ export function AgentModelSettings() {
     setTested(false);
     try {
       const value = apiKey.current?.value || null;
-      applyStatus(await configureAgentModel({ kind, baseUrl, model, maxContextTokens, apiKey: value, rememberApiKey: remember }));
+      applyStatus(await configureAgentModel({ kind, baseUrl, model, maxContextTokens, apiKey: value }));
       if (apiKey.current) apiKey.current.value = "";
     } catch {
       setFailed(true);
@@ -90,14 +89,11 @@ export function AgentModelSettings() {
         <label className="grid gap-1 text-xs"><span>{t("settings.modelName")}</span><Input value={model} onChange={(event) => setModel(event.target.value)} /></label>
         <label className="grid gap-1 text-xs"><span>{t("settings.modelContext")}</span><Input type="number" min={256} max={1000000} value={maxContextTokens} onChange={(event) => setMaxContextTokens(Number(event.target.value))} /></label>
         <label className="grid gap-1 text-xs"><span>{t("settings.modelApiKey")}</span><Input ref={apiKey} type="password" autoComplete="off" placeholder={status?.apiKeyConfigured ? t("settings.modelApiKeyConfigured") : t("settings.modelApiKeyRequired")} /></label>
-        <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />{t("settings.rememberModelApiKey")}</label>
         <p className="text-[11px] text-[hsl(var(--muted))]">{t("settings.modelSecurityHint")}</p>
       </>}
       {failed && <p className="text-xs text-red-500">{t("settings.modelError")}</p>}
-      {status?.apiKeyStored && !status.credentialVaultUnlocked && !status.apiKeyConfigured && <p className="text-xs text-amber-600">{t("settings.modelApiKeyVaultLocked")}</p>}
-      {status?.apiKeyStored && status.credentialVaultUnlocked && !status.apiKeyConfigured && <p className="text-xs text-red-500">{t("settings.modelApiKeyMissing")}</p>}
       {tested && <p className="text-xs text-emerald-600">{t("settings.modelTestSucceeded")}</p>}
-      <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>{t("common.save")}</Button><Button size="sm" variant="secondary" disabled={busy || !status?.apiKeyConfigured} onClick={() => void test()}>{t("settings.testModel")}</Button>{(status?.apiKeyConfigured || status?.apiKeyStored) && kind !== "local" && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void clearKey()}>{t("settings.clearModelApiKey")}</Button>}</div>
+      <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>{t("common.save")}</Button><Button size="sm" variant="secondary" disabled={busy || !status?.apiKeyConfigured} onClick={() => void test()}>{t("settings.testModel")}</Button>{status?.apiKeyConfigured && kind !== "local" && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void clearKey()}>{t("settings.clearModelApiKey")}</Button>}</div>
     </div>
   </section>;
 }

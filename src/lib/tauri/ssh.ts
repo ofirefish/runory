@@ -1,5 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { ConnectRequest, ConnectResponse, CredentialKind, CredentialStatus, HostVerification, KnownHost, LocalFileSelection, PrivateKeyImport, RemoteImagePreview, RemoteTextPreview, SftpDirectory, SftpMetadata, TerminalEvent, TestConnectionRequest, TestConnectionResponse, TransferEvent, TransferJob } from "../../types/session";
+import type { ConnectRequest, ConnectResponse, CredentialKind, CredentialStatus, HostVerification, KnownHost, LocalFileSelection, PrivateKeyImport, RemoteImagePreview, RemoteTextPreview, SftpDirectory, SftpMetadata, TerminalEvent, TestConnectionRequest, TestConnectionResponse, TransferEvent, TransferJob, UploadDirectoryHistoryEntry } from "../../types/session";
 
 export const prepareHostVerification = (profileId: string) => invoke<HostVerification>("known_host_prepare", { request: { profileId } });
 export const trustHost = (attemptId: string, remember: boolean) => invoke<void>("known_host_trust", { request: { attemptId, remember } });
@@ -24,6 +24,7 @@ export const createRemoteDirectory = (sessionId: string, parent: string, name: s
 export const renameRemoteEntry = (sessionId: string, path: string, newName: string) => invoke<SftpDirectory>("rename", { request: { sessionId, path, newName } });
 export const deleteRemoteEntry = (sessionId: string, path: string, recursive: boolean) => invoke<SftpDirectory>("delete", { request: { sessionId, path, recursive } });
 export const selectUploadFiles = (sessionId: string, remoteDirectory: string) => invoke<LocalFileSelection[]>("sftp_select_upload_files", { request: { sessionId, remoteDirectory } });
+export const listUploadDirectories = (sessionId: string) => invoke<UploadDirectoryHistoryEntry[]>("sftp_list_upload_directories", { request: { sessionId } });
 export const acceptLatestUploadDrop = () => invoke<LocalFileSelection[]>("sftp_accept_latest_upload_drop");
 export const selectDownloadTarget = (suggestedName: string) => invoke<LocalFileSelection | null>("sftp_select_download_target", { request: { suggestedName } });
 export const startUpload = (sessionId: string, grantId: string, remoteDirectory: string, overwrite = false) => invoke<TransferJob>("sftp_start_upload", { request: { sessionId, grantId, remoteDirectory, overwrite } });

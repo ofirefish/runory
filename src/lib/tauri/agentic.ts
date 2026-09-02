@@ -1,13 +1,10 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import type { AgentProgress, AgentRun, ChangeSet, ChangeStepDraft, DoctorRequest, EffectiveAgentPolicy, ExecutionStrategy, FailurePolicy, FleetChangeSet, Incident, IncidentAuditExport, IncidentRequest, McpServerConfig, ModelConfigureRequest, ModelProviderStatus, MultiServerRun, Skill } from "../../types/agentic";
+import { invoke } from "@tauri-apps/api/core";
+import type { ChangeSet, ChangeStepDraft, EffectiveAgentPolicy, ExecutionStrategy, FailurePolicy, FleetChangeSet, Incident, IncidentAuditExport, IncidentRequest, McpServerConfig, ModelConfigureRequest, ModelProviderStatus, Skill } from "../../types/agentic";
 
-export const runDoctor = (request: DoctorRequest, onProgress: (event: AgentProgress) => void) => { const onEvent = new Channel<AgentProgress>(); onEvent.onmessage = onProgress; return invoke<AgentRun>("agent_doctor_run", { request, onEvent }); };
-export const cancelAgentRun = (runId: string) => invoke<void>("agent_run_cancel", { runId });
 export const getAgentModel = () => invoke<ModelProviderStatus>("agent_model_get");
 export const configureAgentModel = (request: ModelConfigureRequest) => invoke<ModelProviderStatus>("agent_model_configure", { request });
 export const clearAgentModelApiKey = () => invoke<ModelProviderStatus>("agent_model_clear_api_key");
 export const testAgentModel = () => invoke<void>("agent_model_test");
-export const runMultiDoctor = (id: string, userRequest: string, targets: { runId: string; sessionId: string }[], service: string | null, skillId: string | null) => invoke<MultiServerRun>("agent_multi_doctor_run", { request: { id, userRequest, targets, service, skillId } });
 export const draftChangeSet = (agentRunId: string, sessionId: string, title: string, steps: ChangeStepDraft[]) => invoke<ChangeSet>("agent_changeset_draft", { request: { agentRunId, sessionId, title, steps } });
 export const draftFleetChangeSet = (request: { agentRunId: string; title: string; targets: { agentRunId: string; sessionId: string; title: string; steps: ChangeStepDraft[] }[]; executionStrategy: ExecutionStrategy; failurePolicy: FailurePolicy; batchSize: number; canaryCount: number; production: boolean; serviceVerification: string | null; crossTargetVerification: boolean }) => invoke<FleetChangeSet>("agent_multi_changeset_draft", { request });
 export const listFleetChangeSets = () => invoke<FleetChangeSet[]>("agent_fleet_changeset_list");

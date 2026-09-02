@@ -18,6 +18,8 @@ runory/
 ├── SECURITY.md
 ├── ROADMAP.md
 ├── AGENTIC.md
+├── AGENT_RUNTIME_V2.md
+├── CODEX_AGENT_RUNTIME_V2.md
 └── CODEX_AGENTIC_MERGE.md
 ```
 
@@ -27,6 +29,8 @@ runory/
 |---|---|
 | `AGENTS.md` | Codex 必须遵守的硬约束，保持短而强 |
 | `AGENTIC.md` | Agentic 产品与技术详细规范 |
+| `AGENT_RUNTIME_V2.md` | Agent Runtime V2 orchestration 基线 |
+| `CODEX_AGENT_RUNTIME_V2.md` | Runtime V2 分阶段 Codex 开发指南 |
 | `ARCHITECTURE.md` | 整体系统架构，定义 Agent 与现有 Rust Core 的关系 |
 | `SECURITY.md` | Credential、Prompt Injection、Tool、Approval 等安全边界 |
 | `ROADMAP.md` | 开发顺序与 Phase |
@@ -48,12 +52,13 @@ runory/
 1. 用户当前明确指令
 2. AGENTS.md
 3. SECURITY.md
-4. AGENTIC.md（Agent / Tool / Skill / MCP 相关）
-5. ARCHITECTURE.md
-6. PRD.md
-7. DESIGN.md
-8. ROADMAP.md
-9. README.md
+4. AGENT_RUNTIME_V2.md（Agent orchestration / interrupt-resume 相关）
+5. AGENTIC.md（Agent / Tool / Skill / MCP 相关）
+6. ARCHITECTURE.md
+7. PRD.md
+8. DESIGN.md
+9. ROADMAP.md
+10. README.md
 ```
 
 注意：Roadmap 决定当前开发范围，但不能覆盖 Security / AGENTS 的安全约束。

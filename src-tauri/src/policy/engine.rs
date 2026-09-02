@@ -108,4 +108,8 @@ fn matches_rule(rule: &PolicyRule, request: &PolicyEvaluationRequest) -> bool {
             .condition
             .execution_strategy
             .is_none_or(|strategy| strategy == request.execution_strategy)
+        && rule
+            .condition
+            .resource_impact
+            .is_none_or(|impact| impact == request.resource_impact)
 }

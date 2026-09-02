@@ -923,7 +923,7 @@ mod integration_tests {
                 NativeToolRequest::new(session_id, NativeToolInvocation::SystemDisk),
             )
             .await
-            .expect("system.disk audit");
+            .expect("system.disk_usage audit");
         assert!(
             matches!(disk.data, Some(ToolData::SystemDisk(ref data)) if !data.disks.is_empty())
         );

@@ -142,6 +142,13 @@ pub struct LocalFileSelection {
     pub size: u64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadDirectoryHistoryEntry {
+    pub remote_directory: String,
+    pub last_uploaded_at_ms: u64,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectUploadFilesRequest {

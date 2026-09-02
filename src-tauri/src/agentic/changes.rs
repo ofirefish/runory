@@ -24,7 +24,7 @@ const MAX_PATCH_BYTES: usize = 512 * 1024;
 const MAX_PERSISTED_CHANGE_SETS: usize = 2_000;
 const CHANGE_SET_SCHEMA_VERSION: u8 = 1;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "tool", deny_unknown_fields)]
 pub(crate) enum ChangeStepDraft {
     #[serde(rename = "file.patch")]
@@ -461,6 +461,7 @@ impl ChangeSetService {
                         target: context.target.clone(),
                         tool,
                         risk_level: public.steps[index].risk,
+                        resource_impact: crate::tools::resource_impact_for(tool),
                         target_count: context.target_count,
                         execution_strategy: context.execution_strategy,
                         source: context.source,
@@ -756,6 +757,44 @@ impl ChangeSetService {
         }
         self.store_execution_snapshot(id, &public).await?;
         Ok(public)
+    }
+
+    pub(crate) async fn verify_execution(
+        &self,
+        id: Uuid,
+        version: u64,
+        sessions: &ServerSessionManager,
+        tools: &NativeToolExecutionService,
+    ) -> AppResult<bool> {
+        let (public, payloads) = {
+            let items = self.items.lock().await;
+            let stored = items.get(&id).ok_or(AppError::InvalidOperation)?;
+            if stored.public.version != version {
+                return Err(AppError::InvalidOperation);
+            }
+            (stored.public.clone(), stored.payloads.clone())
+        };
+        if public.execution_state != ExecutionState::Committed {
+            return Ok(false);
+        }
+        for (index, step) in public.steps.iter().enumerate() {
+            if step.state != ChangeStepState::Succeeded {
+                return Ok(false);
+            }
+            let payload = payloads.get(index).ok_or(AppError::InvalidOperation)?;
+            let result = tools
+                .execute(
+                    sessions,
+                    NativeToolRequest::new(public.session_id, verification_invocation(payload)),
+                )
+                .await?;
+            if !result.success
+                || !verification_plan_satisfied(step.verification_plan_code, &result)?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     async fn invalidate_for_precondition_change(&self, id: Uuid, version: u64) -> AppResult<()> {
@@ -1065,6 +1104,34 @@ fn precondition_invocation(step: &ChangeStepDraft) -> NativeToolInvocation {
             container: container.clone(),
         },
     }
+}
+
+fn verification_invocation(step: &ChangeStepDraft) -> NativeToolInvocation {
+    precondition_invocation(step)
+}
+
+fn verification_plan_satisfied(plan: &str, result: &crate::tools::ToolResult) -> AppResult<bool> {
+    use crate::domain::ServiceStatus;
+    use crate::tools::ToolData;
+    Ok(match plan {
+        "service-active" => matches!(
+            result.data.as_ref(),
+            Some(ToolData::ServiceStatus(data))
+                if data.service.status == ServiceStatus::Active
+        ),
+        "nginx-test-before-and-after" => matches!(
+            result.data.as_ref(),
+            Some(ToolData::NginxTest(data)) if data.valid
+        ),
+        "container-running" => matches!(
+            result.data.as_ref(),
+            Some(ToolData::Diagnostic(data))
+                if data.category == "docker-inspect"
+                    && data.fields.get("running").and_then(|value| value.as_bool()) == Some(true)
+        ),
+        "read-back-exact-content" => result.success,
+        _ => result.success,
+    })
 }
 
 fn result_digest(result: &crate::tools::ToolResult) -> AppResult<[u8; 32]> {

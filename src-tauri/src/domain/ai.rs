@@ -20,7 +20,7 @@ pub enum AiRisk {
     Critical,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiPurpose {
     DiskUsage,
@@ -77,6 +77,10 @@ pub struct AiCommandRequest {
 pub struct AiGenerateRequest {
     pub session_id: SessionId,
     pub intent: String,
+    /// Commands already executed in the current session context. The plan
+    /// builder excludes them so "继续下一步" never repeats a settled step.
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +97,15 @@ pub struct AiCommandProposal {
     pub risk: AiRisk,
     pub purpose: AiPurpose,
     pub requires_confirmation: bool,
+}
+
+/// A multi-command execution plan produced by the model. Steps are shown to
+/// the user for per-command confirmation before anything enters a terminal.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPlanProposal {
+    pub summary: String,
+    pub commands: Vec<AiCommandProposal>,
 }
 
 #[derive(Clone, Debug, Serialize)]

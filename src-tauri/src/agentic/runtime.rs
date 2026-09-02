@@ -218,7 +218,6 @@ impl AgentRuntimeService {
                     &planning_hints,
                     &executed_tool_calls,
                     &available_tools,
-                    credentials,
                 ),
             )
             .await

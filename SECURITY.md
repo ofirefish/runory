@@ -1,6 +1,8 @@
 # Runory Security Architecture
 
-> Implementation note: 本文同时记录当前已落地安全基线与 future architecture。标有 “Future Agentic” 的规则不表示对应 Agent Runtime 已实现；但一旦开发相关能力，这些规则立即构成强制安全边界。既有 SSH、SFTP、Operations、Deployment、Mobile、有限 AI 与 Cloud 安全边界继续有效。
+> Implementation note: 本文同时记录当前已落地安全基线与 future architecture。标有 “Future Agentic” 的规则不表示对应 Agent Runtime 已实现；但一旦开发相关能力，这些规则立即构成强制安全边界。既有 SSH、SFTP、Operations、Deployment、Mobile、有限 AI 与 Cloud 安全边界继续有效。Agent Runtime V2 的 checkpoint / persistence / interrupt-resume 规则见 `AGENT_RUNTIME_V2.md` 与 `SECURITY.md` §24.2。
+
+> Runtime V2 command-proposal update (2026-09-02): 对话诊断主链已改为 `Reason → single CommandProposal → exact Approval → Rust ServerSession interactive Terminal → bounded/redacted Observation → Reason`。批准后由 Rust 向绑定 PTY 写入原始命令和 Enter；原始流只进入 xterm，AgentEvent 仅可携带单次命令最多 8 KiB 的脱敏结果预览、状态和分析结论。所有命令均须审批，Critical 命令 fail-closed；React 不拥有 Shell/PTY 执行权。本文旧的 Typed-Tool-only 描述仅继续适用于 Incident、Operations Pack、ChangeSet、Verification、Rollback 等结构化子系统。
 
 ## 1. Security Posture
 
@@ -408,6 +410,26 @@ Rust Policy Engine      Security Boundary
 
 #### Mandatory Call Path
 
+Runtime V2 conversation：
+
+```text
+AI CommandProposal
+ ↓
+Rust Validation / Risk / Mutability
+ ↓
+Exact Approval (run + command hash + target + session + policy)
+ ↓
+AgentCommandExecutionService
+ ↓
+ServerSessionManager interactive Terminal writer
+ ↓
+Terminal Channel → xterm (raw display only)
+ ↓
+Bounded / Redacted Untrusted Observation (Rust only)
+```
+
+现有结构化 Agentic 子系统：
+
 ```text
 AI Proposal
  ↓
@@ -422,7 +444,7 @@ Domain Service
 ServerSession
 ```
 
-不得存在 LLM → russh、LLM → Vault、LLM → unrestricted shell 的旁路。
+不得存在 LLM → russh、LLM → Vault、React → shell、React → PTY injection 或任何绕过 exact Approval 的旁路。命令只能由 Rust Runtime 在绑定的 ServerSession 上执行；写入或 Unknown command 后必须完成新的审批只读验证才允许 Final。
 
 #### Secret Redaction / Prompt Injection
 

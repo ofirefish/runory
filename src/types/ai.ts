@@ -21,3 +21,10 @@ export type AiAssistantResponse = {
   contextUsed: boolean;
   proposals: AiCommandProposal[];
 };
+
+/** A multi-command, review-first execution plan. Nothing executes until the
+ *  user confirms each command individually. */
+export type AiPlanProposal = {
+  summary: string;
+  commands: AiCommandProposal[];
+};

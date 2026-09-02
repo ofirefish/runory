@@ -1,13 +1,14 @@
-use tauri::{ipc::Channel, State};
+use std::sync::Arc;
+
+use tauri::State;
 use uuid::Uuid;
 
 use crate::agentic::{
-    AgentDoctorRequest, AgentProgress, AgentRun, AgentRuntimeService, ChangeSet,
-    ChangeSetDraftRequest, ChangeSetService, ExecutionStrategy, FleetExecutionService, Incident,
-    IncidentAuditExport, IncidentChangeSet, IncidentClosureRequest, IncidentHandoffRequest,
-    IncidentRequest, IncidentService, ModelConfigureRequest, ModelGateway, ModelProviderStatus,
-    MultiChangeSet, MultiChangeSetDraftRequest, MultiServerDoctorRequest, MultiServerRun,
-    ObservationCache, PolicyCheckContext,
+    ChangeSet, ChangeSetDraftRequest, ChangeSetService, ExecutionStrategy, FleetExecutionService,
+    Incident, IncidentAuditExport, IncidentChangeSet, IncidentClosureRequest,
+    IncidentHandoffRequest, IncidentRequest, IncidentService, ModelConfigureRequest, ModelGateway,
+    ModelProviderStatus, MultiChangeSet, MultiChangeSetDraftRequest, ObservationCache,
+    PolicyCheckContext,
 };
 use crate::credentials::CredentialService;
 use crate::domain::AppResult;
@@ -22,73 +23,30 @@ use crate::ssh::ServerSessionManager;
 use crate::tools::NativeToolExecutionService;
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn agent_doctor_run(
-    request: AgentDoctorRequest,
-    on_event: Channel<AgentProgress>,
-    runtime: State<'_, AgentRuntimeService>,
-    tools: State<'_, NativeToolExecutionService>,
-    cache: State<'_, ObservationCache>,
-    sessions: State<'_, ServerSessionManager>,
-    skills: State<'_, SkillRegistry>,
-    mcp: State<'_, McpGateway>,
-    credentials: State<'_, CredentialService>,
-    models: State<'_, ModelGateway>,
-    changes: State<'_, ChangeSetService>,
-    policies: State<'_, AgentPolicyService>,
-    profiles: State<'_, ProfileService>,
-) -> AppResult<AgentRun> {
-    let target = policy_target(request.session_id, &sessions, &profiles, None).await?;
-    runtime
-        .run_doctor(
-            &sessions,
-            &tools,
-            &cache,
-            &skills,
-            &mcp,
-            &credentials,
-            &models,
-            &changes,
-            &policies,
-            target,
-            true,
-            Some(&on_event),
-            request,
-        )
-        .await
-}
-
-#[tauri::command]
 pub async fn agent_model_get(
-    models: State<'_, ModelGateway>,
-    credentials: State<'_, CredentialService>,
+    models: State<'_, Arc<ModelGateway>>,
 ) -> AppResult<ModelProviderStatus> {
-    models.status(&credentials).await
+    models.status().await
 }
 
 #[tauri::command]
 pub async fn agent_model_configure(
     request: ModelConfigureRequest,
-    models: State<'_, ModelGateway>,
-    credentials: State<'_, CredentialService>,
+    models: State<'_, Arc<ModelGateway>>,
 ) -> AppResult<ModelProviderStatus> {
-    models.configure(request, &credentials).await
+    models.configure(request).await
 }
 
 #[tauri::command]
 pub async fn agent_model_clear_api_key(
-    models: State<'_, ModelGateway>,
-    credentials: State<'_, CredentialService>,
+    models: State<'_, Arc<ModelGateway>>,
 ) -> AppResult<ModelProviderStatus> {
-    models.clear_api_key(&credentials).await
+    models.clear_api_key().await
 }
 
 #[tauri::command]
-pub async fn agent_model_test(
-    models: State<'_, ModelGateway>,
-    credentials: State<'_, CredentialService>,
-) -> AppResult<()> {
-    models.test(&credentials).await
+pub async fn agent_model_test(models: State<'_, Arc<ModelGateway>>) -> AppResult<()> {
+    models.test().await
 }
 
 #[tauri::command]
@@ -225,47 +183,6 @@ pub async fn agent_mcp_remove(
     credentials: State<'_, CredentialService>,
 ) -> AppResult<()> {
     mcp.remove(server_id, &credentials).await
-}
-
-#[tauri::command]
-pub async fn agent_run_cancel(
-    run_id: Uuid,
-    runtime: State<'_, AgentRuntimeService>,
-) -> AppResult<()> {
-    runtime.cancel(run_id).await
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn agent_multi_doctor_run(
-    request: MultiServerDoctorRequest,
-    runtime: State<'_, AgentRuntimeService>,
-    tools: State<'_, NativeToolExecutionService>,
-    cache: State<'_, ObservationCache>,
-    sessions: State<'_, ServerSessionManager>,
-    skills: State<'_, SkillRegistry>,
-    mcp: State<'_, McpGateway>,
-    credentials: State<'_, CredentialService>,
-    models: State<'_, ModelGateway>,
-    changes: State<'_, ChangeSetService>,
-    policies: State<'_, AgentPolicyService>,
-    profiles: State<'_, ProfileService>,
-) -> AppResult<MultiServerRun> {
-    runtime
-        .run_multi_doctor(
-            &sessions,
-            &tools,
-            &cache,
-            &skills,
-            &mcp,
-            &credentials,
-            &models,
-            &changes,
-            &policies,
-            &profiles,
-            request,
-        )
-        .await
 }
 
 #[tauri::command]

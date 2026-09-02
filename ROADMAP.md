@@ -386,6 +386,33 @@ Phase 10K 到此停止；不自动进入 Phase 11。
 
 RDP、Marketplace、Signed Skill Package、Runory Managed AI 等仍是未排期 Future，必须由用户另行授权。
 
+## Agent Runtime V2 Migration Track
+
+在继续 Phase 11 之前，优先完成 Agent Runtime V2。该 Track 不增加新的 Agent 产品范围，而是替换旧的固定 Plan / Command Queue orchestration。
+
+```text
+AR2-A  AgentEvent + AgentRun State Machine
+AR2-B  Iterative Reason → Single Command Proposal → Observe Loop
+AR2-C  Exact Command Approval / Cancel / Resume
+AR2-D  Durable Checkpoints + SQLite
+AR2-E  Right-panel Agent Timeline UI
+AR2-F  ServerSession Command Execution + Bounded Observation
+AR2-G  Mutating Command Verification + Existing ChangeSet Integration
+AR2-H  Facts / Context / ToolArtifact Integration
+AR2-I  Recovery / Regression / Production Hardening
+```
+
+Runtime V2 Release Gate 通过前：
+
+- 暂停新增 Team / Marketplace / Cloud 范围。
+- 不新增无必要的 Operations Pack / MCP / Skill。
+- 不删除稳定 Agent 安全底座。
+- 不继续扩展固定命令队列作为主运行模式。
+- 不再以“覆盖所有 Linux 能力”为目标扩展 V2 Typed Tool catalog；现有 Incident / ChangeSet / Verification Tool 保留。
+- V2 每条命令均须审批，Critical fail-closed，写入/Unknown command 后须审批只读验证。
+
+详细规范见 `AGENT_RUNTIME_V2.md` 与 `CODEX_AGENT_RUNTIME_V2.md`。
+
 ## Agentic Release Gate
 
 任何 Agent Write 能力上线前必须满足：
