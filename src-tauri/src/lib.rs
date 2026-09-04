@@ -2,7 +2,6 @@
 // production caller yet; the legacy Agent paths run unchanged until AR2-B+.
 pub mod agent;
 mod agentic;
-mod ai;
 mod cloud;
 mod commands;
 mod credentials;
@@ -35,7 +34,6 @@ use agentic::{
     AgentRuntimeService, ChangeSetService, FleetExecutionService, IncidentService, ModelGateway,
     ObservationCache,
 };
-use ai::{AiService, GatewayAssistantProvider};
 use cloud::{CloudPolicyService, CloudSyncService, CloudSyncStateRepository};
 use deployment::{DeploymentHistoryRepository, DeploymentService};
 use groups::{GroupRepository, GroupService};
@@ -45,7 +43,7 @@ use policy::AgentPolicyService;
 use profiles::{ProfileRepository, ProfileService};
 use settings::{SettingsRepository, SettingsService};
 use skills::SkillRegistry;
-use storage::JsonRepository;
+use storage::{CatalogDatabase, JsonRepository};
 use tools::{NativeToolExecutionService, ToolAuditRepository};
 use transfers::{LocalFileGrantService, UploadDirectoryHistoryService};
 
@@ -111,16 +109,18 @@ pub fn run() {
                     "credential Vault automatic unlock was unavailable"
                 );
             }
-            let models = Arc::new(ModelGateway::at_path(
-                data_directory.join("agent-model.json"),
-            )?);
+            let write_lock = Arc::new(Mutex::new(()));
+            let settings = SettingsService::new(
+                SettingsRepository::new(JsonRepository::new(data_directory.join("settings.json"))),
+                Arc::clone(&write_lock),
+            );
+            let models = Arc::new(
+                ModelGateway::at_path(data_directory.join("agent-model.json"))?
+                    .with_credentials(credentials.clone())
+                    .with_settings(settings.clone()),
+            );
             tauri::async_runtime::block_on(models.load())?;
             app.manage(models);
-            // The assistant panel shares the same gateway; it only classifies
-            // the model's output — the model itself never touches the shell.
-            app.manage(AiService::new(Arc::new(GatewayAssistantProvider::new(
-                app.state::<Arc<ModelGateway>>().inner().clone(),
-            ))));
             let agent_policy = AgentPolicyService::at_path(
                 data_directory.join("agent-policy.json"),
                 data_directory.join("agent-policy-audit.json"),
@@ -162,14 +162,12 @@ pub fn run() {
             );
             tauri::async_runtime::block_on(mcp_gateway.load())?;
             app.manage(mcp_gateway);
-            let group_repository =
-                GroupRepository::new(JsonRepository::new(data_directory.join("groups.json")));
-            let profile_repository =
-                ProfileRepository::new(JsonRepository::new(data_directory.join("profiles.json")));
-            let known_host_repository = KnownHostRepository::new(JsonRepository::new(
-                data_directory.join("known-hosts.json"),
-            ));
-            let write_lock = Arc::new(Mutex::new(()));
+            // SSH metadata is intentionally separate from the credential Vault and Agent runtime.
+            // No legacy JSON import occurs: a new catalog starts with an empty `runory.db`.
+            let catalog_database = CatalogDatabase::open(data_directory.join("runory.db"))?;
+            let group_repository = GroupRepository::new(catalog_database.clone());
+            let profile_repository = ProfileRepository::new(catalog_database.clone());
+            let known_host_repository = KnownHostRepository::new(catalog_database);
             app.manage(GroupService::new(
                 group_repository.clone(),
                 profile_repository.clone(),
@@ -185,10 +183,7 @@ pub fn run() {
                 CloudPolicyService::at_path(data_directory.join("cloud-policy-bindings.json"))?;
             tauri::async_runtime::block_on(cloud_policy.load())?;
             app.manage(cloud_policy);
-            app.manage(SettingsService::new(
-                SettingsRepository::new(JsonRepository::new(data_directory.join("settings.json"))),
-                Arc::clone(&write_lock),
-            ));
+            app.manage(settings);
             app.manage(ProfileService::new(
                 profile_repository,
                 group_repository,
@@ -208,14 +203,17 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::ai::ai_explain_command,
-            commands::ai::ai_generate_command,
-            commands::ai::ai_diagnose_output,
-            commands::ai::ai_propose_fix,
             commands::agentic::agent_model_get,
+            commands::agentic::agent_model_profiles,
+            commands::agentic::agent_model_profile_save,
+            commands::agentic::agent_model_profile_activate,
+            commands::agentic::agent_model_profile_remove,
             commands::agentic::agent_model_configure,
             commands::agentic::agent_model_clear_api_key,
             commands::agentic::agent_model_test,
+            commands::agentic::agent_model_oauth_start,
+            commands::agentic::agent_model_oauth_cancel,
+            commands::agentic::agent_model_disconnect,
             commands::agentic::agent_incident_run,
             commands::agentic::agent_incident_get,
             commands::agentic::agent_incident_list,
@@ -233,21 +231,9 @@ pub fn run() {
             commands::agent_v2::agent_v2_run_pause,
             commands::agent_v2::agent_v2_run_resume,
             commands::agent_v2::agent_v2_list_resumable_runs,
+            commands::agent_v2::agent_v2_history_list,
+            commands::agent_v2::agent_v2_history_get,
             commands::agent_v2::agent_v2_bind_resumable_run,
-            commands::agentic::agent_changeset_draft,
-            commands::agentic::agent_multi_changeset_draft,
-            commands::agentic::agent_fleet_changeset_get,
-            commands::agentic::agent_fleet_changeset_list,
-            commands::agentic::agent_fleet_changeset_approve,
-            commands::agentic::agent_fleet_changeset_execute,
-            commands::agentic::agent_changeset_get,
-            commands::agentic::agent_changeset_list,
-            commands::agentic::agent_changeset_revise,
-            commands::agentic::agent_changeset_approve,
-            commands::agentic::agent_changeset_approve_step,
-            commands::agentic::agent_changeset_reject,
-            commands::agentic::agent_changeset_execute,
-            commands::agentic::agent_changeset_rollback,
             commands::agentic::agent_policy_effective,
             commands::agentic::agent_skills_list,
             commands::agentic::agent_skills_refresh,

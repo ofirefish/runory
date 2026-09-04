@@ -8,7 +8,8 @@ import { useCatalogStore } from "../../stores/catalog-store";
 import { useSessionStore } from "../../stores/session-store";
 import type { ConnectRequest, SessionState } from "../../types/session";
 import { Button } from "../ui/button";
-import { ContextDock, type WorkspaceView } from "./ContextDock";
+import { ContextDock } from "./ContextDock";
+import { restoreWorkspaceView, type WorkspaceView } from "./workspace-view";
 import { ContextPanel } from "../context-panel/ContextPanel";
 import { useContextPanelStore } from "../context-panel/context-panel-store";
 import { ProfileDialog } from "../../features/profiles/ProfileDialog";
@@ -18,7 +19,6 @@ import { WorkspaceTabMenu, type WorkspaceTabMenuState } from "./WorkspaceTabMenu
 
 type DialogState = { mode: "connect" | "reconnect"; profileId: string; tabId?: string; title?: string };
 const statusColor = (state: SessionState) => state === "connected" ? "bg-emerald-500" : state === "error" ? "bg-red-500" : ["connecting", "verifying-host", "authenticating", "opening-shell"].includes(state) ? "bg-blue-500" : "bg-slate-500";
-const workspaceViews: WorkspaceView[] = ["terminal", "files", "assistant", "changes", "dashboard", "operations", "deployment"];
 
 export function Workspace({ onOpenNavigation, connectProfileRequest }: { onOpenNavigation?: () => void; connectProfileRequest?: { profileId: string; requestId: number } | null }) {
   const { t } = useTranslation();
@@ -27,7 +27,7 @@ export function Workspace({ onOpenNavigation, connectProfileRequest }: { onOpenN
   const [tabMenu, setTabMenu] = useState<WorkspaceTabMenuState | null>(null);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const toggleContextPanel = useContextPanelStore((store) => store.setVisible);
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => { const saved = localStorage.getItem("runory.workspaceView") as WorkspaceView | null; return saved && workspaceViews.includes(saved) ? saved : "terminal"; });
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => restoreWorkspaceView(localStorage.getItem("runory.workspaceView")));
   const terminalRefs = useRef(new Map<string, TerminalHandle>());
   const { profiles, selectedProfileId, load } = useCatalogStore();
   const { tabs, activeTabId, addTab, beginReconnect, attachSession, setState, markClosed, markError, setActive, renameTab, removeTab } = useSessionStore();
@@ -112,8 +112,8 @@ export function Workspace({ onOpenNavigation, connectProfileRequest }: { onOpenN
     <div className="workspace-stage">
       <div className="workspace-main-column">
         {tabs.length === 0 && <div className="empty-workspace"><span className="empty-terminal-icon"><SquareTerminal size={24} /></span><strong>{t("terminal.readyTitle")}</strong><span>{t("terminal.ready")}</span><Button size="sm" disabled={!selectedProfile} onClick={openConnectDialog}><CirclePlus size={15} />{t("terminal.connect")}</Button></div>}
-        {tabs.map((tab) => { const profile = profiles.find((candidate) => candidate.id === tab.profileId) ?? null; const active = tab.id === activeTabId; return <section key={tab.id} className={`session-workspace ${active ? "active" : ""}`} aria-hidden={!active}>
-          <ContextDock view={workspaceView} sessionId={tab.sessionId} profileId={tab.profileId} profile={profile} active={active} onViewChange={setWorkspaceView} onInsertCommand={(command) => { terminalRefs.current.get(tab.id)?.insert(command); setWorkspaceView("terminal"); }} terminalContent={<div className="terminal-panel"><div className="terminal-panel-content"><TerminalView ref={(handle) => { if (handle) terminalRefs.current.set(tab.id, handle); else terminalRefs.current.delete(tab.id); }} sessionId={tab.sessionId} active={active && workspaceView === "terminal"} onTransportError={() => markError(tab.id, tab.connectionAttemptId)} /></div></div>} />
+        {tabs.map((tab) => { const active = tab.id === activeTabId; return <section key={tab.id} className={`session-workspace ${active ? "active" : ""}`} aria-hidden={!active}>
+          <ContextDock view={workspaceView} sessionId={tab.sessionId} profileId={tab.profileId} active={active} onViewChange={setWorkspaceView} terminalContent={<div className="terminal-panel"><div className="terminal-panel-content"><TerminalView ref={(handle) => { if (handle) terminalRefs.current.set(tab.id, handle); else terminalRefs.current.delete(tab.id); }} sessionId={tab.sessionId} active={active && workspaceView === "terminal"} onTransportError={() => markError(tab.id, tab.connectionAttemptId)} /></div></div>} />
         </section>; })}
       </div>
       {/* ContextPanel owns its open/collapsed rail states; it must stay mounted

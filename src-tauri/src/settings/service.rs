@@ -11,6 +11,7 @@ use super::SettingsRepository;
 /// Follows the same Repository + write-lock pattern as `GroupService` so a
 /// settings write can never race with another settings write or with the
 /// JSON write lock held by the catalog services.
+#[derive(Clone)]
 pub struct SettingsService {
     repository: SettingsRepository,
     write_lock: Arc<Mutex<()>>,

@@ -151,16 +151,15 @@ mod tests {
     use super::*;
     use crate::{
         domain::{AuthMethod, ServerProfile},
-        storage::JsonRepository,
+        storage::CatalogDatabase,
     };
 
     #[tokio::test]
     async fn deleting_group_moves_profiles_to_ungrouped() {
         let directory = tempfile::tempdir().expect("temp directory");
-        let group_repository =
-            GroupRepository::new(JsonRepository::new(directory.path().join("groups.json")));
-        let profile_repository =
-            ProfileRepository::new(JsonRepository::new(directory.path().join("profiles.json")));
+        let database = CatalogDatabase::open(directory.path().join("runory.db")).expect("open");
+        let group_repository = GroupRepository::new(database.clone());
+        let profile_repository = ProfileRepository::new(database);
         let service = GroupService::new(
             group_repository,
             profile_repository.clone(),
@@ -200,9 +199,10 @@ mod tests {
     #[tokio::test]
     async fn reorders_all_groups_atomically_and_rejects_duplicate_ids() {
         let directory = tempfile::tempdir().expect("temp directory");
+        let database = CatalogDatabase::open(directory.path().join("runory.db")).expect("open");
         let service = GroupService::new(
-            GroupRepository::new(JsonRepository::new(directory.path().join("groups.json"))),
-            ProfileRepository::new(JsonRepository::new(directory.path().join("profiles.json"))),
+            GroupRepository::new(database.clone()),
+            ProfileRepository::new(database),
             Arc::new(Mutex::new(())),
         );
         let first = service

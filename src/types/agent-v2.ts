@@ -3,6 +3,12 @@ export type AgentRunStateV2 =
   | "running"
   | "reasoning"
   | "acting"
+  | "observing"
+  | "diagnosed"
+  | "planning_change"
+  | "executing_change"
+  | "verifying"
+  | "rolling_back"
   | "awaiting_approval"
   | "awaiting_user"
   | "paused"
@@ -84,6 +90,8 @@ export type AgentV2DisplayContext = {
   user: string;
   directory: string;
 };
+
+export type AgentHistoryDetail = { run: AgentRunV2; events: AgentEventEnvelope[]; truncated: boolean };
 
 export type AgentV2StartResponse = {
   runId: string;

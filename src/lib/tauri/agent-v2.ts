@@ -1,5 +1,11 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { AgentEventEnvelope, AgentV2ResumableRun, AgentV2StartResponse } from "../../types/agent-v2";
+import type { AgentEventEnvelope, AgentHistoryDetail, AgentV2ResumableRun, AgentV2StartResponse } from "../../types/agent-v2";
+
+export const listAgentHistory = (targetId: string | null) =>
+  invoke<AgentV2ResumableRun[]>("agent_v2_history_list", { targetId });
+
+export const getAgentHistory = (runId: string) =>
+  invoke<AgentHistoryDetail>("agent_v2_history_get", { runId });
 
 export const startAgentV2Run = (sessionId: string, goal: string) =>
   invoke<AgentV2StartResponse>("agent_v2_run_start", { request: { sessionId, goal } });

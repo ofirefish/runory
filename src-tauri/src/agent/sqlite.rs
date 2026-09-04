@@ -34,6 +34,10 @@ pub const SCHEMA_VERSION: i64 = 2;
 const EMPTY_JSON_OBJECT: &str = "{}";
 const EMPTY_JSON_ARRAY: &str = "[]";
 
+#[path = "sqlite_history.rs"]
+mod history;
+pub(crate) use history::{AgentHistoryDetail, AgentHistoryEntry};
+
 /// One durable Agent store backed by SQLite.
 pub struct SqliteAgentDatabase {
     path: PathBuf,

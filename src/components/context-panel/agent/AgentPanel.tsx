@@ -1,4 +1,3 @@
-import { CircleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { appErrorCode } from "../../../lib/app-error";
@@ -6,6 +5,7 @@ import {
   approveAgentV2Run,
   bindResumableAgentV2Run,
   cancelAgentV2Run,
+  getAgentHistory,
   listResumableAgentV2Runs,
   pauseAgentV2Run,
   rejectAgentV2Run,
@@ -21,7 +21,10 @@ import { AgentComposer } from "./AgentComposer";
 import { AgentEmptyState } from "./AgentEmptyState";
 import { AgentHeader } from "./AgentHeader";
 import { AgentTimeline } from "./AgentTimeline";
+import { AgentRunError } from "./AgentRunError";
 import { IncidentHistoryPopover } from "./IncidentHistoryPopover";
+import { IncidentHistoryPanel } from "./IncidentHistoryPanel";
+import type { HistoryItem } from "./incident-history";
 import {
   deriveRunState,
   AGENT_MAX_ROUNDS,
@@ -54,6 +57,11 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   const { t } = useTranslation();
   const [byServer, setByServer] = useState<Record<string, ServerTimeline>>({});
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historySelection, setHistorySelection] = useState<{ serverKey: string; item: HistoryItem } | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const historyRequest = useRef(0);
+  const [conversationTargets, setConversationTargets] = useState<Record<string, string[]>>({});
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
   const [actionBusy, setActionBusy] = useState(false);
   const [nowEpochMs, setNowEpochMs] = useState(Date.now());
   const expanded = useAgentViewStore((store) => store.expanded);
@@ -61,7 +69,10 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   const lastSeqRef = useRef<Record<string, number>>({});
 
   const serverKey = profile?.id ?? "none";
+  const selectedHistory = historySelection?.serverKey === serverKey ? historySelection.item : null;
   const model = byServer[serverKey] ?? EMPTY;
+  const targetMismatch = conversationTargets[serverKey] !== undefined &&
+    (conversationTargets[serverKey].length !== 1 || conversationTargets[serverKey][0] !== profile?.id);
   const phase = timelinePhase(model.events);
 
   useEffect(() => {
@@ -81,6 +92,7 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   const appendEvent = useCallback((envelope: Parameters<typeof mergeAgentEvent>[1]) => {
     setByServer((current) => {
       const base = current[serverKey] ?? EMPTY;
+      if (base.runId !== envelope.runId) return current;
       const merged = mergeAgentEvent(base, envelope);
       lastSeqRef.current[serverKey] = Math.max(lastSeqRef.current[serverKey] ?? 0, envelope.seq);
       const next: ServerTimeline = {
@@ -104,13 +116,15 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   useEffect(() => {
     if (!sessionId || !profile) return;
     let cancelled = false;
+    const historyVersion = historyRequest.current;
     void listResumableAgentV2Runs().then(async (items) => {
-      if (cancelled || items.length === 0) return;
+      if (cancelled || historyVersion !== historyRequest.current || items.length === 0) return;
       const matches = items.filter((item) => item.targetIds.length === 1 && item.targetIds[0] === profile.id);
       const match = matches[matches.length - 1];
       if (!match) return;
       if (["completed", "cancelled", "failed"].includes(match.run.state)) return;
       await bindResumableAgentV2Run(match.run.id, sessionId);
+      if (cancelled || historyVersion !== historyRequest.current) return;
       patch({
         runId: match.run.id,
         running: ["running", "reasoning", "acting"].includes(match.run.state),
@@ -127,13 +141,15 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   }, [bindSubscription, patch, profile, sessionId]);
 
   const beginRun = async (text: string) => {
-    if (!sessionId || model.running || actionBusy) return;
+    if (!sessionId || model.running || actionBusy || historyLoading || targetMismatch) return;
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (model.pendingQuestion && model.runId) {
+    if (model.runId && (model.pendingQuestion || ["completed", "failed", "cancelled"].includes(model.runState ?? ""))) {
       setActionBusy(true);
       window.dispatchEvent(new Event("runory:agent-run"));
       try {
+        await bindResumableAgentV2Run(model.runId, sessionId);
+        await bindSubscription(model.runId);
         await replyAgentV2Run(model.runId, trimmed);
       } catch (error) {
         patch({ lastErrorCode: appErrorCode(error), running: false });
@@ -172,19 +188,21 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   };
 
   const resumeRun = () => {
-    if (!model.runId || actionBusy) return;
+    if (!model.runId || !sessionId || targetMismatch || actionBusy) return;
     setActionBusy(true);
     window.dispatchEvent(new Event("runory:agent-run"));
-    void resumeAgentV2Run(model.runId)
+    const runId = model.runId;
+    void bindResumableAgentV2Run(runId, sessionId).then(() => resumeAgentV2Run(runId))
       .catch((error) => patch({ lastErrorCode: appErrorCode(error), running: false }))
       .finally(() => setActionBusy(false));
   };
 
   const approvalAction = async (approve: boolean) => {
-    if (!model.runId || !model.pendingApproval || actionBusy) return;
+    if (!model.runId || !sessionId || targetMismatch || !model.pendingApproval || actionBusy) return;
     setActionBusy(true);
     window.dispatchEvent(new Event("runory:agent-run"));
     try {
+      await bindResumableAgentV2Run(model.runId, sessionId);
       if (approve) await approveAgentV2Run(model.runId);
       else await rejectAgentV2Run(model.runId);
     } catch (error) {
@@ -195,6 +213,11 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   };
 
   const newConversation = () => {
+    historyRequest.current += 1;
+    setHistoryLoading(false);
+    setConversationTargets((current) => ({ ...current, [serverKey]: profile ? [profile.id] : [] }));
+    setHistorySelection(null);
+    setHistoryOpen(false);
     if (model.runId) void cancelAgentV2Run(model.runId).catch(() => undefined);
     setByServer((current) => ({ ...current, [serverKey]: emptyTimeline() }));
     lastSeqRef.current[serverKey] = 0;
@@ -202,6 +225,36 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   };
 
   const disconnected = profile !== null && !connected;
+  const openHistoryConversation = async (item: HistoryItem) => {
+    setHistoryOpen(false);
+    const request = ++historyRequest.current;
+    if (item.kind !== "run") {
+      setHistoryLoading(false);
+      setHistorySelection({ serverKey, item });
+      return;
+    }
+    setHistorySelection(null);
+    setHistoryLoading(true);
+    try {
+      const detail = await getAgentHistory(item.id);
+      if (request !== historyRequest.current) return;
+      setConversationTargets((current) => ({ ...current, [serverKey]: item.targetIds }));
+      let timeline = emptyTimeline();
+      for (const event of detail.events) timeline = mergeAgentEvent(timeline, event);
+      lastSeqRef.current[serverKey] = Math.max(0, ...detail.events.map((event) => event.seq));
+      patch({ ...timeline, runId: item.id, runState: detail.run.state,
+        running: isRunningState(detail.run.state, false),
+        pendingApproval: detail.run.state === "awaiting_approval" ? pendingApprovalFromEvents(detail.events) : undefined });
+      if (sessionId && item.targetIds.length === 1 && item.targetIds[0] === profile?.id) {
+        await bindResumableAgentV2Run(item.id, sessionId);
+        if (request === historyRequest.current) await bindSubscription(item.id);
+      }
+    } catch (error) {
+      if (request === historyRequest.current) patch({ lastErrorCode: appErrorCode(error) });
+    } finally {
+      if (request === historyRequest.current) setHistoryLoading(false);
+    }
+  };
   const running = isRunningState(model.runState, model.running);
   const paused = model.runState === "paused";
   const hasTimeline = model.events.length > 0;
@@ -216,25 +269,28 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
       profile={profile}
       connected={connected}
       state={state}
-      runState={model.runState}
-      running={running}
+      runState={selectedHistory ? null : model.runState}
+      running={!selectedHistory && running}
       onNewConversation={newConversation}
-      onOpenHistory={() => setHistoryOpen(true)}
-      onCancel={cancelRun}
-      onPause={running && !paused ? pauseRun : undefined}
-      onResume={paused ? resumeRun : undefined}
+      onOpenHistory={() => setHistoryOpen((value) => !value)}
+      historyOpen={historyOpen}
+      onPause={!selectedHistory && !targetMismatch && running && !paused ? pauseRun : undefined}
+      onResume={!selectedHistory && !targetMismatch && paused ? resumeRun : undefined}
     />
-    <IncidentHistoryPopover open={historyOpen} onClose={() => setHistoryOpen(false)} onSelect={() => undefined} />
+    {historyOpen && <IncidentHistoryPopover key={`${serverKey}-${sessionId}`} onClose={closeHistory} onSelect={(item) => void openHistoryConversation(item)} targetId={profile?.id ?? null} sessionId={sessionId} />}
 
     <div className="agent-panel-main">
-      {!profile && <AgentNoServerState onSelect={onSelectServer} />}
+      {historyLoading ? <p className="history-empty" role="status">{t("common.loading")}</p> : selectedHistory ? <IncidentHistoryPanel key={`${selectedHistory.kind}-${selectedHistory.id}`} item={selectedHistory} onBack={() => setHistorySelection(null)} /> : <>
+      {targetMismatch && <p className="history-note">{t("contextPanel.historyTargetMismatch")}</p>}
+      {!profile && !hasTimeline && <AgentNoServerState onSelect={onSelectServer} />}
       {disconnected && <AgentDisconnectedPanel state={state} onReconnect={onNewTerminal} />}
       {profile && connected && !hasTimeline && <AgentEmptyState onPrompt={beginRun} />}
-      {profile && connected && hasTimeline && <>
+      {hasTimeline && <>
         <AgentTimeline
           events={model.events}
           displayContext={displayContext}
-          pendingApproval={model.pendingApproval}
+          pendingApproval={targetMismatch || !connected ? undefined : model.pendingApproval}
+          readOnly={targetMismatch || !connected}
           busy={actionBusy}
           expanded={expanded}
           onToggle={toggleExpanded}
@@ -243,16 +299,17 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
         />
         <AgentRunFooter events={model.events} nowEpochMs={nowEpochMs} />
       </>}
-      {model.lastErrorCode && !running && <div className="agent-error" role="alert"><CircleAlert size={14} aria-hidden /><span>{t(`contextPanel.error.${model.lastErrorCode}`, { defaultValue: t("contextPanel.runFailed") })}</span></div>}
+      <AgentRunError events={model.events} lastErrorCode={model.lastErrorCode} running={running} />
+      </>}
     </div>
 
-    <AgentComposer
+    {!selectedHistory && <AgentComposer
       onSubmit={beginRun}
       onCancel={cancelRun}
       running={(running || actionBusy) && !paused}
-      disabled={!profile || !connected || paused}
+      disabled={!profile || !connected || paused || historyLoading || targetMismatch || model.runState === "awaiting_approval"}
       placeholder={model.pendingQuestion ? t("contextPanel.answerPlaceholder") : t("contextPanel.composerPlaceholder")}
-    />
+    />}
   </div>;
 }
 

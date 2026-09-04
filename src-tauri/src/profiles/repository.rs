@@ -1,23 +1,30 @@
 use crate::{
     domain::{AppResult, ServerProfile},
-    storage::JsonRepository,
+    storage::CatalogDatabase,
 };
 
 #[derive(Clone)]
 pub struct ProfileRepository {
-    repository: JsonRepository<Vec<ServerProfile>>,
+    database: CatalogDatabase,
 }
 
 impl ProfileRepository {
-    pub fn new(repository: JsonRepository<Vec<ServerProfile>>) -> Self {
-        Self { repository }
+    pub fn new(database: CatalogDatabase) -> Self {
+        Self { database }
     }
 
     pub async fn list(&self) -> AppResult<Vec<ServerProfile>> {
-        self.repository.load_or_default().await
+        let database = self.database.clone();
+        tokio::task::spawn_blocking(move || database.list_profiles())
+            .await
+            .map_err(|_| crate::domain::AppError::Storage)?
     }
 
     pub async fn save(&self, profiles: &[ServerProfile]) -> AppResult<()> {
-        self.repository.save_atomic(&profiles.to_vec()).await
+        let database = self.database.clone();
+        let profiles = profiles.to_vec();
+        tokio::task::spawn_blocking(move || database.replace_profiles(&profiles))
+            .await
+            .map_err(|_| crate::domain::AppError::Storage)?
     }
 }

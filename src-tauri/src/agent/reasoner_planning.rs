@@ -12,6 +12,7 @@ use serde_json::json;
 use super::decision::{AgentDecision, CommandProposalRequest};
 use super::reasoner::{Reasoner, ReasonerError, ReasonerInput};
 use crate::agentic::{ModelGateway, ModelProviderKind, PlanningHints};
+use crate::domain::AppError;
 
 /// Proposes decisions using the configured model gateway and bounded hints.
 pub struct PlanningReasoner {
@@ -31,11 +32,7 @@ impl PlanningReasoner {
 #[async_trait]
 impl Reasoner for PlanningReasoner {
     async fn decide(&self, input: &ReasonerInput<'_>) -> Result<AgentDecision, ReasonerError> {
-        let status = self
-            .gateway
-            .status()
-            .await
-            .map_err(|_| ReasonerError::unavailable())?;
+        let status = self.gateway.status().await.map_err(model_reasoner_error)?;
         if status.kind == ModelProviderKind::Local {
             Ok(local_command_decision(input))
         } else {
@@ -44,9 +41,16 @@ impl Reasoner for PlanningReasoner {
                 .gateway
                 .complete_agent_turn(&history)
                 .await
-                .map_err(|_| ReasonerError::unavailable())?;
-            parse_command_decision(&content).map_err(|_| ReasonerError::unavailable())
+                .map_err(model_reasoner_error)?;
+            parse_command_decision(&content)
+                .map_err(|_| model_reasoner_error(AppError::ModelResponseInvalid))
         }
+    }
+}
+
+fn model_reasoner_error(error: AppError) -> ReasonerError {
+    ReasonerError {
+        code: error.code().into(),
     }
 }
 
@@ -230,6 +234,48 @@ mod tests {
     use super::*;
     use crate::agent::reasoner::{BudgetStatus, Observation};
     use crate::agentic::context::{snapshot, ContextBudget};
+
+    #[tokio::test]
+    async fn model_authorization_failure_preserves_the_gateway_error_code() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let gateway =
+            Arc::new(ModelGateway::at_path(directory.path().join("model.json")).expect("gateway"));
+        gateway
+            .configure(crate::agentic::ModelConfigureRequest {
+                kind: ModelProviderKind::OpenAiCompatible,
+                name: String::new(),
+                base_url: "https://example.com/v1".into(),
+                model: "test-model".into(),
+                max_context_tokens: 64_000,
+                api_key: None,
+            })
+            .await
+            .expect("configure without credentials");
+        let reasoner = PlanningReasoner::new(gateway, PlanningHints::default());
+        let context = snapshot(Vec::new(), ContextBudget::default(), 1);
+        let input = ReasonerInput {
+            run_id: uuid::Uuid::new_v4(),
+            session_id: None,
+            target_ids: &[],
+            goal: "Check disk",
+            round: 1,
+            observations: &[],
+            user_replies: &[],
+            budget: BudgetStatus {
+                rounds_used: 1,
+                max_rounds: 8,
+                tool_calls_used: 0,
+                max_tool_calls: 20,
+                elapsed_ms: 0,
+                time_budget_ms: 60_000,
+            },
+            context: &context,
+        };
+        assert_eq!(
+            reasoner.decide(&input).await.unwrap_err().code,
+            "MODEL_AUTH_FAILED"
+        );
+    }
 
     #[tokio::test]
     async fn production_reasoner_disk_round_proposes_command() {

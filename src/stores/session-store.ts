@@ -8,7 +8,7 @@ export type SessionTab = {
   sessionId: string | null;
   connectionAttemptId: string;
   state: SessionState;
-  view: "terminal" | "assistant" | "agent" | "files" | "dashboard" | "operations" | "deployment" | "details";
+  view: "terminal" | "agent" | "files" | "dashboard" | "operations" | "deployment" | "details";
 };
 
 type SessionStore = {

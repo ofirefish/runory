@@ -6,10 +6,11 @@ import { DialogShell } from "../../components/ui/dialog-shell";
 import { Input } from "../../components/ui/input";
 import { credentialStatus, initializeVault, listKnownHosts, lockVault, removeKnownHost, unlockVault, unlockVaultWithPlatform } from "../../lib/tauri/ssh";
 import { vaultUnlockAction } from "../../lib/vault-unlock";
-import { useSettingsStore, type Language, type ThemeMode } from "../../stores/settings-store";
+import { useSettingsStore } from "../../stores/settings-store";
 import type { KnownHost } from "../../types/session";
 import type { CredentialStatus } from "../../types/session";
 import { AgentModelSettings } from "./AgentModelSettings";
+import { SettingsSelectField } from "./SettingsSelectField";
 
 const CloudPanel = lazy(() => import("./CloudPanel").then((module) => ({ default: module.CloudPanel })));
 
@@ -44,14 +45,14 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     <nav className="settings-navigation" aria-label={t("settings.navigation")}>
       <p className="settings-navigation-label">{t("settings.projectSettings")}</p>
       <div className="settings-navigation-items">
-        {sections.map(({ id, icon: Icon, label }) => <button key={id} type="button" className="settings-navigation-item" data-active={activeSection === id} aria-current={activeSection === id ? "page" : undefined} onClick={() => setActiveSection(id)}><Icon size={16} /><span>{t(label)}</span></button>)}
+        {sections.map(({ id, icon: Icon, label }) => <Button key={id} type="button" variant="ghost" className="settings-navigation-item h-auto justify-start" data-active={activeSection === id} aria-current={activeSection === id ? "page" : undefined} onClick={() => setActiveSection(id)}><Icon size={16} /><span>{t(label)}</span></Button>)}
       </div>
     </nav>
     <main className="settings-content">
       <header className="settings-content-header"><h3>{heading}</h3><p>{t(`settings.section.${activeSection}Hint`)}</p></header>
       {activeSection === "general" && <div className="settings-group">
-        <label className="settings-field"><span>{t("settings.theme")}</span><select value={theme} onChange={(event) => setTheme(event.target.value as ThemeMode)}><option value="system">{t("settings.system")}</option><option value="light">{t("settings.light")}</option><option value="dark">{t("settings.dark")}</option></select></label>
-        <label className="settings-field"><span>{t("settings.language")}</span><select value={language} onChange={(event) => setLanguage(event.target.value as Language)}><option value="en-US">{t("settings.english")}</option><option value="zh-CN">{t("settings.chinese")}</option></select></label>
+        <SettingsSelectField className="settings-field" label={t("settings.theme")} value={theme} onValueChange={setTheme} options={(["system", "light", "dark"] as const).map((value) => ({ value, label: t(`settings.${value}`) }))} />
+        <SettingsSelectField className="settings-field" label={t("settings.language")} value={language} onValueChange={setLanguage} options={[{ value: "en-US", label: t("settings.english") }, { value: "zh-CN", label: t("settings.chinese") }]} />
       </div>}
       {activeSection === "agent" && <div className="settings-section-reset"><AgentModelSettings /></div>}
       {activeSection === "security" && <div className="settings-stack">

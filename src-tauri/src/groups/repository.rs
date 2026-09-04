@@ -1,23 +1,30 @@
 use crate::{
     domain::{AppResult, HostGroup},
-    storage::JsonRepository,
+    storage::CatalogDatabase,
 };
 
 #[derive(Clone)]
 pub struct GroupRepository {
-    repository: JsonRepository<Vec<HostGroup>>,
+    database: CatalogDatabase,
 }
 
 impl GroupRepository {
-    pub fn new(repository: JsonRepository<Vec<HostGroup>>) -> Self {
-        Self { repository }
+    pub fn new(database: CatalogDatabase) -> Self {
+        Self { database }
     }
 
     pub async fn list(&self) -> AppResult<Vec<HostGroup>> {
-        self.repository.load_or_default().await
+        let database = self.database.clone();
+        tokio::task::spawn_blocking(move || database.list_groups())
+            .await
+            .map_err(|_| crate::domain::AppError::Storage)?
     }
 
     pub async fn save(&self, groups: &[HostGroup]) -> AppResult<()> {
-        self.repository.save_atomic(&groups.to_vec()).await
+        let database = self.database.clone();
+        let groups = groups.to_vec();
+        tokio::task::spawn_blocking(move || database.replace_groups(&groups))
+            .await
+            .map_err(|_| crate::domain::AppError::Storage)?
     }
 }

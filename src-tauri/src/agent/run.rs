@@ -92,6 +92,20 @@ impl AgentRun {
         Ok(())
     }
 
+    /// A new explicit user turn may reopen a finished conversation. Runtime
+    /// transitions remain terminal; this does not restore any action approval.
+    pub(crate) fn begin_user_turn(&mut self) -> Result<(), AgentStateError> {
+        if !self.state.is_terminal() {
+            return Err(AgentStateError {
+                from: self.state,
+                to: AgentRunStateV2::Reasoning,
+            });
+        }
+        self.state = AgentRunStateV2::Reasoning;
+        self.updated_at_epoch_ms = now_epoch_ms().max(self.updated_at_epoch_ms);
+        Ok(())
+    }
+
     /// Allocate the next per-run monotonic event sequence number (1, 2, 3, …).
     ///
     /// Allocation requires `&mut self`, so Rust's aliasing rules make

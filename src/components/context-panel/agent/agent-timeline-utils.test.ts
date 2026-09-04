@@ -12,6 +12,17 @@ function envelope(seq: number, type: AgentEventEnvelope["event"]["type"], payloa
 }
 
 describe("agent timeline utils", () => {
+  it("uses the new turn state and drops approvals from an earlier failed turn", () => {
+    const events = [
+      envelope(1, "command_approval_required", { command_id: "old" }),
+      envelope(2, "run_failed", { error_code: "UNKNOWN" }),
+      envelope(3, "user_message_added", { content: "Continue" }),
+      envelope(4, "run_resumed"),
+      envelope(5, "reasoning_started"),
+    ];
+    expect(deriveRunState(events)).toBe("reasoning");
+    expect(pendingApprovalFromEvents(events)).toBeUndefined();
+  });
   it("appends events in sequence order without duplicates", () => {
     const base = emptyTimeline("run-1");
     const first = mergeAgentEvent(base, envelope(1, "run_started"));

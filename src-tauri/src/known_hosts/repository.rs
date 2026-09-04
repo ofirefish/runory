@@ -1,21 +1,28 @@
 use crate::domain::{AppResult, KnownHost};
-use crate::storage::JsonRepository;
+use crate::storage::CatalogDatabase;
 
 #[derive(Clone)]
 pub struct KnownHostRepository {
-    storage: JsonRepository<Vec<KnownHost>>,
+    database: CatalogDatabase,
 }
 
 impl KnownHostRepository {
-    pub fn new(storage: JsonRepository<Vec<KnownHost>>) -> Self {
-        Self { storage }
+    pub fn new(database: CatalogDatabase) -> Self {
+        Self { database }
     }
 
     pub async fn list(&self) -> AppResult<Vec<KnownHost>> {
-        self.storage.load_or_default().await
+        let database = self.database.clone();
+        tokio::task::spawn_blocking(move || database.list_known_hosts())
+            .await
+            .map_err(|_| crate::domain::AppError::Storage)?
     }
 
     pub async fn save(&self, hosts: &[KnownHost]) -> AppResult<()> {
-        self.storage.save_atomic(&hosts.to_vec()).await
+        let database = self.database.clone();
+        let hosts = hosts.to_vec();
+        tokio::task::spawn_blocking(move || database.replace_known_hosts(&hosts))
+            .await
+            .map_err(|_| crate::domain::AppError::Storage)?
     }
 }

@@ -160,15 +160,11 @@ fn normalize_endpoint(host: &str, port: u16) -> AppResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::JsonRepository;
+    use crate::storage::CatalogDatabase;
 
     fn service(directory: &tempfile::TempDir) -> KnownHostService {
-        KnownHostService::new(
-            KnownHostRepository::new(JsonRepository::new(
-                directory.path().join("known-hosts.json"),
-            )),
-            Arc::new(Mutex::new(())),
-        )
+        let database = CatalogDatabase::open(directory.path().join("runory.db")).expect("open");
+        KnownHostService::new(KnownHostRepository::new(database), Arc::new(Mutex::new(())))
     }
 
     fn key(fingerprint: &str) -> HostKeyInfo {

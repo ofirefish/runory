@@ -1,99 +1,74 @@
-import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Bot, ExternalLink, KeyRound, LoaderCircle, Plus, RefreshCw, Zap } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
-import { clearAgentModelApiKey, configureAgentModel, getAgentModel, testAgentModel } from "../../lib/tauri/agentic";
-import type { ModelProviderKind, ModelProviderStatus } from "../../types/agentic";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog";
+import { appErrorCode } from "../../lib/app-error";
+import { activateAgentModelProfile, cancelAgentModelOauth, getAgentModelProfiles, removeAgentModelProfile, saveAgentModelProfile, startAgentModelOauth, testAgentModel } from "../../lib/tauri/agentic";
+import type { ModelConfigureRequest, ModelProfile, OauthProvider } from "../../types/agentic";
+import { ModelProfileForm } from "./ModelProfileForm";
+import { ModelProfileList } from "./ModelProfileList";
+import { QuickProviderLogo } from "./QuickProviderLogo";
+import { providerLabelKeys } from "./model-provider-presets";
+import "./model-settings.css";
 
-const presets: Record<Exclude<ModelProviderKind, "local" | "open-ai-compatible">, { baseUrl: string; model: string }> = {
-  "deep-seek": { baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro" },
-  glm: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.2" },
-};
+type Page = { type: "list" } | { type: "quick" } | { type: "form"; profile: ModelProfile | null };
 
 export function AgentModelSettings() {
   const { t } = useTranslation();
-  const apiKey = useRef<HTMLInputElement>(null);
-  const [status, setStatus] = useState<ModelProviderStatus | null>(null);
-  const [kind, setKind] = useState<ModelProviderKind>("local");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [model, setModel] = useState("runory-local-doctor-v2");
-  const [maxContextTokens, setMaxContextTokens] = useState(8192);
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [page, setPage] = useState<Page>({ type: "list" });
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [oauthProvider, setOauthProvider] = useState<OauthProvider | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [tested, setTested] = useState(false);
-
-  const applyStatus = (value: ModelProviderStatus) => {
-    setStatus(value);
-    setKind(value.kind);
-    setBaseUrl(value.baseUrl);
-    setModel(value.model);
-    setMaxContextTokens(value.maxContextTokens);
+  const [removing, setRemoving] = useState<ModelProfile | null>(null);
+  const refresh = async () => {
+    setError(null);
+    try { setProfiles(await getAgentModelProfiles()); setLoaded(true); }
+    catch (error) { setError(appErrorCode(error)); }
   };
-
-  useEffect(() => {
-    void getAgentModel().then(applyStatus).catch(() => setFailed(true));
-  }, []);
-
-  const selectKind = (next: ModelProviderKind) => {
-    setKind(next);
-    if (next === "local") {
-      setBaseUrl("");
-      setModel("runory-local-doctor-v2");
-      setMaxContextTokens(8192);
-    } else if (next === "deep-seek" || next === "glm") {
-      setBaseUrl(presets[next].baseUrl);
-      setModel(presets[next].model);
-      setMaxContextTokens(131072);
-    }
+  useEffect(() => { void refresh(); }, []);
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true); setError(null); setTested(false);
+    try { await action(); } catch (error) { const code = appErrorCode(error); if (code !== "MODEL_OAUTH_CANCELLED") setError(code); }
+    finally { setBusy(false); }
   };
-
-  const save = async () => {
-    setBusy(true);
-    setFailed(false);
-    setTested(false);
+  const save = (request: ModelConfigureRequest) => run(async () => {
+    setProfiles(await saveAgentModelProfile(page.type === "form" ? page.profile?.id ?? null : null, request));
+    setPage({ type: "list" });
+  });
+  const connect = (provider: OauthProvider) => run(async () => {
+    setOauthProvider(provider);
     try {
-      const value = apiKey.current?.value || null;
-      applyStatus(await configureAgentModel({ kind, baseUrl, model, maxContextTokens, apiKey: value }));
-      if (apiKey.current) apiKey.current.value = "";
-    } catch {
-      setFailed(true);
-      if (apiKey.current) apiKey.current.value = "";
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const clearKey = async () => {
-    setBusy(true);
-    setFailed(false);
-    try { applyStatus(await clearAgentModelApiKey()); } catch { setFailed(true); } finally { setBusy(false); }
-  };
-
-  const test = async () => {
-    setBusy(true); setFailed(false); setTested(false);
-    try { await testAgentModel(); setTested(true); } catch { setFailed(true); } finally { setBusy(false); }
-  };
-
-  return <section className="mt-4 border-t pt-4">
-    <h3 className="text-xs font-medium text-[hsl(var(--secondary))]">{t("settings.agentModel")}</h3>
-    <p className="mt-1 text-xs text-[hsl(var(--muted))]">{t("settings.agentModelHint")}</p>
-    <div className="mt-3 grid gap-2">
-      <label className="grid gap-1 text-xs"><span>{t("settings.modelProvider")}</span><select className="h-9 rounded-md border bg-[hsl(var(--surface))] px-2 text-sm" value={kind} onChange={(event) => selectKind(event.target.value as ModelProviderKind)}>
-        <option value="local">{t("settings.modelProvider.local")}</option>
-        <option value="deep-seek">DeepSeek</option>
-        <option value="glm">GLM</option>
-        <option value="open-ai-compatible">{t("settings.modelProvider.compatible")}</option>
-      </select></label>
-      {kind !== "local" && <>
-        <label className="grid gap-1 text-xs"><span>{t("settings.modelBaseUrl")}</span><Input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" /></label>
-        <label className="grid gap-1 text-xs"><span>{t("settings.modelName")}</span><Input value={model} onChange={(event) => setModel(event.target.value)} /></label>
-        <label className="grid gap-1 text-xs"><span>{t("settings.modelContext")}</span><Input type="number" min={256} max={1000000} value={maxContextTokens} onChange={(event) => setMaxContextTokens(Number(event.target.value))} /></label>
-        <label className="grid gap-1 text-xs"><span>{t("settings.modelApiKey")}</span><Input ref={apiKey} type="password" autoComplete="off" placeholder={status?.apiKeyConfigured ? t("settings.modelApiKeyConfigured") : t("settings.modelApiKeyRequired")} /></label>
-        <p className="text-[11px] text-[hsl(var(--muted))]">{t("settings.modelSecurityHint")}</p>
-      </>}
-      {failed && <p className="text-xs text-red-500">{t("settings.modelError")}</p>}
-      {tested && <p className="text-xs text-emerald-600">{t("settings.modelTestSucceeded")}</p>}
-      <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy} onClick={() => void save()}>{t("common.save")}</Button><Button size="sm" variant="secondary" disabled={busy || !status?.apiKeyConfigured} onClick={() => void test()}>{t("settings.testModel")}</Button>{status?.apiKeyConfigured && kind !== "local" && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void clearKey()}>{t("settings.clearModelApiKey")}</Button>}</div>
-    </div>
-  </section>;
+      await startAgentModelOauth(provider);
+      setProfiles(await getAgentModelProfiles());
+      setPage({ type: "list" });
+    } finally { setOauthProvider(null); }
+  });
+  const changePage = (page: Page) => { setPage(page); setError(null); setTested(false); };
+  const active = profiles.find((profile) => profile.active);
+  return <div className="provider-settings" aria-busy={busy}>
+    {page.type === "list" ? <>
+      <div className="model-list-toolbar">
+        <div className="model-list-count"><h4>{t("settings.models.saved")}</h4><span>{profiles.length}</span></div>
+        <div className="model-list-add"><Button size="sm" variant="secondary" disabled={busy || !loaded} onClick={() => changePage({ type: "quick" })}><Zap size={14} />{t("settings.models.quickAdd")}</Button><Button size="sm" disabled={busy || !loaded} onClick={() => changePage({ type: "form", profile: null })}><Plus size={14} />{t("settings.models.addApiKey")}</Button></div>
+      </div>
+      {!loaded ? <div className="model-list-empty"><LoaderCircle size={24} className={error ? undefined : "animate-spin"} /><p>{t(error ? "settings.modelError" : "common.loading")}</p>{error && <Button size="sm" variant="secondary" onClick={() => void refresh()}>{t("settings.models.retry")}</Button>}</div>
+        : profiles.length === 0 ? <div className="model-list-empty"><span className="model-empty-icon"><Bot size={28} /></span><h4>{t("settings.models.empty")}</h4><p>{t("settings.models.emptyHint")}</p><Button size="sm" onClick={() => changePage({ type: "quick" })}><Plus size={14} />{t("settings.models.addFirst")}</Button></div>
+          : <ModelProfileList profiles={profiles} busy={busy} onActivate={(profile) => void run(async () => { setProfiles(await activateAgentModelProfile(profile.id)); })} onEdit={(profile) => changePage({ type: "form", profile })} onRemove={setRemoving} />}
+      {loaded && profiles.length > 0 && <div className="model-list-footer"><p>{t("settings.models.singleActive")}</p>{active && <Button size="sm" variant="ghost" disabled={busy || !active.apiKeyConfigured} onClick={() => void run(async () => { await testAgentModel(); setTested(true); })}><RefreshCw size={13} className={busy ? "animate-spin" : undefined} />{t("settings.testModel")}</Button>}</div>}
+    </> : <>
+      <div className="model-editor-heading"><Button size="icon" variant="ghost" disabled={busy} aria-label={t("settings.models.back")} onClick={() => changePage({ type: "list" })}><ArrowLeft size={17} /></Button><div><h4>{t(page.type === "quick" ? "settings.models.quickAdd" : page.profile ? "settings.models.edit" : "settings.models.addApiKey")}</h4><p>{t(page.type === "quick" ? "settings.models.quickHint" : "settings.models.formHint")}</p></div></div>
+      {page.type === "form" ? <ModelProfileForm profile={page.profile} busy={busy} onSave={save} onCancel={() => changePage({ type: "list" })} /> : <div className="model-quick-options">
+        {(["chat-gpt", "open-router"] as const).map((provider) => <Button variant="ghost" key={provider} className="model-quick-option h-auto" type="button" disabled={busy} onClick={() => void connect(provider)}><span className="model-profile-icon" data-provider={provider}><QuickProviderLogo provider={provider} /></span><span><strong>{t(providerLabelKeys[provider])}</strong><small>{t(provider === "chat-gpt" ? "settings.provider.chatgptAccount" : "settings.provider.openrouterAccount")}</small></span>{oauthProvider === provider ? <LoaderCircle size={18} className="animate-spin" /> : <ExternalLink size={17} />}</Button>)}
+        {oauthProvider && <div className="model-oauth-progress" role="status"><p>{t("settings.oauthInProgress")}</p><Button size="sm" variant="secondary" onClick={() => void cancelAgentModelOauth().catch((error: unknown) => setError(appErrorCode(error)))}>{t("common.cancel")}</Button></div>}
+        <Button type="button" variant="ghost" className="model-quick-manual h-auto" disabled={busy} onClick={() => changePage({ type: "form", profile: null })}><KeyRound size={14} />{t("settings.models.useApiKey")}</Button>
+      </div>}
+    </>}
+    {error && loaded && <p role="alert" className="text-xs text-red-500">{t(error === "VAULT_LOCKED" ? "settings.models.vaultLocked" : error === "MODEL_AUTH_FAILED" ? "settings.models.authFailed" : "settings.modelError")}</p>}
+    {tested && <p role="status" className="text-xs text-emerald-600">{t("settings.modelTestSucceeded")}</p>}
+    {removing && <ConfirmDialog title={t("settings.models.removeTitle")} description={t("settings.models.removeHint", { name: removing.name || t(providerLabelKeys[removing.kind]) })} onClose={() => setRemoving(null)} onConfirm={async () => { setProfiles(await removeAgentModelProfile(removing.id)); setTested(false); }} />}
+  </div>;
 }

@@ -252,16 +252,15 @@ mod tests {
     use super::*;
     use crate::{
         domain::{CreateProfileRequest, HostGroup, UpdateProfileRequest},
-        storage::JsonRepository,
+        storage::CatalogDatabase,
     };
 
     #[tokio::test]
     async fn creates_updates_and_deletes_profile_metadata() {
         let directory = tempfile::tempdir().expect("temp directory");
-        let group_repository =
-            GroupRepository::new(JsonRepository::new(directory.path().join("groups.json")));
-        let profile_repository =
-            ProfileRepository::new(JsonRepository::new(directory.path().join("profiles.json")));
+        let database = CatalogDatabase::open(directory.path().join("runory.db")).expect("open");
+        let group_repository = GroupRepository::new(database.clone());
+        let profile_repository = ProfileRepository::new(database);
         let group = HostGroup {
             id: uuid::Uuid::new_v4(),
             name: "Production".into(),
@@ -338,10 +337,9 @@ mod tests {
     #[tokio::test]
     async fn reorders_only_the_profiles_in_the_requested_group() {
         let directory = tempfile::tempdir().expect("temp directory");
-        let group_repository =
-            GroupRepository::new(JsonRepository::new(directory.path().join("groups.json")));
-        let profile_repository =
-            ProfileRepository::new(JsonRepository::new(directory.path().join("profiles.json")));
+        let database = CatalogDatabase::open(directory.path().join("runory.db")).expect("open");
+        let group_repository = GroupRepository::new(database.clone());
+        let profile_repository = ProfileRepository::new(database);
         let group = HostGroup {
             id: uuid::Uuid::new_v4(),
             name: "Production".into(),

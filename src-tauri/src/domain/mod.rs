@@ -1,4 +1,3 @@
-mod ai;
 mod cloud;
 mod credential;
 mod dashboard;
@@ -12,10 +11,6 @@ mod session;
 mod settings;
 mod sftp;
 
-pub use ai::{
-    AiAssistantResponse, AiCommandProposal, AiCommandRequest, AiDiagnosis, AiGenerateRequest,
-    AiOutputRequest, AiPlanProposal, AiPurpose, AiRisk, AiSignal, AiTask,
-};
 pub use cloud::{
     CloudApplyRequest, CloudApplyResult, CloudConflictDecision, CloudConflictItem,
     CloudConflictResolution, CloudDiscardRequest, CloudEncryptedPayload, CloudExportRequest,

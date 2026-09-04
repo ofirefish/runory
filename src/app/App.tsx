@@ -12,7 +12,7 @@ export function App() {
   const { t } = useTranslation();
   useTheme();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
-  const [activeNavigation, setActiveNavigation] = useState<"servers" | "sessions" | "settings">("servers");
+  const [activeNavigation, setActiveNavigation] = useState<"servers" | "sessions">("servers");
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [newProfileRequest, setNewProfileRequest] = useState(0);
@@ -33,7 +33,7 @@ export function App() {
     return () => window.removeEventListener("runory:open-settings", onOpenSettings);
   }, []);
   const selectNavigation = (item: "servers" | "sessions" | "settings") => {
-    setActiveNavigation(item);
+    if (item !== "settings") setActiveNavigation(item);
     if (item === "servers" || item === "settings") setExplorerOpen(true);
     if (item === "settings") setSettingsRequest((value) => value + 1);
   };

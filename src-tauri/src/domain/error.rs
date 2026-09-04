@@ -113,6 +113,10 @@ pub enum AppError {
     ModelRateLimited,
     #[error("model provider returned an invalid response")]
     ModelResponseInvalid,
+    #[error("model provider OAuth is unsupported on this platform")]
+    ModelOauthUnsupported,
+    #[error("model provider OAuth was cancelled or timed out")]
+    ModelOauthCancelled,
     #[error("storage operation failed")]
     Storage,
 }
@@ -180,6 +184,8 @@ impl AppError {
             Self::ModelAuthFailed => "MODEL_AUTH_FAILED",
             Self::ModelRateLimited => "MODEL_RATE_LIMITED",
             Self::ModelResponseInvalid => "MODEL_RESPONSE_INVALID",
+            Self::ModelOauthUnsupported => "MODEL_OAUTH_UNSUPPORTED",
+            Self::ModelOauthCancelled => "MODEL_OAUTH_CANCELLED",
             Self::Storage => "STORAGE_ERROR",
         }
     }

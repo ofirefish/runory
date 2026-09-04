@@ -287,7 +287,7 @@ mod integration_tests {
     use crate::domain::{CronSchedule, CronTask, EnvironmentEntry};
     use crate::known_hosts::{KnownHostRepository, KnownHostService};
     use crate::ssh::SftpChannel;
-    use crate::storage::JsonRepository;
+    use crate::storage::{CatalogDatabase, JsonRepository};
     use crate::tools::{
         NativeToolExecutionService, NativeToolInvocation, NativeToolRequest, ToolAuditRepository,
         ToolAuditStatus, ToolCancellationStatus, ToolData,
@@ -401,10 +401,10 @@ mod integration_tests {
     async fn password_pty_shell_echo_resize_and_disconnect() {
         let _guard = integration_lock().lock().await;
         let directory = tempfile::tempdir().expect("temp directory");
+        let catalog_database = CatalogDatabase::open(directory.path().join("runory.db"))
+            .expect("open catalog database");
         let known_hosts = KnownHostService::new(
-            KnownHostRepository::new(JsonRepository::new(
-                directory.path().join("known-hosts.json"),
-            )),
+            KnownHostRepository::new(catalog_database),
             Arc::new(TokioMutex::new(())),
         );
         let key = SshService::scan_host_key("127.0.0.1", 2222)
@@ -1296,10 +1296,10 @@ mod integration_tests {
         assert_ne!(original_fingerprint, changed_fingerprint);
 
         let directory = tempfile::tempdir().expect("temp directory");
+        let catalog_database = CatalogDatabase::open(directory.path().join("runory.db"))
+            .expect("open catalog database");
         let known_hosts = KnownHostService::new(
-            KnownHostRepository::new(JsonRepository::new(
-                directory.path().join("known-hosts.json"),
-            )),
+            KnownHostRepository::new(catalog_database),
             Arc::new(TokioMutex::new(())),
         );
         let remembered = known_hosts

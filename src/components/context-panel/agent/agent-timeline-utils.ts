@@ -81,6 +81,8 @@ export function deriveRunState(events: AgentEventEnvelope[]): AgentRunStateV2 | 
     if (type === "run_completed") return "completed";
     if (type === "run_failed") return "failed";
     if (type === "run_cancelled") return "cancelled";
+    if (type === "reasoning_started" || type === "run_resumed") return "reasoning";
+    if (type === "command_started" || type === "tool_started") return "acting";
     if (type === "approval_granted" || type === "approval_rejected" || type === "approval_invalidated") approvalSettled = true;
     if ((type === "tool_approval_required" || type === "command_approval_required") && !approvalSettled) return "awaiting_approval";
     if (type === "user_input_received") userInputSettled = true;
@@ -103,7 +105,18 @@ export function isRunningState(state: AgentRunStateV2 | null, runningFlag: boole
 }
 
 export function reasoningRound(events: AgentEventEnvelope[]): number {
-  return Math.max(1, events.filter((item) => item.event.type === "reasoning_started").length);
+  return Math.max(1, currentTurnEvents(events).filter((item) => item.event.type === "reasoning_started").length);
+}
+
+function currentTurnEvents(events: AgentEventEnvelope[]): AgentEventEnvelope[] {
+  let finished = false;
+  let start = 0;
+  for (let index = 0; index < events.length; index += 1) {
+    const type = events[index].event.type;
+    if (["run_completed", "run_failed", "run_cancelled"].includes(type)) finished = true;
+    if (type === "user_message_added" && finished) { start = index; finished = false; }
+  }
+  return events.slice(start);
 }
 
 export function timelinePhase(events: AgentEventEnvelope[]): AgentTimelinePhase {
@@ -126,6 +139,7 @@ export function timelinePhase(events: AgentEventEnvelope[]): AgentTimelinePhase 
 }
 
 export function runElapsedSeconds(events: AgentEventEnvelope[], nowEpochMs: number): number {
+  events = currentTurnEvents(events);
   const start = events.find((item) => item.event.type === "run_created")?.timestampEpochMs
     ?? events[0]?.timestampEpochMs;
   if (start === undefined) return 0;
@@ -179,7 +193,7 @@ export function pendingApprovalFromEvents(events: AgentEventEnvelope[]): Timelin
         mutability: proposal?.mutability as TimelineApproval["mutability"],
       };
     }
-    if (envelope.event.type === "approval_granted" || envelope.event.type === "approval_rejected" || envelope.event.type === "approval_invalidated") {
+    if (["approval_granted", "approval_rejected", "approval_invalidated", "run_completed", "run_failed", "run_cancelled", "user_message_added"].includes(envelope.event.type)) {
       pending = undefined;
       pendingChangeSetId = undefined;
     }

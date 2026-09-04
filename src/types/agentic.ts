@@ -4,59 +4,52 @@ export type AgentProgress = { stage: "gathering-context" | "planning" | "running
 export type AgentEvidence = { id: string; source: string; invocationId: string; trust: string; summary: string; result: { invocationId: string; toolName: string; success: boolean; errorCode: string | null; durationMs: number; data: unknown } };
 export type AgentRunMetrics = { runId: string; incidentId: string | null; modelCalls: number; inputTokens: number; outputTokens: number; toolCalls: number; duplicateCalls: number; mcpCalls: number; contextSizeBytes: number; compactionCount: number; durationMs: number; diagnosisLatencyMs: number | null; resolutionLatencyMs: number | null; verificationResult: string | null; rollbackResult: string | null; estimatedCostMicrousd: number | null; cacheHits: number; parallelReadBatches: number };
 export type AgentRun = { id: string; model: string; sessionId: string; state: AgentRunState; activities: { invocationId: string; toolName: string; success: boolean; errorCode: string | null; durationMs: number }[]; evidence: AgentEvidence[]; externalEvidence: { id: string; source: string; trust: string; data: unknown }[]; diagnosis: { id: string; titleCode: string; rootCauseCode: string; confidence: number; evidenceIds: string[]; recommendedActionCode: string; risk: RiskLevel } | null; answer: string | null; answerEvidenceIds: string[]; goalAchieved: boolean; clarificationQuestion: string | null; failureCode: string | null; changeSet: ChangeSet | null; maxToolCalls: number; usedToolCalls: number; maxModelTokens: number; usedModelTokens: number; metrics: AgentRunMetrics };
-export type ModelProviderKind = "local" | "deep-seek" | "glm" | "open-ai-compatible";
-export type ModelProviderStatus = { kind: ModelProviderKind; baseUrl: string; model: string; maxContextTokens: number; apiKeyConfigured: boolean };
-export type ModelConfigureRequest = { kind: ModelProviderKind; baseUrl: string; model: string; maxContextTokens: number; apiKey: string | null };
+export type ModelProviderKind =
+  | "local"
+  | "deep-seek"
+  | "glm"
+  | "open-ai-compatible"
+  | "chat-gpt"
+  | "open-router"
+  | "open-ai"
+  | "anthropic"
+  | "google"
+  | "qwen"
+  | "kimi"
+  | "minimax";
+export type ModelAuthMode = "none" | "api-key" | "oauth";
+export type OauthProvider = "chat-gpt" | "open-router";
+export type AdvancedProviderKind = Exclude<ModelProviderKind, "local" | "chat-gpt">;
+export type ModelProviderStatus = {
+  kind: ModelProviderKind;
+  name: string;
+  baseUrl: string;
+  model: string;
+  maxContextTokens: number;
+  apiKeyConfigured: boolean;
+  authMode: ModelAuthMode;
+  oauthInProgress: boolean;
+  connectedAccountLabel: string | null;
+};
+export type ModelProfile = ModelProviderStatus & { id: string; active: boolean };
+export type ModelConfigureRequest = {
+  kind: ModelProviderKind;
+  name: string;
+  baseUrl: string;
+  model: string;
+  maxContextTokens: number;
+  apiKey: string | null;
+};
 export type DoctorRequest = { runId: string; sessionId: string; userRequest: string; service: string | null; httpUrl: string | null; portHost: string | null; port: number | null; includeNginxTest: boolean; skillId: string | null; mcpContext: { serverId: string; toolName: string; arguments: Record<string, unknown> } | null; incidentId?: string | null; budget?: { maxModelCalls: number; maxToolCalls: number; maxInputTokens: number; maxOutputTokens: number; timeBudgetMs: number; maxCostMicrousd: number | null; context: { maxItems: number; maxBytes: number; maxTokens: number } } | null };
-export type ChangeStepDraft = { tool: "file.patch"; path: string; expected: string; replacement: string } | { tool: "service.restart" | "service.reload"; service: string } | { tool: "nginx.reload" } | { tool: "docker.restart"; container: string };
 export type PolicyDecision = "ALLOW" | "REQUIRE_APPROVAL" | "REQUIRE_STEP_APPROVAL" | "DENY";
 export type PolicyScope = { kind: "global" } | { kind: "environment"; environment: string } | { kind: "group"; groupId: string } | { kind: "server"; serverId: string } | { kind: "tool"; tool: string };
 export type PolicyEvaluation = { decision: PolicyDecision; matchedRules: { ruleId: string; scope: PolicyScope; decision: PolicyDecision; reason: string }[]; reason: string; scope: PolicyScope; policyVersion: number; policyHash: string };
 export type PolicySnapshot = { policyVersion: number; policyHash: string; decision: PolicyDecision; matchedRuleIds: string[] };
-export type EffectiveAgentPolicy = { target: { serverId: string; groupId: string | null; environment: string | null }; policyVersion: number; policyHash: string; evaluations: PolicyEvaluation[] };
 export type ChangeSet = { id: string; agentRunId: string; sessionId: string; title: string; version: number; risk: RiskLevel; approvalState: "draft" | "approved" | "rejected" | "invalidated"; approvedVersion: number | null; approvedStepIds: string[]; executionState: "not-started" | "executing" | "committed" | "failed" | "rolled-back" | "rollback-failed" | "interrupted"; recoveryState: "live" | "metadata-only"; preconditions: { stepId: string; targetId: string; checkTool: string; observedAtEpochMs: number; state: "captured" | "changed" }[]; policyEvaluation: PolicyEvaluation | null; policySnapshot: PolicySnapshot | null; steps: { id: string; order: number; toolName: string; risk: RiskLevel; preview: string; verificationPlanCode: string; rollbackCapability: string; state: string; errorCode: string | null }[] };
+export type EffectiveAgentPolicy = { target: { serverId: string; groupId: string | null; environment: string | null }; policyVersion: number; policyHash: string; evaluations: PolicyEvaluation[] };
 export type Skill = { manifest: { id: string; version: string; publisher: string; requiredTools: string[]; optionalTools: string[]; riskCeiling: RiskLevel }; origin: "built-in" | "user"; enabled: boolean; permissionReviewCodes: string[] };
 export type McpServerConfig = { id: string; label: string; endpoint: string; connected: boolean; enabled: boolean; transportEra: "modern" | "legacy" | null; protocolVersion: string | null; tools: { name: string; description: string; readOnly: boolean; enabled: boolean; requiresArguments: boolean }[] };
 export type MultiServerRun = { id: string; targets: AgentRun[]; drift: { field: string; values: { sessionId: string; value: unknown }[] }[] };
-export type ExecutionStrategy = "sequential" | "parallel" | "canary" | "rolling-batch";
-export type FailurePolicy = "stop" | "pause-for-review" | "continue" | "rollback";
-export type FleetTargetExecution = {
-  targetId: string;
-  changeSetId: string;
-  changeSetVersion: number;
-  state: "pending" | "executing" | "succeeded" | "failed" | "rollback-pending" | "rolled-back" | "rollback-failed";
-  localVerification: "pending" | "succeeded" | "failed" | "not-applicable";
-  serviceVerification: "pending" | "succeeded" | "failed" | "not-applicable";
-  rollbackState: "pending" | "succeeded" | "failed" | "not-applicable";
-  errorCode: string | null;
-  durationMs: number | null;
-};
-export type FleetChangeSet = {
-  id: string;
-  agentRunId: string;
-  model: string;
-  title: string;
-  version: number;
-  risk: RiskLevel;
-  executionStrategy: ExecutionStrategy;
-  failurePolicy: FailurePolicy;
-  batchSize: number;
-  canaryCount: number;
-  production: boolean;
-  serviceVerification: string | null;
-  crossTargetVerification: boolean;
-  targets: FleetTargetExecution[];
-  approvalState: "draft" | "approved" | "rejected" | "invalidated";
-  approval: { fleetVersion: number; targetIds: string[]; targets: { targetId: string; changeSetId: string; changeSetVersion: number }[]; approvedAtEpochMs: number } | null;
-  lastApproval: { fleetVersion: number; targetIds: string[]; targets: { targetId: string; changeSetId: string; changeSetVersion: number }[]; approvedAtEpochMs: number } | null;
-  executionState: "draft" | "approved" | "executing" | "verifying" | "paused-for-review" | "succeeded" | "failed" | "rolling-back" | "rolled-back" | "rollback-failed" | "interrupted";
-  verification: { crossTarget: "pending" | "succeeded" | "failed" | "not-applicable"; serviceLevel: "pending" | "succeeded" | "failed" | "not-applicable" };
-  recoveryState: "live" | "metadata-only";
-  toolCallCount: number;
-  durationMs: number | null;
-  policyEvaluation: PolicyEvaluation | null;
-  policySnapshot: PolicySnapshot | null;
-};
 export type OperationsPack = "website" | "nginx" | "docker" | "disk" | "service";
 export type IncidentRequest = { id: string; pack: OperationsPack; severity: "sev1" | "sev2" | "sev3" | "sev4"; targets: string[]; symptoms: string[]; host: string | null; port: number | null; url: string | null; service: string | null; container: string | null; configPath: string | null; upstreamHost: string | null; upstreamPort: number | null; dependencies: string[] };
 export type Incident = {

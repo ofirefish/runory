@@ -1,0 +1,56 @@
+.model-list-toolbar, .model-list-add, .model-list-count, .model-profile-title, .model-profile-actions, .model-editor-heading, .model-list-footer, .model-form-footer { display: flex; align-items: center; gap: 8px; }
+.model-list-toolbar { justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.model-list-count h4, .model-editor-heading h4 { font-size: 13px; font-weight: 600; }
+.model-list-count > span { display: grid; min-width: 22px; height: 21px; padding: 0 6px; place-items: center; border-radius: 6px; background: hsl(var(--elevated)); color: hsl(var(--muted)); font-size: 11px; font-variant-numeric: tabular-nums; }
+.model-list-add button { font-size: 12px; }
+.model-profile-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.model-profile { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 17px 14px; border: 1px solid hsl(var(--border)); border-radius: 10px; background: hsl(var(--surface)); transition: border-color 140ms, background-color 140ms; }
+.model-profile[data-active="true"] { border-color: hsl(var(--primary)/.5); background: hsl(var(--primary)/.06); }
+.model-profile-icon { display: grid; flex: 0 0 38px; width: 38px; height: 38px; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 10px; color: hsl(var(--secondary)); background: hsl(var(--elevated)); transition: color 140ms, border-color 140ms, background-color 140ms; }
+.model-profile[data-active="true"] .model-profile-icon { color: hsl(var(--primary)); border-color: hsl(var(--primary)/.2); background: hsl(var(--primary)/.08); }
+.model-profile-info { flex: 1; min-width: 0; }
+.model-profile-title { flex-wrap: wrap; gap: 5px 8px; }
+.model-profile-title h4 { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.model-profile-auth { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border-radius: 4px; color: hsl(var(--muted)); background: hsl(var(--elevated)); font-size: 9px; white-space: nowrap; }
+.model-profile-model, .model-profile-endpoint { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.model-profile-model { margin-top: 5px; color: hsl(var(--secondary)); font-family: var(--font-mono, monospace); font-size: 11px; }
+.model-profile-endpoint { margin-top: 3px; color: hsl(var(--muted)); font-size: 10px; }
+.model-profile-actions { flex-shrink: 0; gap: 2px; }
+.model-profile-actions > button { height: 29px; font-size: 11px; white-space: nowrap; }
+.model-profile-actions > .model-profile-icon-action { width: 29px; color: hsl(var(--muted)); }
+.model-profile-actions > .model-profile-icon-action:hover:not(:disabled) { color: hsl(var(--foreground)); }
+.model-profile-enabled { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; padding: 5px 8px; border-radius: 6px; color: hsl(var(--primary)); background: hsl(var(--primary)/.1); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.model-list-footer { justify-content: space-between; gap: 8px; border-top: 1px solid hsl(var(--border-soft)); padding-top: 14px; }
+.model-list-footer p, .model-editor-heading p { color: hsl(var(--muted)); font-size: 11px; line-height: 1.6; }
+.model-list-footer button { flex-shrink: 0; font-size: 11px; color: hsl(var(--secondary)); }
+.model-list-empty { display: flex; min-height: 245px; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 30px 18px; border: 1px dashed hsl(var(--border)); border-radius: 12px; text-align: center; }
+.model-empty-icon { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 4px; border-radius: 16px; background: hsl(var(--elevated)); color: hsl(var(--muted)); }
+.model-list-empty h4 { font-size: 14px; font-weight: 600; }
+.model-list-empty p { max-width: 300px; font-size: 12px; line-height: 1.6; color: hsl(var(--muted)); }
+.model-editor-heading { align-items: flex-start; gap: 10px; }
+.model-editor-heading > button { width: 28px; height: 28px; flex-shrink: 0; }
+.model-editor-heading p { margin-top: 4px; }
+.model-profile-form { max-width: 480px; }
+.model-profile-form fieldset { display: grid; gap: 17px; min-width: 0; }
+.model-profile-form .provider-field { font-size: 11px; letter-spacing: normal; text-transform: none; color: hsl(var(--secondary)); }
+.model-profile-form .provider-field input, .model-profile-form .provider-field-select { width: 100%; background: hsl(var(--surface)); }
+.model-form-footer { justify-content: flex-end; margin-top: 24px; padding-top: 16px; border-top: 1px solid hsl(var(--border-soft)); }
+.model-quick-options { display: grid; gap: 12px; }
+.model-quick-option { display: flex; align-items: center; gap: 14px; padding: 20px; border: 1px solid hsl(var(--border)); border-radius: 10px; text-align: left; color: hsl(var(--foreground)); background: hsl(var(--surface)); transition: border-color 140ms, background-color 140ms; }
+.model-quick-option:hover:not(:disabled) { border-color: hsl(var(--primary)/.5); background: hsl(var(--primary)/.06); }
+.model-quick-option:hover:not(:disabled) .model-profile-icon { color: hsl(var(--primary)); border-color: hsl(var(--primary)/.2); background: hsl(var(--primary)/.08); }
+.model-quick-option > span:nth-child(2) { flex: 1; }
+.model-quick-option strong { display: block; font-size: 14px; font-weight: 600; }
+.model-quick-option small { display: block; margin-top: 4px; font-size: 11px; color: hsl(var(--muted)); }
+.model-quick-option > svg { color: hsl(var(--muted)); }
+.model-quick-option:disabled, .model-quick-manual:disabled { opacity: .55; cursor: default; }
+.model-quick-manual { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 12px; border-radius: 8px; font-size: 12px; color: hsl(var(--secondary)); transition: color 140ms, background-color 140ms; }
+.model-quick-manual:hover:not(:disabled) { color: hsl(var(--primary)); background: hsl(var(--elevated)); }
+.model-oauth-progress { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border-radius: 8px; background: hsl(var(--elevated)); font-size: 12px; color: hsl(var(--secondary)); }
+.model-quick-option:focus-visible, .model-quick-manual:focus-visible, .provider-api-key-toggle:focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 3px; }
+@media (max-width: 720px) {
+  .model-profile { flex-wrap: wrap; }
+  .model-profile-info { flex-basis: calc(100% - 60px); }
+  .model-profile-actions { width: 100%; justify-content: flex-end; }
+  .model-list-footer { align-items: flex-start; flex-direction: column; }
+}

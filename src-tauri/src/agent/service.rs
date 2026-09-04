@@ -67,6 +67,14 @@ impl AgentRuntimeV2Service {
         self.database.list_resumable_runs().map_err(store_error)
     }
 
+    pub fn recent_history(&self, target: Option<Uuid>) -> AppResult<Vec<super::AgentHistoryEntry>> {
+        self.database.recent_history(target).map_err(store_error)
+    }
+
+    pub fn history_detail(&self, run_id: Uuid) -> AppResult<super::AgentHistoryDetail> {
+        self.database.history_detail(run_id).map_err(store_error)
+    }
+
     pub fn events_after(&self, run_id: Uuid, after_seq: u64) -> AppResult<Vec<AgentEventEnvelope>> {
         self.events
             .events_after(run_id, after_seq)
@@ -102,6 +110,9 @@ impl AgentRuntimeV2Service {
         let controller = V2Controller::new(&goal, reasoner, dispatcher, stores, config)
             .map_err(controller_error)?;
         let run_id = controller.run_id();
+        self.database
+            .record_history_target(run_id, server_id)
+            .map_err(store_error)?;
         let controller_slot = Arc::new(AsyncMutex::new(Some(controller)));
         self.active.lock().map_err(|_| AppError::Storage)?.insert(
             run_id,
@@ -193,10 +204,20 @@ impl AgentRuntimeV2Service {
                 );
             }
             let controller = guard.as_mut().expect("controller");
-            controller
-                .resume_with_user_input(&text)
-                .await
-                .map_err(controller_error)?
+            if AgentRunStore::get(self.database.as_ref(), run_id)
+                .map_err(store_error)?
+                .is_some_and(|run| run.state().is_terminal())
+            {
+                controller
+                    .continue_conversation(&text)
+                    .await
+                    .map_err(controller_error)?
+            } else {
+                controller
+                    .resume_with_user_input(&text)
+                    .await
+                    .map_err(controller_error)?
+            }
         };
         self.finish_outcome(run_id, outcome).await
     }
@@ -263,17 +284,16 @@ impl AgentRuntimeV2Service {
         server_id: Uuid,
         goal: &str,
     ) -> AppResult<()> {
-        let target_ids = self.resumable_target_ids(run_id)?;
+        let target_ids = self.database.history_targets(run_id).map_err(store_error)?;
         if target_ids != vec![server_id] {
             return Err(AppError::InvalidOperation);
         }
-        if self
-            .active
-            .lock()
-            .map_err(|_| AppError::Storage)?
-            .contains_key(&run_id)
-        {
-            return Ok(());
+        if let Ok(active) = self.active_entry(run_id) {
+            return if active.session_id == session_id && active.server_id == server_id {
+                Ok(())
+            } else {
+                Err(AppError::InvalidOperation)
+            };
         }
         let hints = planning_hints_from_goal(goal);
         let (cancel_tx, _) = watch::channel(false);
@@ -507,7 +527,15 @@ fn extract_loop_state(events: &[AgentEventEnvelope]) -> (Vec<Observation>, Vec<S
                 detail: None,
             }),
             AgentEvent::UserInputReceived => {}
-            AgentEvent::AssistantMessageAdded { content } => user_replies.push(content.clone()),
+            AgentEvent::UserMessageAdded { content } => user_replies.push(content.clone()),
+            AgentEvent::AssistantMessageAdded { content } => observations.push(Observation {
+                tool_call_id: None,
+                tool_name: None,
+                success: true,
+                error_code: None,
+                summary: "Previous assistant response (historical context)".into(),
+                detail: Some(content.clone()),
+            }),
             _ => {}
         }
     }

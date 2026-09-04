@@ -9,7 +9,6 @@ import { MobileExtraKeys } from "./MobileExtraKeys";
 
 export type TerminalHandle = {
   write: (bytes: number[]) => void;
-  insert: (value: string) => void;
   dimensions: () => { cols: number; rows: number };
 };
 
@@ -124,7 +123,6 @@ export const TerminalView = forwardRef<TerminalHandle, { sessionId: string | nul
   }, [active]);
   useImperativeHandle(ref, () => ({
     write: (bytes) => terminal.current?.write(new Uint8Array(bytes)),
-    insert: (value) => terminal.current?.paste(value),
     dimensions: () => ({ cols: terminal.current?.cols ?? 120, rows: terminal.current?.rows ?? 34 }),
   }), []);
 

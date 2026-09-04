@@ -216,6 +216,22 @@ pub async fn agent_v2_list_resumable_runs(
 }
 
 #[tauri::command]
+pub async fn agent_v2_history_list(
+    target_id: Option<Uuid>,
+    runtime: State<'_, AgentRuntimeV2Service>,
+) -> AppResult<Vec<crate::agent::AgentHistoryEntry>> {
+    runtime.recent_history(target_id)
+}
+
+#[tauri::command]
+pub async fn agent_v2_history_get(
+    run_id: Uuid,
+    runtime: State<'_, AgentRuntimeV2Service>,
+) -> AppResult<crate::agent::AgentHistoryDetail> {
+    runtime.history_detail(run_id)
+}
+
+#[tauri::command]
 pub async fn agent_v2_bind_resumable_run(
     run_id: Uuid,
     session_id: SessionId,

@@ -9,11 +9,12 @@ const COMPACT_TOOL_EVENTS = new Set([
   "tool_completed",
   "tool_failed",
 ]);
-export function AgentTimeline({ events, displayContext, pendingApproval, busy, expanded, onToggle, onApprove, onReject }: {
+export function AgentTimeline({ events, displayContext, pendingApproval, busy, expanded, onToggle, onApprove, onReject, readOnly = false }: {
   events: AgentEventEnvelope[];
   displayContext?: AgentV2DisplayContext;
   pendingApproval?: TimelineApproval;
   busy?: boolean;
+  readOnly?: boolean;
   expanded: Record<string, boolean>;
   onToggle: (key: string) => void;
   onApprove: () => void;
@@ -52,6 +53,9 @@ export function AgentTimeline({ events, displayContext, pendingApproval, busy, e
         if (result) {
           return <TimelineCommandRow key={key} envelope={result} command={String(payload.command ?? "")} />;
         }
+        if (readOnly || events.some((item) => item.seq > envelope.seq && ["run_completed", "run_failed", "run_cancelled"].includes(item.event.type))) {
+          return <div key={key} className="agent-command-result-card"><p>{t("contextPanel.historyCommand")}</p><pre className="agent-command-result-command"><code>{String(payload.command ?? "")}</code></pre><p>{String(payload.reason ?? "")}</p></div>;
+        }
         if (pendingApproval?.kind === "command" && pendingApproval.toolCallId === commandId) {
           return <AgentApprovalCard key={key} approval={pendingApproval} busy={busy} onApprove={onApprove} onReject={onReject} />;
         }
@@ -75,9 +79,6 @@ export function AgentTimeline({ events, displayContext, pendingApproval, busy, e
       }
       if (type === "user_input_required") {
         return <div key={key} className="agent-question"><p className="question-text">{String(payload.question ?? "")}</p></div>;
-      }
-      if (type === "run_failed") {
-        return <div key={key} className="timeline-error" role="alert">{t(`contextPanel.error.${String(payload.error_code ?? "UNKNOWN")}`, { defaultValue: t("contextPanel.runFailed") })}</div>;
       }
       if (type === "change_set_proposed") {
         return <TimelineChangeSetRow key={key} label={t("contextPanel.timeline.changeSetProposed")} detail={String(payload.change_set_id ?? "")} />;
@@ -114,7 +115,7 @@ export function AgentTimeline({ events, displayContext, pendingApproval, busy, e
       }
       return null;
     })}
-    {pendingApproval && pendingApproval.kind !== "command" && <AgentApprovalCard approval={pendingApproval} busy={busy} onApprove={onApprove} onReject={onReject} />}
+    {!readOnly && pendingApproval && pendingApproval.kind !== "command" && <AgentApprovalCard approval={pendingApproval} busy={busy} onApprove={onApprove} onReject={onReject} />}
   </div>;
 }
 

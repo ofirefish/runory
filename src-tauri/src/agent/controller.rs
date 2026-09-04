@@ -397,6 +397,55 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
         self.drive_loop(started).await
     }
 
+    /// Starts an explicitly requested turn in a finished conversation. Old
+    /// approvals are invalidated; outstanding verification remains required.
+    pub async fn continue_conversation(
+        &mut self,
+        answer: &str,
+    ) -> Result<RunOutcome, AgentControllerError> {
+        let trimmed = answer.trim();
+        if trimmed.is_empty() || trimmed.len() > MAX_GOAL_BYTES {
+            return Err(AgentControllerError::InvalidUserInput);
+        }
+        if !self.run.state().is_terminal() {
+            return Err(AgentControllerError::NotAwaitingUser);
+        }
+        while let Some(mut approval) = self.approvals.pending_for_run(self.run.id())? {
+            approval.decide(ApprovalRequestState::Invalidated);
+            self.approvals.save(&approval)?;
+            self.emit(AgentEvent::ApprovalInvalidated {
+                approval_id: approval.id,
+                reason_code: "APPROVAL_NEW_USER_TURN".into(),
+            })?;
+        }
+        self.run.begin_user_turn()?;
+        self.run_store.save(&self.run)?;
+        self.rounds_used = 0;
+        self.tool_calls_used = 0;
+        let started = Instant::now();
+        self.loop_started_at = Some(started);
+        self.pending_command_analysis = None;
+        for target in &self.target_ids {
+            self.working_facts.invalidate_target(*target);
+        }
+        let (content, _) = redact_secrets(trimmed);
+        self.emit(AgentEvent::UserMessageAdded {
+            content: content.clone(),
+        })?;
+        self.user_replies.push(content.clone());
+        self.observations.push(Observation {
+            tool_call_id: None,
+            tool_name: None,
+            success: true,
+            error_code: None,
+            summary: format!("User replied: {content}"),
+            detail: Some(content),
+        });
+        self.emit(AgentEvent::RunResumed)?;
+        self.save_checkpoint(None, started)?;
+        self.drive_loop(started).await
+    }
+
     /// Continues a run parked in `AwaitingUser` after the user replies.
     pub async fn resume_with_user_input(
         &mut self,
@@ -410,6 +459,9 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
             return Err(AgentControllerError::InvalidUserInput);
         }
         let (content, _) = redact_secrets(trimmed);
+        self.emit(AgentEvent::UserMessageAdded {
+            content: content.clone(),
+        })?;
         self.emit(AgentEvent::UserInputReceived)?;
         self.user_replies.push(content.clone());
         self.observations.push(Observation {
@@ -2750,6 +2802,55 @@ mod tests {
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
         assert_eq!(controller.run_id(), run_id);
         assert!(harness.event_types(run_id).contains(&"user_input_received"));
+    }
+
+    #[tokio::test]
+    async fn completed_conversation_accepts_explicit_turn_with_same_id_and_context() {
+        let harness = Harness::new();
+        let mut controller = harness.auto_controller(
+            FnReasoner(|input: &ReasonerInput<'_>| {
+                if input.user_replies.is_empty() {
+                    Ok(final_answer("First answer"))
+                } else {
+                    assert!(input.user_replies.iter().any(|reply| reply == "Follow up"));
+                    Ok(final_answer("Second answer"))
+                }
+            }),
+            FnDispatcher(|_: &PreparedToolCall| panic!("no command requested")),
+            RunBudget {
+                max_reasoner_rounds: 1,
+                ..RunBudget::default()
+            },
+        );
+        let run_id = controller.run_id();
+        assert!(matches!(
+            controller.run_to_interrupt().await.expect("first"),
+            RunOutcome::Completed { .. }
+        ));
+        assert!(controller.continue_conversation(" ").await.is_err());
+        assert!(matches!(
+            controller
+                .continue_conversation("Follow up")
+                .await
+                .expect("second"),
+            RunOutcome::Completed { .. }
+        ));
+        assert_eq!(controller.run_id(), run_id);
+        let events = harness.event_types(run_id);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|kind| **kind == "run_completed")
+                .count(),
+            2
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|kind| **kind == "user_message_added")
+                .count(),
+            2
+        );
     }
 
     #[tokio::test]

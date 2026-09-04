@@ -61,5 +61,6 @@ pub use repository::{
 };
 pub use run::AgentRun;
 pub(crate) use service::AgentRuntimeV2Service;
+pub(crate) use sqlite::{AgentHistoryDetail, AgentHistoryEntry};
 pub use sqlite::{RecoveredRun, SqliteAgentDatabase, SCHEMA_VERSION};
 pub use state::{AgentRunStateV2, AgentStateError, AGENT_INVALID_TRANSITION};

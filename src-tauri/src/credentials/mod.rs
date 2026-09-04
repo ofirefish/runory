@@ -10,7 +10,7 @@ pub use platform::NativePlatformKeyStore;
 pub use platform::PlatformKeyStore;
 #[cfg(any(mobile, test))]
 pub use platform::UnavailablePlatformKeyStore;
-#[cfg(mobile)]
+#[cfg(any(mobile, test))]
 pub use portable::PortableCredentialVault;
 pub use service::{CredentialService, CredentialVault};
 #[cfg(not(mobile))]
