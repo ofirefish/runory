@@ -17,6 +17,10 @@ use super::controller::{
     AgentControllerConfig, AgentControllerError, AgentStores, RunBudget, RunOutcome,
 };
 use super::event::{AgentEvent, AgentEventEnvelope};
+use super::fleet_run::{
+    FleetFailurePolicyV2, FleetPlanError, FleetRunDraft, FleetRunStore, FleetRunV2, FleetStageDraft,
+};
+use super::fleet_target::FleetTargetBinding;
 use super::reasoner::Observation;
 use super::reasoner_planning::{HostSessionContext, PlanningReasoner};
 use super::repository::{
@@ -49,6 +53,7 @@ pub(crate) struct AgentRuntimeV2Service {
     database: Arc<SqliteAgentDatabase>,
     events: Arc<BroadcastingEventRepository>,
     active: Mutex<HashMap<Uuid, ActiveRun>>,
+    active_fleets: Mutex<HashMap<Uuid, FleetRunV2>>,
 }
 
 impl AgentRuntimeV2Service {
@@ -56,12 +61,67 @@ impl AgentRuntimeV2Service {
         let path = app_data_dir.join("runory-agent.db");
         let database = Arc::new(SqliteAgentDatabase::open(&path).map_err(store_error)?);
         database.recover_on_startup().map_err(store_error)?;
+        database.recover_fleet_runs().map_err(store_error)?;
         let events = Arc::new(BroadcastingEventRepository::new(database.clone()));
         Ok(Self {
             database,
             events,
             active: Mutex::new(HashMap::new()),
+            active_fleets: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub fn create_fleet_draft(
+        &self,
+        production: bool,
+        failure_policy: FleetFailurePolicyV2,
+        targets: Vec<FleetTargetBinding>,
+        stages: Vec<FleetStageDraft>,
+    ) -> AppResult<FleetRunV2> {
+        let run = FleetRunV2::draft(
+            FleetRunDraft {
+                production,
+                failure_policy,
+                targets,
+                stages,
+            },
+            super::run::now_epoch_ms(),
+        )
+        .map_err(fleet_plan_error)?;
+        self.database.insert_fleet_run(&run).map_err(store_error)?;
+        self.active_fleets
+            .lock()
+            .map_err(|_| AppError::Storage)?
+            .insert(run.id, run.clone());
+        Ok(run)
+    }
+
+    pub fn fleet_run(&self, id: Uuid) -> AppResult<FleetRunV2> {
+        if let Some(run) = self
+            .active_fleets
+            .lock()
+            .map_err(|_| AppError::Storage)?
+            .get(&id)
+            .cloned()
+        {
+            return Ok(run);
+        }
+        self.database
+            .get_fleet_run(id)
+            .map_err(store_error)?
+            .ok_or(AppError::InvalidOperation)
+    }
+
+    pub fn fleet_runs(&self) -> AppResult<Vec<FleetRunV2>> {
+        let mut runs = self.database.list_fleet_runs().map_err(store_error)?;
+        let active = self.active_fleets.lock().map_err(|_| AppError::Storage)?;
+        for run in &mut runs {
+            if let Some(live) = active.get(&run.id) {
+                *run = live.clone();
+            }
+        }
+        runs.sort_by_key(|run| (run.created_at_epoch_ms, run.id));
+        Ok(runs)
     }
 
     pub fn list_resumable_runs(&self) -> AppResult<Vec<AgentRun>> {
@@ -617,6 +677,18 @@ fn store_error(error: AgentStoreError) -> AppError {
         AgentStoreError::StoreCorrupt | AgentStoreError::MigrationFailed => AppError::Storage,
         AgentStoreError::PersistenceFailed | AgentStoreError::StoreUnavailable => AppError::Storage,
         _ => AppError::InvalidOperation,
+    }
+}
+
+fn fleet_plan_error(error: FleetPlanError) -> AppError {
+    match error {
+        FleetPlanError::InvalidTargets => AppError::AgentFleetTargetInvalid,
+        FleetPlanError::DependencyCycle => AppError::AgentFleetPlanCycle,
+        FleetPlanError::ProductionParallel => AppError::AgentFleetProductionParallelBlocked,
+        FleetPlanError::InvalidStages
+        | FleetPlanError::UnknownTarget
+        | FleetPlanError::InvalidDependency
+        | FleetPlanError::InvalidTransition => AppError::AgentFleetPlanInvalid,
     }
 }
 

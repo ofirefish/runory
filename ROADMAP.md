@@ -323,6 +323,10 @@ Status：Implemented（只读 HTTP JSON-RPC；HTTPS/loopback endpoint、Vault To
 
 Status：Implemented（最多 10 个活动 Session、结构化版本/服务漂移、多目标 ChangeSet 草稿；每个 Target 保持独立 ChangeSet ID/Version 审批。）
 
+2026-09-09 增量：`MULTI_SERVER_ORCHESTRATION.md` 已定义通用 Fleet Coordinator、目标/角色 Mention、父子 Runtime、目标依赖图和验证契约。M1 已加入前端纯解析/解析校验与 Rust 精确 `(profile_id, session_id, role)` 预检 IPC；多机对话执行、Autocomplete/Target Chips、Coordinator 和 Fleet Timeline 仍按该文档 M2–M7 交付，当前 UI 不得声称已经支持 `@服务器` 执行。
+
+同日 M2 增量：已加入 `FleetRunV2` / `FleetStage` / `FleetChildRun`、严格状态转换、无环依赖与生产并行校验、精确目标/阶段 Graph Digest，以及 `runory-agent.db` schema v3 的 content-free Fleet metadata repository。数据库读回对象始终为 `metadata-only`，启动时进行中的 Fleet 转为 `Interrupted`；现阶段只开放 Draft 创建/查看 IPC，不存在执行或审批旁路。
+
 最后再增加 Multi-target Context、Config / Version / Service Drift、Multi-server ChangeSet 与 target-specific approval。一次审批不得隐式扩大到未展示目标。
 
 ### 10G — Agentic Production Hardening

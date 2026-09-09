@@ -98,6 +98,86 @@ export type AgentV2StartResponse = {
   context: AgentV2DisplayContext;
 };
 
+export type AgentV2FleetTargetRequest = {
+  profileId: string;
+  sessionId: string;
+  role: string | null;
+};
+
+export type AgentV2FleetTargetBinding = AgentV2FleetTargetRequest & {
+  ordinal: number;
+};
+
+export type FleetExecutionStrategyV2 = "sequential" | "canary" | "rolling_batch" | "parallel";
+export type FleetFailurePolicyV2 = "stop" | "pause_for_review" | "continue" | "rollback";
+export type FleetRunStateV2 =
+  | "draft"
+  | "validating_targets"
+  | "investigating"
+  | "planning"
+  | "awaiting_approval"
+  | "executing"
+  | "verifying"
+  | "paused_for_review"
+  | "succeeded"
+  | "failed"
+  | "rolling_back"
+  | "rolled_back"
+  | "rollback_failed"
+  | "interrupted"
+  | "cancelled";
+export type FleetStageStateV2 =
+  | "pending"
+  | "ready"
+  | "running"
+  | "awaiting_approval"
+  | "verifying"
+  | "succeeded"
+  | "failed"
+  | "blocked"
+  | "cancelled"
+  | "rollback_pending"
+  | "rolled_back"
+  | "rollback_failed";
+
+export type FleetStageDraftV2 = {
+  id: string;
+  summary: string;
+  targetIds: string[];
+  dependsOn: string[];
+  executionStrategy: FleetExecutionStrategyV2;
+  concurrencyLimit: number;
+};
+
+export type FleetRunV2 = {
+  id: string;
+  version: number;
+  state: FleetRunStateV2;
+  production: boolean;
+  failurePolicy: FleetFailurePolicyV2;
+  targets: AgentV2FleetTargetBinding[];
+  stages: Array<FleetStageDraftV2 & { state: FleetStageStateV2 }>;
+  children: Array<{
+    stageId: string;
+    targetId: string;
+    agentRunId: string | null;
+    attempt: number;
+    state: FleetStageStateV2;
+    errorCode: string | null;
+  }>;
+  graphDigest: string;
+  recoveryState: "live" | "metadata_only";
+  createdAtEpochMs: number;
+  updatedAtEpochMs: number;
+};
+
+export type AgentV2FleetPlanDraftRequest = {
+  targets: AgentV2FleetTargetRequest[];
+  stages: FleetStageDraftV2[];
+  production: boolean;
+  failurePolicy: FleetFailurePolicyV2;
+};
+
 export type TimelineApproval = {
   approvalId: string;
   toolCallId: string;

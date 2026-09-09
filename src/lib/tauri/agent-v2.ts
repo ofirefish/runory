@@ -1,5 +1,14 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { AgentEventEnvelope, AgentHistoryDetail, AgentV2ResumableRun, AgentV2StartResponse } from "../../types/agent-v2";
+import type {
+  AgentEventEnvelope,
+  AgentHistoryDetail,
+  AgentV2FleetTargetBinding,
+  AgentV2FleetPlanDraftRequest,
+  AgentV2FleetTargetRequest,
+  AgentV2ResumableRun,
+  AgentV2StartResponse,
+  FleetRunV2,
+} from "../../types/agent-v2";
 
 export const listAgentHistory = (targetId: string | null) =>
   invoke<AgentV2ResumableRun[]>("agent_v2_history_list", { targetId });
@@ -49,3 +58,15 @@ export const listResumableAgentV2Runs = () =>
 
 export const bindResumableAgentV2Run = (runId: string, sessionId: string) =>
   invoke<void>("agent_v2_bind_resumable_run", { runId, sessionId });
+
+export const validateAgentV2FleetTargets = (targets: AgentV2FleetTargetRequest[]) =>
+  invoke<AgentV2FleetTargetBinding[]>("agent_v2_fleet_validate_targets", { request: { targets } });
+
+export const draftAgentV2FleetPlan = (request: AgentV2FleetPlanDraftRequest) =>
+  invoke<FleetRunV2>("agent_v2_fleet_plan_draft", { request });
+
+export const getAgentV2FleetPlan = (fleetRunId: string) =>
+  invoke<FleetRunV2>("agent_v2_fleet_plan_get", { fleetRunId });
+
+export const listAgentV2FleetPlans = () =>
+  invoke<FleetRunV2[]>("agent_v2_fleet_plan_list");

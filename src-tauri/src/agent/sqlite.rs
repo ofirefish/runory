@@ -14,12 +14,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use uuid::Uuid;
 
 use super::approval::{ApprovalRequest, ApprovalRequestState};
 use super::checkpoint::AgentCheckpoint;
 use super::decision::{PreparedCommandProposal, PreparedToolCall};
 use super::event::{AgentEvent, AgentEventEnvelope};
+use super::fleet_run::{
+    FleetChildRun, FleetRecoveryStateV2, FleetRunStateV2, FleetRunStore, FleetRunV2, FleetStage,
+};
+use super::fleet_target::FleetTargetBinding;
 use super::repository::{
     AgentEventRepository, AgentRunStore, AgentStoreError, ApprovalStore, CheckpointStore,
     PendingToolCallStore,
@@ -29,7 +35,7 @@ use super::state::AgentRunStateV2;
 use crate::agentic::context::redact_secrets;
 
 /// Current schema version written by this build.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const EMPTY_JSON_OBJECT: &str = "{}";
 const EMPTY_JSON_ARRAY: &str = "[]";
@@ -140,6 +146,7 @@ impl SqliteAgentDatabase {
             match version {
                 None => {
                     apply_v1(conn)?;
+                    apply_v3(conn)?;
                     conn.execute(
                         "INSERT INTO schema_version (version) VALUES (?1)",
                         params![SCHEMA_VERSION],
@@ -149,17 +156,20 @@ impl SqliteAgentDatabase {
                 }
                 Some(v) if v == SCHEMA_VERSION => Ok(()),
                 Some(v) if v < SCHEMA_VERSION => {
-                    if v == 1 && SCHEMA_VERSION >= 2 {
-                        apply_v2(conn)?;
-                        conn.execute(
-                            "INSERT INTO schema_version (version) VALUES (?1)",
-                            params![SCHEMA_VERSION],
-                        )
-                        .map_err(|_| AgentStoreError::MigrationFailed)?;
-                        Ok(())
-                    } else {
-                        Err(AgentStoreError::MigrationFailed)
+                    match v {
+                        1 => {
+                            apply_v2(conn)?;
+                            apply_v3(conn)?;
+                        }
+                        2 => apply_v3(conn)?,
+                        _ => return Err(AgentStoreError::MigrationFailed),
                     }
+                    conn.execute(
+                        "INSERT INTO schema_version (version) VALUES (?1)",
+                        params![SCHEMA_VERSION],
+                    )
+                    .map_err(|_| AgentStoreError::MigrationFailed)?;
+                    Ok(())
                 }
                 Some(_) => {
                     // Newer schema than this build understands — fail closed.
@@ -404,6 +414,58 @@ fn apply_v2(conn: &Connection) -> Result<(), AgentStoreError> {
     conn.execute_batch(
         "ALTER TABLE approval_requests ADD COLUMN change_set_id TEXT;
          ALTER TABLE approval_requests ADD COLUMN change_set_version INTEGER;",
+    )
+    .map_err(|_| AgentStoreError::MigrationFailed)
+}
+
+fn apply_v3(conn: &Connection) -> Result<(), AgentStoreError> {
+    conn.execute_batch(
+        "CREATE TABLE fleet_runs_v2 (
+            id TEXT PRIMARY KEY NOT NULL,
+            version INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            production INTEGER NOT NULL,
+            failure_policy TEXT NOT NULL,
+            graph_digest TEXT NOT NULL,
+            recovery_state TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+
+         CREATE TABLE fleet_targets_v2 (
+            fleet_run_id TEXT NOT NULL REFERENCES fleet_runs_v2(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            profile_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            role TEXT,
+            PRIMARY KEY (fleet_run_id, ordinal),
+            UNIQUE (fleet_run_id, profile_id),
+            UNIQUE (fleet_run_id, session_id)
+         );
+
+         CREATE TABLE fleet_stages_v2 (
+            fleet_run_id TEXT NOT NULL REFERENCES fleet_runs_v2(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            id TEXT NOT NULL,
+            target_ids TEXT NOT NULL,
+            dependency_ids TEXT NOT NULL,
+            execution_strategy TEXT NOT NULL,
+            concurrency_limit INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            PRIMARY KEY (fleet_run_id, id),
+            UNIQUE (fleet_run_id, ordinal)
+         );
+
+         CREATE TABLE fleet_child_runs_v2 (
+            fleet_run_id TEXT NOT NULL REFERENCES fleet_runs_v2(id) ON DELETE CASCADE,
+            stage_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            agent_run_id TEXT,
+            attempt INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            error_code TEXT,
+            PRIMARY KEY (fleet_run_id, stage_id, target_id, attempt)
+         );",
     )
     .map_err(|_| AgentStoreError::MigrationFailed)
 }
@@ -1136,6 +1198,387 @@ impl PendingToolCallStore for SqliteAgentDatabase {
     }
 }
 
+fn fleet_enum_name<T: Serialize>(value: T) -> Result<String, AgentStoreError> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .ok_or(AgentStoreError::PersistenceFailed)
+}
+
+fn parse_fleet_enum<T: DeserializeOwned>(raw: &str) -> Result<T, AgentStoreError> {
+    serde_json::from_value(serde_json::Value::String(raw.to_owned()))
+        .map_err(|_| AgentStoreError::StoreCorrupt)
+}
+
+fn checked_u64(value: i64) -> Result<u64, AgentStoreError> {
+    u64::try_from(value).map_err(|_| AgentStoreError::StoreCorrupt)
+}
+
+fn checked_usize(value: i64) -> Result<usize, AgentStoreError> {
+    usize::try_from(value).map_err(|_| AgentStoreError::StoreCorrupt)
+}
+
+fn write_fleet_run(
+    tx: &Transaction<'_>,
+    run: &FleetRunV2,
+    insert_only: bool,
+) -> Result<(), AgentStoreError> {
+    run.validate_metadata()
+        .map_err(|_| AgentStoreError::StoreCorrupt)?;
+    if insert_only {
+        let exists: Option<String> = tx
+            .query_row(
+                "SELECT id FROM fleet_runs_v2 WHERE id = ?1",
+                params![run.id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| AgentStoreError::PersistenceFailed)?;
+        if exists.is_some() {
+            return Err(AgentStoreError::RunAlreadyExists);
+        }
+    }
+    tx.execute(
+        "INSERT INTO fleet_runs_v2 (
+            id, version, state, production, failure_policy, graph_digest,
+            recovery_state, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(id) DO UPDATE SET
+            version = excluded.version,
+            state = excluded.state,
+            production = excluded.production,
+            failure_policy = excluded.failure_policy,
+            graph_digest = excluded.graph_digest,
+            recovery_state = excluded.recovery_state,
+            updated_at = excluded.updated_at",
+        params![
+            run.id.to_string(),
+            run.version as i64,
+            fleet_enum_name(run.state)?,
+            i64::from(run.production),
+            fleet_enum_name(run.failure_policy)?,
+            run.graph_digest.as_str(),
+            fleet_enum_name(run.recovery_state)?,
+            run.created_at_epoch_ms as i64,
+            run.updated_at_epoch_ms as i64,
+        ],
+    )
+    .map_err(|_| AgentStoreError::PersistenceFailed)?;
+
+    tx.execute(
+        "DELETE FROM fleet_child_runs_v2 WHERE fleet_run_id = ?1",
+        params![run.id.to_string()],
+    )
+    .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    tx.execute(
+        "DELETE FROM fleet_stages_v2 WHERE fleet_run_id = ?1",
+        params![run.id.to_string()],
+    )
+    .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    tx.execute(
+        "DELETE FROM fleet_targets_v2 WHERE fleet_run_id = ?1",
+        params![run.id.to_string()],
+    )
+    .map_err(|_| AgentStoreError::PersistenceFailed)?;
+
+    for target in &run.targets {
+        tx.execute(
+            "INSERT INTO fleet_targets_v2 (
+                fleet_run_id, ordinal, profile_id, session_id, role
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                run.id.to_string(),
+                target.ordinal as i64,
+                target.profile_id.to_string(),
+                target.session_id.to_string(),
+                target.role.as_deref(),
+            ],
+        )
+        .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    }
+    for (ordinal, stage) in run.stages.iter().enumerate() {
+        let target_ids = serde_json::to_string(&stage.target_ids)
+            .map_err(|_| AgentStoreError::PersistenceFailed)?;
+        let dependency_ids = serde_json::to_string(&stage.depends_on)
+            .map_err(|_| AgentStoreError::PersistenceFailed)?;
+        tx.execute(
+            "INSERT INTO fleet_stages_v2 (
+                fleet_run_id, ordinal, id, target_ids, dependency_ids,
+                execution_strategy, concurrency_limit, state
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                run.id.to_string(),
+                ordinal as i64,
+                stage.id.to_string(),
+                target_ids,
+                dependency_ids,
+                fleet_enum_name(stage.execution_strategy)?,
+                stage.concurrency_limit as i64,
+                fleet_enum_name(stage.state)?,
+            ],
+        )
+        .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    }
+    for child in &run.children {
+        tx.execute(
+            "INSERT INTO fleet_child_runs_v2 (
+                fleet_run_id, stage_id, target_id, agent_run_id, attempt, state, error_code
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                run.id.to_string(),
+                child.stage_id.to_string(),
+                child.target_id.to_string(),
+                child.agent_run_id.map(|id| id.to_string()),
+                child.attempt as i64,
+                fleet_enum_name(child.state)?,
+                child.error_code.as_deref(),
+            ],
+        )
+        .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    }
+    Ok(())
+}
+
+fn load_fleet_run(
+    conn: &Connection,
+    fleet_run_id: Uuid,
+) -> Result<Option<FleetRunV2>, AgentStoreError> {
+    let row = conn
+        .query_row(
+            "SELECT id, version, state, production, failure_policy, graph_digest,
+                    recovery_state, created_at, updated_at
+             FROM fleet_runs_v2 WHERE id = ?1",
+            params![fleet_run_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|_| AgentStoreError::StoreCorrupt)?;
+    let Some((
+        id,
+        version,
+        state,
+        production,
+        failure_policy,
+        graph_digest,
+        recovery,
+        created,
+        updated,
+    )) = row
+    else {
+        return Ok(None);
+    };
+
+    let mut target_stmt = conn
+        .prepare(
+            "SELECT ordinal, profile_id, session_id, role
+             FROM fleet_targets_v2 WHERE fleet_run_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    let target_rows = target_stmt
+        .query_map(params![id.clone()], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|_| AgentStoreError::StoreCorrupt)?;
+    let mut targets = Vec::new();
+    for target in target_rows {
+        let (ordinal, profile_id, session_id, role) =
+            target.map_err(|_| AgentStoreError::StoreCorrupt)?;
+        targets.push(FleetTargetBinding {
+            profile_id: parse_uuid(&profile_id)?,
+            session_id: parse_uuid(&session_id)?,
+            role,
+            ordinal: checked_usize(ordinal)?,
+        });
+    }
+
+    let mut stage_stmt = conn
+        .prepare(
+            "SELECT id, target_ids, dependency_ids, execution_strategy,
+                    concurrency_limit, state
+             FROM fleet_stages_v2 WHERE fleet_run_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    let stage_rows = stage_stmt
+        .query_map(params![id.clone()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|_| AgentStoreError::StoreCorrupt)?;
+    let mut stages = Vec::new();
+    for stage in stage_rows {
+        let (stage_id, target_ids, dependencies, strategy, concurrency, state) =
+            stage.map_err(|_| AgentStoreError::StoreCorrupt)?;
+        stages.push(FleetStage {
+            id: parse_uuid(&stage_id)?,
+            // Recovery is deliberately content-free. A recovered plan can be
+            // inspected as metadata but can never execute.
+            summary: String::new(),
+            target_ids: serde_json::from_str(&target_ids)
+                .map_err(|_| AgentStoreError::StoreCorrupt)?,
+            depends_on: serde_json::from_str(&dependencies)
+                .map_err(|_| AgentStoreError::StoreCorrupt)?,
+            execution_strategy: parse_fleet_enum(&strategy)?,
+            concurrency_limit: checked_usize(concurrency)?,
+            state: parse_fleet_enum(&state)?,
+        });
+    }
+
+    let mut child_stmt = conn
+        .prepare(
+            "SELECT stage_id, target_id, agent_run_id, attempt, state, error_code
+             FROM fleet_child_runs_v2 WHERE fleet_run_id = ?1
+             ORDER BY stage_id, target_id, attempt",
+        )
+        .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    let child_rows = child_stmt
+        .query_map(params![id.clone()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })
+        .map_err(|_| AgentStoreError::StoreCorrupt)?;
+    let mut children = Vec::new();
+    for child in child_rows {
+        let (stage_id, target_id, agent_run_id, attempt, state, error_code) =
+            child.map_err(|_| AgentStoreError::StoreCorrupt)?;
+        children.push(FleetChildRun {
+            stage_id: parse_uuid(&stage_id)?,
+            target_id: parse_uuid(&target_id)?,
+            agent_run_id: agent_run_id.as_deref().map(parse_uuid).transpose()?,
+            attempt: u32::try_from(attempt).map_err(|_| AgentStoreError::StoreCorrupt)?,
+            state: parse_fleet_enum(&state)?,
+            error_code,
+        });
+    }
+
+    let run = FleetRunV2::from_metadata(
+        parse_uuid(&id)?,
+        checked_u64(version)?,
+        parse_fleet_enum(&state)?,
+        match production {
+            0 => false,
+            1 => true,
+            _ => return Err(AgentStoreError::StoreCorrupt),
+        },
+        parse_fleet_enum(&failure_policy)?,
+        targets,
+        stages,
+        children,
+        graph_digest,
+        {
+            let _: FleetRecoveryStateV2 = parse_fleet_enum(&recovery)?;
+            // Database reads are always metadata-only. Only the live service's
+            // in-memory copy may retain execution payload and authority.
+            FleetRecoveryStateV2::MetadataOnly
+        },
+        checked_u64(created)?,
+        checked_u64(updated)?,
+    );
+    run.validate_metadata()
+        .map_err(|_| AgentStoreError::StoreCorrupt)?;
+    Ok(Some(run))
+}
+
+impl FleetRunStore for SqliteAgentDatabase {
+    fn insert_fleet_run(&self, run: &FleetRunV2) -> Result<(), AgentStoreError> {
+        self.with_tx(|tx| write_fleet_run(tx, run, true))
+    }
+
+    fn save_fleet_run(&self, run: &FleetRunV2) -> Result<(), AgentStoreError> {
+        self.with_tx(|tx| {
+            let exists: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM fleet_runs_v2 WHERE id = ?1",
+                    params![run.id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|_| AgentStoreError::PersistenceFailed)?;
+            if exists.is_none() {
+                return Err(AgentStoreError::RunNotFound);
+            }
+            write_fleet_run(tx, run, false)
+        })
+    }
+
+    fn get_fleet_run(&self, id: Uuid) -> Result<Option<FleetRunV2>, AgentStoreError> {
+        self.with_conn(|conn| load_fleet_run(conn, id))
+    }
+
+    fn list_fleet_runs(&self) -> Result<Vec<FleetRunV2>, AgentStoreError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT id FROM fleet_runs_v2 ORDER BY created_at, id")
+                .map_err(|_| AgentStoreError::PersistenceFailed)?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|_| AgentStoreError::StoreCorrupt)?;
+            let mut runs = Vec::new();
+            for row in rows {
+                let id = parse_uuid(&row.map_err(|_| AgentStoreError::StoreCorrupt)?)?;
+                runs.push(load_fleet_run(conn, id)?.ok_or(AgentStoreError::StoreCorrupt)?);
+            }
+            Ok(runs)
+        })
+    }
+
+    fn recover_fleet_runs(&self) -> Result<usize, AgentStoreError> {
+        self.with_tx(|tx| {
+            let interrupted = fleet_enum_name(FleetRunStateV2::Interrupted)?;
+            let changed = tx
+                .execute(
+                    "UPDATE fleet_runs_v2 SET state = ?1, updated_at = ?2
+                     WHERE state IN (?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        interrupted,
+                        now_ms() as i64,
+                        fleet_enum_name(FleetRunStateV2::ValidatingTargets)?,
+                        fleet_enum_name(FleetRunStateV2::Investigating)?,
+                        fleet_enum_name(FleetRunStateV2::Planning)?,
+                        fleet_enum_name(FleetRunStateV2::Executing)?,
+                        fleet_enum_name(FleetRunStateV2::Verifying)?,
+                        fleet_enum_name(FleetRunStateV2::RollingBack)?,
+                    ],
+                )
+                .map_err(|_| AgentStoreError::PersistenceFailed)?;
+            tx.execute(
+                "UPDATE fleet_runs_v2 SET recovery_state = ?1",
+                params![fleet_enum_name(FleetRecoveryStateV2::MetadataOnly)?],
+            )
+            .map_err(|_| AgentStoreError::PersistenceFailed)?;
+            Ok(changed)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1146,6 +1589,10 @@ mod tests {
         validate_decision, AgentDecision, CommandProposalRequest, ToolCallRequest,
     };
     use crate::agent::event::AgentEvent;
+    use crate::agent::fleet_run::{
+        FleetExecutionStrategyV2, FleetFailurePolicyV2, FleetRunDraft, FleetStageDraft,
+        FleetStageStateV2,
+    };
     use crate::agent::repository::{
         AgentEventRepository, AgentRunStore, ApprovalStore, CheckpointStore, PendingToolCallStore,
         AGENT_STORE_CORRUPT,
@@ -1189,17 +1636,58 @@ mod tests {
     }
 
     #[test]
-    fn schema_migrates_to_version_one() {
+    fn schema_migrates_to_current_version() {
         let db = SqliteAgentDatabase::open_in_memory().expect("open");
         let version: i64 = db
             .with_conn(|conn| {
-                conn.query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
-                    row.get(0)
-                })
+                conn.query_row(
+                    "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
                 .map_err(|_| AgentStoreError::StoreCorrupt)
             })
             .expect("version");
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn schema_version_two_migrates_to_content_free_fleet_tables() {
+        let directory = TempDir::new().expect("temp");
+        let path = directory.path().join("agent-v2.db");
+        {
+            let conn = Connection::open(&path).expect("open fixture");
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE schema_version (version INTEGER NOT NULL);",
+            )
+            .expect("schema table");
+            apply_v1(&conn).expect("v2 baseline tables");
+            conn.execute("INSERT INTO schema_version (version) VALUES (2)", [])
+                .expect("v2 marker");
+        }
+
+        let db = SqliteAgentDatabase::open(&path).expect("migrate v2");
+        db.with_conn(|conn| {
+            let version: i64 = conn
+                .query_row(
+                    "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|_| AgentStoreError::StoreCorrupt)?;
+            let fleet_table: String = conn
+                .query_row(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'fleet_runs_v2'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|_| AgentStoreError::StoreCorrupt)?;
+            assert_eq!(version, SCHEMA_VERSION);
+            assert_eq!(fleet_table, "fleet_runs_v2");
+            Ok(())
+        })
+        .expect("verify migration");
     }
 
     #[test]
@@ -1541,5 +2029,121 @@ mod tests {
         let back: RunMetrics = serde_json::from_str(&stored).expect("deserialize");
         assert_eq!(back.reasoner_rounds, 1);
         assert_eq!(back.auto_authorized_tools, 1);
+    }
+
+    fn fleet_run(state: FleetRunStateV2) -> FleetRunV2 {
+        let targets = vec![
+            FleetTargetBinding {
+                profile_id: Uuid::new_v4(),
+                session_id: Uuid::new_v4(),
+                role: Some("source".into()),
+                ordinal: 0,
+            },
+            FleetTargetBinding {
+                profile_id: Uuid::new_v4(),
+                session_id: Uuid::new_v4(),
+                role: Some("replica".into()),
+                ordinal: 1,
+            },
+        ];
+        let mut run = FleetRunV2::draft(
+            FleetRunDraft {
+                production: true,
+                failure_policy: FleetFailurePolicyV2::PauseForReview,
+                stages: vec![FleetStageDraft {
+                    id: Uuid::new_v4(),
+                    summary: "configure with password=do-not-persist".into(),
+                    target_ids: targets.iter().map(|target| target.profile_id).collect(),
+                    depends_on: vec![],
+                    execution_strategy: FleetExecutionStrategyV2::Sequential,
+                    concurrency_limit: 1,
+                }],
+                targets,
+            },
+            100,
+        )
+        .expect("fleet draft");
+        if state != FleetRunStateV2::Draft {
+            run.state = state;
+        }
+        run
+    }
+
+    #[test]
+    fn fleet_metadata_round_trips_without_stage_summary() {
+        let db = SqliteAgentDatabase::open_in_memory().expect("open");
+        let mut run = fleet_run(FleetRunStateV2::Draft);
+        let stage_id = run.stages[0].id;
+        let target_id = run.targets[0].profile_id;
+        run.children.push(FleetChildRun {
+            stage_id,
+            target_id,
+            agent_run_id: None,
+            attempt: 1,
+            state: FleetStageStateV2::Pending,
+            error_code: None,
+        });
+        FleetRunStore::insert_fleet_run(&db, &run).expect("insert fleet");
+
+        let loaded = FleetRunStore::get_fleet_run(&db, run.id)
+            .expect("load fleet")
+            .expect("fleet exists");
+        assert_eq!(loaded.id, run.id);
+        assert_eq!(loaded.targets, run.targets);
+        assert_eq!(loaded.stages[0].summary, "");
+        assert_eq!(loaded.children, run.children);
+        assert_eq!(loaded.recovery_state, FleetRecoveryStateV2::MetadataOnly);
+        let mut recovered = loaded.clone();
+        assert!(recovered
+            .transition_to(FleetRunStateV2::ValidatingTargets, 200)
+            .is_err());
+
+        let persisted_text = db
+            .with_conn(|conn| {
+                let stage_json: String = conn
+                    .query_row(
+                        "SELECT target_ids || dependency_ids FROM fleet_stages_v2 WHERE fleet_run_id = ?1",
+                        params![run.id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .map_err(|_| AgentStoreError::StoreCorrupt)?;
+                Ok(stage_json)
+            })
+            .expect("persisted fleet text");
+        assert!(!persisted_text.contains("do-not-persist"));
+        assert!(!persisted_text.to_ascii_lowercase().contains("password"));
+    }
+
+    #[test]
+    fn startup_recovery_interrupts_in_flight_fleet_and_invalidates_live_payload() {
+        let db = SqliteAgentDatabase::open_in_memory().expect("open");
+        let run = fleet_run(FleetRunStateV2::Executing);
+        FleetRunStore::insert_fleet_run(&db, &run).expect("insert fleet");
+
+        assert_eq!(FleetRunStore::recover_fleet_runs(&db).expect("recover"), 1);
+        let loaded = FleetRunStore::get_fleet_run(&db, run.id)
+            .expect("load fleet")
+            .expect("fleet exists");
+        assert_eq!(loaded.state, FleetRunStateV2::Interrupted);
+        assert_eq!(loaded.recovery_state, FleetRecoveryStateV2::MetadataOnly);
+    }
+
+    #[test]
+    fn corrupt_fleet_graph_fails_closed() {
+        let db = SqliteAgentDatabase::open_in_memory().expect("open");
+        let run = fleet_run(FleetRunStateV2::Draft);
+        FleetRunStore::insert_fleet_run(&db, &run).expect("insert fleet");
+        db.with_conn(|conn| {
+            conn.execute(
+                "UPDATE fleet_stages_v2 SET target_ids = 'not-json' WHERE fleet_run_id = ?1",
+                params![run.id.to_string()],
+            )
+            .map_err(|_| AgentStoreError::PersistenceFailed)?;
+            Ok(())
+        })
+        .expect("corrupt fixture");
+
+        let error = FleetRunStore::get_fleet_run(&db, run.id).expect_err("corrupt fleet");
+        assert_eq!(error, AgentStoreError::StoreCorrupt);
     }
 }

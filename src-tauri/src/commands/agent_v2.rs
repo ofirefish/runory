@@ -5,7 +5,9 @@ use tauri::{ipc::Channel, AppHandle, State};
 use uuid::Uuid;
 
 use crate::agent::{
-    AgentEvent, AgentEventEnvelope, AgentRun, AgentRuntimeV2Service, HostSessionContext,
+    validate_fleet_target_shape, AgentEvent, AgentEventEnvelope, AgentRun, AgentRuntimeV2Service,
+    FleetFailurePolicyV2, FleetRunV2, FleetStageDraft, FleetTargetBinding, FleetTargetRequest,
+    HostSessionContext,
 };
 use crate::agentic::ModelGateway;
 use crate::domain::{AppResult, SessionId};
@@ -60,6 +62,85 @@ pub struct AgentV2ResumableRun {
 pub struct AgentV2StartResponse {
     pub run_id: Uuid,
     pub context: AgentV2DisplayContext,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2FleetTargetValidationRequest {
+    pub targets: Vec<FleetTargetRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2FleetPlanDraftRequest {
+    pub targets: Vec<FleetTargetRequest>,
+    pub stages: Vec<FleetStageDraft>,
+    pub production: bool,
+    pub failure_policy: FleetFailurePolicyV2,
+}
+
+async fn exact_fleet_bindings(
+    targets: Vec<FleetTargetRequest>,
+    sessions: &ServerSessionManager,
+) -> AppResult<Vec<FleetTargetBinding>> {
+    let roles = validate_fleet_target_shape(&targets)?;
+    let mut bindings = Vec::with_capacity(targets.len());
+    for (ordinal, (target, role)) in targets.into_iter().zip(roles).enumerate() {
+        if sessions.profile_id(target.session_id).await? != target.profile_id {
+            return Err(crate::domain::AppError::AgentFleetTargetMismatch);
+        }
+        bindings.push(FleetTargetBinding {
+            profile_id: target.profile_id,
+            session_id: target.session_id,
+            role,
+            ordinal,
+        });
+    }
+    Ok(bindings)
+}
+
+/// Revalidates frontend-resolved mentions against live Rust-owned sessions.
+/// This command only returns exact bindings; it creates no run and performs no
+/// remote action.
+#[tauri::command]
+pub async fn agent_v2_fleet_validate_targets(
+    request: AgentV2FleetTargetValidationRequest,
+    sessions: State<'_, ServerSessionManager>,
+) -> AppResult<Vec<FleetTargetBinding>> {
+    exact_fleet_bindings(request.targets, &sessions).await
+}
+
+/// Creates a validated live Fleet draft. It schedules no child run and causes
+/// no remote side effect; later milestones attach the coordinator and approval
+/// flow to this domain object.
+#[tauri::command]
+pub async fn agent_v2_fleet_plan_draft(
+    request: AgentV2FleetPlanDraftRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    sessions: State<'_, ServerSessionManager>,
+) -> AppResult<FleetRunV2> {
+    let targets = exact_fleet_bindings(request.targets, &sessions).await?;
+    runtime.create_fleet_draft(
+        request.production,
+        request.failure_policy,
+        targets,
+        request.stages,
+    )
+}
+
+#[tauri::command]
+pub fn agent_v2_fleet_plan_get(
+    fleet_run_id: Uuid,
+    runtime: State<'_, AgentRuntimeV2Service>,
+) -> AppResult<FleetRunV2> {
+    runtime.fleet_run(fleet_run_id)
+}
+
+#[tauri::command]
+pub fn agent_v2_fleet_plan_list(
+    runtime: State<'_, AgentRuntimeV2Service>,
+) -> AppResult<Vec<FleetRunV2>> {
+    runtime.fleet_runs()
 }
 
 #[derive(Debug, Serialize)]

@@ -14,6 +14,8 @@ mod decision;
 mod dispatch;
 mod event;
 mod facts;
+mod fleet_run;
+mod fleet_target;
 mod gate;
 mod metrics;
 mod reasoner;
@@ -47,6 +49,10 @@ pub use decision::{
 };
 pub use dispatch::{ToolDispatcher, ToolOutcome};
 pub use event::{AgentEvent, AgentEventEnvelope};
+pub(crate) use fleet_run::{FleetFailurePolicyV2, FleetRunV2, FleetStageDraft};
+pub(crate) use fleet_target::{
+    validate_fleet_target_shape, FleetTargetBinding, FleetTargetRequest,
+};
 pub use gate::{
     Authorization, AuthorizationGate, AutoAuthorizationGate, CommandAuthorization,
     FixedPolicyMatcher, FnAuthorizationGate, PolicySnapshotMatcher, AGENT_POLICY_DENIED,

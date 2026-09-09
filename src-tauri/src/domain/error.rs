@@ -115,6 +115,18 @@ pub enum AppError {
     UnsupportedRemote,
     #[error("invalid infrastructure operation")]
     InvalidOperation,
+    #[error("multi-server target selection is invalid")]
+    AgentFleetTargetInvalid,
+    #[error("multi-server target does not match the live SSH session")]
+    AgentFleetTargetMismatch,
+    #[error("multi-server target limit exceeded")]
+    AgentFleetTargetLimit,
+    #[error("multi-server plan is invalid")]
+    AgentFleetPlanInvalid,
+    #[error("multi-server plan contains a dependency cycle")]
+    AgentFleetPlanCycle,
+    #[error("production parallel fleet execution is blocked")]
+    AgentFleetProductionParallelBlocked,
     #[error("credential vault is locked")]
     VaultLocked,
     #[error("credential vault password is invalid")]
@@ -247,6 +259,12 @@ impl AppError {
             Self::ExecOutputLimit => "EXEC_OUTPUT_LIMIT",
             Self::UnsupportedRemote => "UNSUPPORTED_REMOTE",
             Self::InvalidOperation => "INVALID_OPERATION",
+            Self::AgentFleetTargetInvalid => "AGENT_FLEET_TARGET_INVALID",
+            Self::AgentFleetTargetMismatch => "AGENT_FLEET_TARGET_MISMATCH",
+            Self::AgentFleetTargetLimit => "AGENT_FLEET_TARGET_LIMIT",
+            Self::AgentFleetPlanInvalid => "AGENT_FLEET_PLAN_INVALID",
+            Self::AgentFleetPlanCycle => "AGENT_FLEET_PLAN_CYCLE",
+            Self::AgentFleetProductionParallelBlocked => "AGENT_FLEET_PRODUCTION_PARALLEL_BLOCKED",
             Self::VaultLocked => "VAULT_LOCKED",
             Self::VaultInvalid => "VAULT_INVALID",
             Self::PlatformKeyStoreUnavailable => "PLATFORM_KEY_STORE_UNAVAILABLE",

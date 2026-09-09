@@ -1292,6 +1292,9 @@ Runory Managed AI (future)
 
 # 44. 多服务器 Agent
 
+通用多机协同的目标解析、父子 Runtime、阶段依赖、Fleet ChangeSet、验证与恢复规范见
+`MULTI_SERVER_ORCHESTRATION.md`。该规范不改变本章的 Target Scope、审批和逐目标风险边界。
+
 成熟后支持：
 
 ```text
