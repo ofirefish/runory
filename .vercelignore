@@ -1,0 +1,23 @@
+# Keep the monorepo root so Vercel can resolve the configured apps/web directory.
+# Leading slashes limit these exclusions to unrelated root-level directories.
+/.git/
+/.github/
+/.pnpm-store/
+/.vercel/
+/.workbuddy/
+/dist/
+/docs/
+/node_modules/
+/scripts/
+/src/
+/src-tauri/
+/supabase/
+/tests/
+/apps/web/.next*/
+/apps/web/.vercel/
+/apps/web/node_modules/
+/.env*
+/*.key
+/*.key.pub
+/*.tsbuildinfo
+/tmp_*

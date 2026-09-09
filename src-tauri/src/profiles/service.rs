@@ -4,8 +4,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::domain::{
-    AppError, AppResult, AuthMethod, CreateProfileRequest, OsDistribution, ReorderProfilesRequest,
-    ServerProfile, UpdateProfileRequest,
+    AppError, AppResult, AuthMethod, ConnectionRoute, CreateProfileRequest, OsDistribution,
+    ReorderProfilesRequest, ServerProfile, UpdateProfileRequest,
 };
 use crate::groups::{timestamp, GroupRepository};
 
@@ -53,6 +53,7 @@ impl ProfileService {
         let _guard = self.write_lock.lock().await;
         self.validate_group(request.group_id).await?;
         let mut profiles = self.profiles.list().await?;
+        validate_route(&request.connection_route, None, &profiles)?;
         let now = timestamp();
         let profile = ServerProfile {
             id: uuid::Uuid::new_v4(),
@@ -63,6 +64,7 @@ impl ProfileService {
             group_id: request.group_id,
             auth_method: request.auth_method,
             key_source,
+            connection_route: request.connection_route,
             sort_order: next_sort_order(&profiles, request.group_id),
             created_at: now.clone(),
             updated_at: now,
@@ -83,6 +85,14 @@ impl ProfileService {
         let _guard = self.write_lock.lock().await;
         self.validate_group(request.group_id).await?;
         let mut profiles = self.profiles.list().await?;
+        validate_route(&request.connection_route, Some(request.id), &profiles)?;
+        if request.connection_route != ConnectionRoute::Direct
+            && profiles.iter().any(|profile| {
+                matches!(profile.connection_route, ConnectionRoute::JumpHost { profile_id } if profile_id == request.id)
+            })
+        {
+            return Err(AppError::ProfileInUseAsJumpHost);
+        }
         let existing = profiles
             .iter()
             .find(|profile| profile.id == request.id)
@@ -105,6 +115,7 @@ impl ProfileService {
         profile.group_id = request.group_id;
         profile.auth_method = request.auth_method;
         profile.key_source = key_source;
+        profile.connection_route = request.connection_route;
         profile.sort_order = sort_order;
         if endpoint_changed {
             profile.os_distribution = None;
@@ -118,6 +129,11 @@ impl ProfileService {
     pub async fn delete(&self, id: uuid::Uuid) -> AppResult<()> {
         let _guard = self.write_lock.lock().await;
         let mut profiles = self.profiles.list().await?;
+        if profiles.iter().any(|profile| {
+            matches!(profile.connection_route, ConnectionRoute::JumpHost { profile_id } if profile_id == id)
+        }) {
+            return Err(AppError::ProfileInUseAsJumpHost);
+        }
         let original_len = profiles.len();
         profiles.retain(|profile| profile.id != id);
         if profiles.len() == original_len {
@@ -191,6 +207,27 @@ impl ProfileService {
     }
 }
 
+fn validate_route(
+    route: &ConnectionRoute,
+    current_id: Option<uuid::Uuid>,
+    profiles: &[ServerProfile],
+) -> AppResult<()> {
+    let ConnectionRoute::JumpHost { profile_id } = route else {
+        return Ok(());
+    };
+    if Some(*profile_id) == current_id {
+        return Err(AppError::InvalidJumpHost);
+    }
+    let jump = profiles
+        .iter()
+        .find(|profile| profile.id == *profile_id)
+        .ok_or(AppError::InvalidJumpHost)?;
+    if jump.connection_route != ConnectionRoute::Direct {
+        return Err(AppError::InvalidJumpHost);
+    }
+    Ok(())
+}
+
 fn validate_fields(
     name: String,
     host: String,
@@ -255,6 +292,19 @@ mod tests {
         storage::CatalogDatabase,
     };
 
+    fn profile_request(name: &str, connection_route: ConnectionRoute) -> CreateProfileRequest {
+        CreateProfileRequest {
+            name: name.into(),
+            host: format!("{}.example.com", name.to_lowercase()),
+            port: 22,
+            username: "root".into(),
+            group_id: None,
+            auth_method: AuthMethod::Password,
+            key_source: None,
+            connection_route,
+        }
+    }
+
     #[tokio::test]
     async fn creates_updates_and_deletes_profile_metadata() {
         let directory = tempfile::tempdir().expect("temp directory");
@@ -288,6 +338,7 @@ mod tests {
                 group_id: Some(group.id),
                 auth_method: AuthMethod::Password,
                 key_source: None,
+                connection_route: ConnectionRoute::Direct,
             })
             .await
             .expect("create profile");
@@ -310,6 +361,7 @@ mod tests {
                 key_source: Some(crate::domain::KeySource::File {
                     path: "C:/keys/id_ed25519".into(),
                 }),
+                connection_route: ConnectionRoute::Direct,
                 sort_order: 0,
             })
             .await
@@ -369,6 +421,7 @@ mod tests {
                         group_id: Some(group.id),
                         auth_method: AuthMethod::Password,
                         key_source: None,
+                        connection_route: ConnectionRoute::Direct,
                     })
                     .await
                     .expect("create profile")
@@ -407,6 +460,7 @@ mod tests {
                 group_id: None,
                 auth_method: AuthMethod::Password,
                 key_source: None,
+                connection_route: ConnectionRoute::Direct,
             })
             .await
             .expect("create outside profile");
@@ -420,10 +474,71 @@ mod tests {
                 group_id: Some(group.id),
                 auth_method: outside.auth_method,
                 key_source: outside.key_source,
+                connection_route: ConnectionRoute::Direct,
                 sort_order: outside.sort_order,
             })
             .await
             .expect("move profile");
         assert_eq!(moved.sort_order, 3);
+    }
+
+    #[tokio::test]
+    async fn enforces_single_hop_routes_and_preserves_referenced_jump_hosts() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let database = CatalogDatabase::open(directory.path().join("runory.db")).expect("open");
+        let service = ProfileService::new(
+            ProfileRepository::new(database.clone()),
+            GroupRepository::new(database),
+            Arc::new(Mutex::new(())),
+        );
+
+        let jump = service
+            .create(profile_request("Jump", ConnectionRoute::Direct))
+            .await
+            .expect("create jump host");
+        let target = service
+            .create(profile_request(
+                "Target",
+                ConnectionRoute::JumpHost {
+                    profile_id: jump.id,
+                },
+            ))
+            .await
+            .expect("create target");
+
+        assert!(matches!(
+            service
+                .create(profile_request(
+                    "Nested",
+                    ConnectionRoute::JumpHost {
+                        profile_id: target.id,
+                    },
+                ))
+                .await,
+            Err(AppError::InvalidJumpHost)
+        ));
+        assert!(matches!(
+            service.delete(jump.id).await,
+            Err(AppError::ProfileInUseAsJumpHost)
+        ));
+
+        let update_jump = UpdateProfileRequest {
+            id: jump.id,
+            name: jump.name,
+            host: jump.host,
+            port: jump.port,
+            username: jump.username,
+            group_id: jump.group_id,
+            auth_method: jump.auth_method,
+            key_source: jump.key_source,
+            connection_route: ConnectionRoute::JumpHost {
+                profile_id: target.id,
+            },
+            sort_order: jump.sort_order,
+        };
+        assert!(matches!(
+            service.update(update_jump).await,
+            Err(AppError::InvalidJumpHost) | Err(AppError::ProfileInUseAsJumpHost)
+        ));
     }
 }

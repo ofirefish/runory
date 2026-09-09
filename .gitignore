@@ -1,5 +1,7 @@
 node_modules/
 dist/
+apps/web/.next/
+apps/web/.next-*/
 src-tauri/target/
 src-tauri/gen/android/.gradle/
 src-tauri/gen/android/build/
@@ -17,3 +19,9 @@ src-tauri/gen/android/local.properties
 .DS_Store
 tests/ssh-server/host-keys/
 tests/ssh-server/generated/
+
+.vercel
+
+# Updater signing private key
+runory-updater.key
+supabase/.temp/

@@ -12,9 +12,11 @@ export type HostVerification = {
   keyType: string;
   fingerprint: string;
   status: "unknown" | "trusted";
+  routeScope?: string;
 };
 
 export type KnownHost = {
+  routeScope: string;
   host: string;
   port: number;
   keyType: string;
@@ -27,8 +29,15 @@ export type ConnectRequest = {
   verificationAttemptId: string;
   profileId: string;
   credential: CredentialInput;
+  jumpPreparationId?: string;
   cols: number;
   rows: number;
+};
+
+export type PrepareJumpConnectionResponse = {
+  preparationId: string;
+  targetVerification: HostVerification;
+  jumpCredentialSaved: boolean;
 };
 
 export type TestConnectionRequest = Omit<ConnectRequest, "cols" | "rows">;

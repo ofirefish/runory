@@ -44,6 +44,35 @@ pnpm cloud:auth:verify
 
 `invite.html` 是 Supabase Auth 的账号邀请模板。Runory Organization 成员邀请当前仍是应用内邀请，不会把 Service Role Key 放入客户端来发送管理端邀请邮件。
 
+### 2.1 Google OAuth readiness
+
+Google 登录使用系统浏览器、Supabase PKCE 和 `runory://auth/callback` 应用深链。Google Client Secret 只配置在 Supabase Auth，禁止写入 Vite 环境变量、客户端包或仓库。
+
+1. 在 Google Auth Platform 创建 Web OAuth Client。
+2. Google 的 Authorized redirect URI 必须填写目标 Supabase Project 的回调地址：`https://<project-ref>.supabase.co/auth/v1/callback`。
+3. 在 Supabase Dashboard 的 Authentication → Providers → Google 中启用 Provider，并填写 Client ID 与 Client Secret。
+4. 在 Authentication → URL Configuration 的 Redirect URLs 中加入精确值 `runory://auth/callback`；不要使用通配的自定义 Scheme。
+5. 分别在 Staging 的已安装 Windows、macOS、Linux 包以及 Android/iOS 构建中验证：成功、用户取消、错误账号、重复回调与应用已运行时回调。
+
+本地 `supabase/config.toml` 已允许该应用深链，但 Google Provider 默认不启用，避免仓库配置依赖开发者私密凭据。需要本地联调时，按 Supabase 当前 Google Provider 文档通过环境变量提供 Client Secret，不得提交该值。
+
+### 2.2 GitHub OAuth readiness
+
+GitHub 登录复用同一套系统浏览器、PKCE 和精确应用深链。GitHub Client Secret 只能配置在 Supabase Auth，不得进入客户端环境变量、应用包或仓库。
+
+这条登录链路包含两个不同的回调地址，不能互换：
+
+- GitHub OAuth App 的 **Authorization callback URL** 指向 Supabase Auth：`https://<project-ref>.supabase.co/auth/v1/callback`。
+- Supabase Auth 的 **Redirect URLs** 包含 Runory 应用深链：`runory://auth/callback`。
+
+GitHub OAuth App 不应填写 `runory://auth/callback`。Client ID 也必须来自登记了当前 Supabase Project 回调地址的同一个 OAuth App。Staging、Production 与本地环境应分别使用独立的 GitHub OAuth App，避免单一回调地址互相覆盖。
+
+1. 在 GitHub Developer Settings 创建 OAuth App，关闭 Device Flow。
+2. Authorization callback URL 必须填写目标 Supabase Project 显示的回调地址：`https://<project-ref>.supabase.co/auth/v1/callback`；本仓库本地联调使用 `http://localhost:54521/auth/v1/callback`。
+3. 在 Supabase Dashboard 的 Authentication → Providers → GitHub 中启用 Provider，并填写 Client ID 与 Client Secret。
+4. 确认 Authentication → URL Configuration 的 Redirect URLs 已包含精确值 `runory://auth/callback`。
+5. 在 Staging 已安装包中验证成功、用户取消、Provider 未返回公开邮箱、重复回调与应用已运行时回调。Runory 不请求仓库等额外 GitHub 权限，也不保存 Provider Token。
+
 ## 3. Migration verification
 
 Runory 的本地 Supabase 栈使用隔离的 `54520`–`54529` 端口段，避免与同一工作站上的其他默认 Supabase 项目互相停止或抢占端口。本地 Auth Site URL 与 Tauri/Vite 开发地址统一为 `http://localhost:1420`。
@@ -54,7 +83,7 @@ Runory 的本地 Supabase 栈使用隔离的 `54520`–`54529` 端口段，避�
 pnpm cloud:db:verify
 ```
 
-该命令依次执行 63 项 pgTAP 测试、`plpgsql_check` Lint，以及会阻止 Warning/Error 的 Security/Performance Advisors。pgTAP 同时断言关键外键/保留索引存在，避免 Advisor 的全新数据库 `unused_index` 信息掩盖索引回归。
+该命令依次执行完整 pgTAP 测试集、`plpgsql_check` Lint，以及会阻止 Warning/Error 的 Security/Performance Advisors。pgTAP 同时断言关键外键/保留索引存在，避免 Advisor 的全新数据库 `unused_index` 信息掩盖索引回归。
 
 远端发布前先查看 CLI 当前参数：
 
@@ -81,6 +110,15 @@ pnpm exec supabase migration list
 - `anon` 对 Runory 业务表没有权限；`authenticated` 只有 migration 中的显式 GRANT 与 RLS。
 - `runory-audit-retention-daily` 每天 03:17 UTC 调用私有保留函数，每次最多清理 10,000 条超过 180 天的记录；Cron schema 与函数均不可被客户端访问。
 - 部署完成后重新生成并核对 TypeScript Database Types。
+
+Runory Managed AI 还需要把厂商密钥作为 Function Secret 部署，并发布窄接口；这些密钥不得出现在 `VITE_` 变量、客户端包或日志中：
+
+```text
+pnpm exec supabase secrets set --env-file .env.managed-ai-secrets
+pnpm exec supabase functions deploy agent-turn
+```
+
+`.env.managed-ai-secrets` 必须保持在 Git 忽略范围内，且至少配置当前 `model_price_versions` 路由实际使用的厂商密钥。发布后使用已登录的 Staging 账号验证：工作区成员校验、积分不足、重复幂等键、正常结算、厂商失败释放，以及十分钟后过期预留回收。
 
 ## 5. Signed offline policy decisions
 
@@ -133,7 +171,7 @@ pnpm cloud:remote:test
 pnpm cloud:remote:check
 ```
 
-`cloud:remote:check` 不访问远端；它会验证七个本地 Migration 版本唯一、Policy Function 保持 `verify_jwt = true`、`.env.cloud.example` 完整，以及 Auth/Edge 静态门禁通过。当前工作站若没有 `.env.cloud` 或没有执行项目 Link，只把它们报告为外部 blocker。
+`cloud:remote:check` 不访问远端；它会验证本地 Migration 版本唯一、Policy 与 Managed AI Function 保持 `verify_jwt = true`、`.env.cloud.example` 完整，以及 Auth/Edge 静态门禁通过。当前工作站若没有 `.env.cloud` 或没有执行项目 Link，只把它们报告为外部 blocker。
 
 由发布人员核对目标确实是 Staging 后，显式执行一次：
 

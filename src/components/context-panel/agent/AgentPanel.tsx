@@ -11,17 +11,19 @@ import {
   rejectAgentV2Run,
   replyAgentV2Run,
   resumeAgentV2Run,
+  retryAgentV2Run,
   startAgentV2Run,
   subscribeAgentV2Run,
 } from "../../../lib/tauri/agent-v2";
 import type { AgentTimelineView } from "../../../types/agent-v2";
 import type { ServerProfile } from "../../../types/domain";
 import type { SessionState } from "../../../types/session";
+import { osLogoDictionary } from "../../../features/profiles/os-logo-data";
 import { AgentComposer } from "./AgentComposer";
 import { AgentEmptyState } from "./AgentEmptyState";
 import { AgentHeader } from "./AgentHeader";
 import { AgentTimeline } from "./AgentTimeline";
-import { AgentRunError } from "./AgentRunError";
+import { AgentRunError, isRetryableAgentError } from "./AgentRunError";
 import { IncidentHistoryPopover } from "./IncidentHistoryPopover";
 import { IncidentHistoryPanel } from "./IncidentHistoryPanel";
 import type { HistoryItem } from "./incident-history";
@@ -37,6 +39,7 @@ import {
   timelinePhase,
 } from "./agent-timeline-utils";
 import { useAgentViewStore } from "./agent-view-store";
+import { useCloudIdentityStore } from "../../../stores/cloud-identity-store";
 
 type ServerTimeline = AgentTimelineView;
 
@@ -66,6 +69,7 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   const [nowEpochMs, setNowEpochMs] = useState(Date.now());
   const expanded = useAgentViewStore((store) => store.expanded);
   const toggleExpanded = useAgentViewStore((store) => store.toggleExpanded);
+  const userAvatarUrl = useCloudIdentityStore((store) => store.avatarUrl);
   const lastSeqRef = useRef<Record<string, number>>({});
 
   const serverKey = profile?.id ?? "none";
@@ -130,7 +134,7 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
         running: ["running", "reasoning", "acting"].includes(match.run.state),
         runState: match.run.state,
         displayContext: {
-          os: "Linux",
+          os: profile.osDistribution ? osLogoDictionary[profile.osDistribution].label : "Linux",
           user: profile.username,
           directory: profile.username === "root" ? "/root" : `/home/${profile.username}`,
         },
@@ -171,6 +175,23 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
     }
   };
 
+  const retryFailedRun = async () => {
+    if (!sessionId || !model.runId || actionBusy || running || targetMismatch) return;
+    if (!isRetryableAgentError(model.lastErrorCode)) return;
+    setActionBusy(true);
+    patch({ lastErrorCode: null, running: true });
+    window.dispatchEvent(new Event("runory:agent-run"));
+    try {
+      await bindResumableAgentV2Run(model.runId, sessionId);
+      await bindSubscription(model.runId);
+      await retryAgentV2Run(model.runId);
+    } catch (error) {
+      patch({ lastErrorCode: appErrorCode(error), running: false });
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const cancelRun = () => {
     if (!model.runId) return;
     void cancelAgentV2Run(model.runId).finally(() => {
@@ -199,12 +220,15 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
 
   const approvalAction = async (approve: boolean) => {
     if (!model.runId || !sessionId || targetMismatch || !model.pendingApproval || actionBusy) return;
+    const runId = model.runId;
+    const approvalId = model.pendingApproval.approvalId;
     setActionBusy(true);
+    patch({ lastErrorCode: null });
     window.dispatchEvent(new Event("runory:agent-run"));
     try {
-      await bindResumableAgentV2Run(model.runId, sessionId);
-      if (approve) await approveAgentV2Run(model.runId);
-      else await rejectAgentV2Run(model.runId);
+      await bindResumableAgentV2Run(runId, sessionId);
+      if (approve) await approveAgentV2Run(runId, approvalId);
+      else await rejectAgentV2Run(runId, approvalId);
     } catch (error) {
       patch({ lastErrorCode: appErrorCode(error) });
     } finally {
@@ -259,7 +283,7 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
   const paused = model.runState === "paused";
   const hasTimeline = model.events.length > 0;
   const displayContext = model.displayContext ?? (profile ? {
-    os: "Linux",
+    os: profile.osDistribution ? osLogoDictionary[profile.osDistribution].label : "Linux",
     user: profile.username,
     directory: profile.username === "root" ? "/root" : `/home/${profile.username}`,
   } : undefined);
@@ -289,6 +313,7 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
         <AgentTimeline
           events={model.events}
           displayContext={displayContext}
+          userAvatarUrl={userAvatarUrl}
           pendingApproval={targetMismatch || !connected ? undefined : model.pendingApproval}
           readOnly={targetMismatch || !connected}
           busy={actionBusy}
@@ -299,7 +324,7 @@ export function AgentPanel({ profile, sessionId, connected, state, onNewTerminal
         />
         <AgentRunFooter events={model.events} nowEpochMs={nowEpochMs} />
       </>}
-      <AgentRunError events={model.events} lastErrorCode={model.lastErrorCode} running={running} />
+      <AgentRunError events={model.events} lastErrorCode={model.lastErrorCode} running={running} retrying={actionBusy} onRetry={!selectedHistory && !targetMismatch && connected ? () => void retryFailedRun() : undefined} />
       </>}
     </div>
 

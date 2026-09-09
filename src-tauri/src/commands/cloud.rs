@@ -5,6 +5,7 @@ use crate::cloud::{CloudPolicyService, CloudSyncService};
 use crate::domain::{
     AppResult, CloudApplyRequest, CloudApplyResult, CloudDiscardRequest, CloudEncryptedPayload,
     CloudExportRequest, CloudImportPreview, CloudImportRequest,
+    CloudRecoveryPassphraseRotateRequest, CloudSyncKeyRequest, CloudSyncKeyStatus,
 };
 use crate::profiles::ProfileService;
 
@@ -13,8 +14,10 @@ pub async fn cloud_sync_export(
     mut request: CloudExportRequest,
     cloud: State<'_, CloudSyncService>,
 ) -> AppResult<CloudEncryptedPayload> {
-    let passphrase = Zeroizing::new(std::mem::take(&mut request.passphrase));
-    cloud.export(request.organization_id, passphrase).await
+    let recovery_passphrase = request.recovery_passphrase.take().map(Zeroizing::new);
+    cloud
+        .export(request.organization_id, recovery_passphrase)
+        .await
 }
 
 #[tauri::command]
@@ -22,9 +25,45 @@ pub async fn cloud_sync_preview(
     mut request: CloudImportRequest,
     cloud: State<'_, CloudSyncService>,
 ) -> AppResult<CloudImportPreview> {
-    let passphrase = Zeroizing::new(std::mem::take(&mut request.passphrase));
+    let recovery_passphrase = request.recovery_passphrase.take().map(Zeroizing::new);
     cloud
-        .preview(request.organization_id, passphrase, request.payload)
+        .preview(
+            request.organization_id,
+            recovery_passphrase,
+            request.payload,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn cloud_sync_key_status(
+    request: CloudSyncKeyRequest,
+    cloud: State<'_, CloudSyncService>,
+) -> AppResult<CloudSyncKeyStatus> {
+    cloud.key_status(request.organization_id).await
+}
+
+#[tauri::command]
+pub async fn cloud_sync_forget_key(
+    request: CloudSyncKeyRequest,
+    cloud: State<'_, CloudSyncService>,
+) -> AppResult<()> {
+    cloud.forget_key(request.organization_id).await
+}
+
+#[tauri::command]
+pub async fn cloud_sync_rotate_recovery_passphrase(
+    mut request: CloudRecoveryPassphraseRotateRequest,
+    cloud: State<'_, CloudSyncService>,
+) -> AppResult<CloudEncryptedPayload> {
+    let new_recovery_passphrase =
+        Zeroizing::new(std::mem::take(&mut request.new_recovery_passphrase));
+    cloud
+        .rotate_recovery_passphrase(
+            request.organization_id,
+            new_recovery_passphrase,
+            request.payload,
+        )
         .await
 }
 

@@ -10,6 +10,16 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-is-maximized",
     "core:window:allow-start-dragging",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "core:event:default",
+    "deep-link:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://*.supabase.co/auth/v1/authorize*" },
+        { "url": "http://localhost:*/auth/v1/authorize*" },
+        { "url": "http://127.0.0.1:*/auth/v1/authorize*" }
+      ]
+    }
   ]
 }

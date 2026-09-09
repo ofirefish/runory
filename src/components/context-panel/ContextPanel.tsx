@@ -28,8 +28,9 @@ function loadWidth(): number {
  * no session change, no reconnection. Panel visibility / width / active tab
  * persist to localStorage. UI preferences only — never LLM context or secrets.
  */
-export function ContextPanel({ profile, sessionId, state, connected, onNewTerminal, onDisconnect, onEdit, onResize, onSelectServer }: {
+export function ContextPanel({ profile, jumpProfile, sessionId, state, connected, onNewTerminal, onDisconnect, onEdit, onResize, onSelectServer }: {
   profile: ServerProfile | null;
+  jumpProfile: ServerProfile | null;
   sessionId: string | null;
   state: SessionState;
   connected: boolean;
@@ -109,7 +110,7 @@ export function ContextPanel({ profile, sessionId, state, connected, onNewTermin
       </div>
       <div className="context-panel-content" id="context-panel-content">
         {tab === "inspector"
-          ? <InspectorPanel profile={profile} state={state} connected={connected} onNewTerminal={onNewTerminal} onDisconnect={onDisconnect} onEdit={onEdit} />
+          ? <InspectorPanel profile={profile} jumpProfile={jumpProfile} state={state} connected={connected} onNewTerminal={onNewTerminal} onDisconnect={onDisconnect} onEdit={onEdit} />
           : <AgentPanel profile={profile} sessionId={sessionId} state={state} connected={connected} onNewTerminal={onNewTerminal} onSelectServer={onSelectServer} />}
       </div>
     </aside>

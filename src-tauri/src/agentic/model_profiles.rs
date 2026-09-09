@@ -69,6 +69,68 @@ impl ModelProfileRepository {
         self
     }
 
+    pub async fn migrate_legacy(&self) -> AppResult<bool> {
+        let mut state = self.state.lock().await;
+        if state.is_some() {
+            return Ok(false);
+        }
+        let Document::Legacy(mut config) = self.repository.load_or_default().await? else {
+            return Ok(false);
+        };
+        validate_config(&config)?;
+        if config.kind == ModelProviderKind::Local {
+            let collection = ProfileCollection::default();
+            self.repository
+                .save_atomic(&Document::Collection(collection.clone()))
+                .await?;
+            *state = Some(collection);
+            return Ok(true);
+        }
+
+        let profile_id = Uuid::new_v4();
+        let auth_mode = status_from_config(&config, false).auth_mode;
+        let credential_id = if config.api_key.is_some() || config.oauth.is_some() {
+            let secret = Zeroizing::new(
+                serde_json::to_string(&(&config.api_key, &config.oauth))
+                    .map_err(|_| AppError::VaultInvalid)?,
+            );
+            let credential_id = Uuid::new_v4();
+            self.credentials
+                .as_ref()
+                .ok_or(AppError::VaultLocked)?
+                .remember(credential_id, CredentialKind::LlmApiKey, secret)
+                .await?;
+            config.api_key = None;
+            config.oauth = None;
+            Some(credential_id)
+        } else {
+            None
+        };
+        let collection = ProfileCollection {
+            active_id: Some(profile_id),
+            profiles: vec![SavedProfile {
+                id: profile_id,
+                config,
+                credential_id,
+                auth_mode,
+            }],
+        };
+        if let Err(error) = self
+            .repository
+            .save_atomic(&Document::Collection(collection.clone()))
+            .await
+        {
+            if let (Some(credentials), Some(credential_id)) = (&self.credentials, credential_id) {
+                let _ = credentials
+                    .forget(credential_id, CredentialKind::LlmApiKey)
+                    .await;
+            }
+            return Err(error);
+        }
+        *state = Some(collection);
+        Ok(true)
+    }
+
     async fn collection(
         &self,
         state: &mut Option<ProfileCollection>,

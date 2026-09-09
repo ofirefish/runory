@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CloudConflictItem } from "../../types/cloud";
-import { buildConflictDecisions, conflictKey } from "./cloud-sync";
+import type { CloudConflictItem, CloudImportPreview } from "../../types/cloud";
+import { buildConflictDecisions, conflictKey, hasCloudSyncChanges } from "./cloud-sync";
 
 const item: CloudConflictItem = {
   kind: "profile",
@@ -22,5 +22,24 @@ describe("cloud conflict decisions", () => {
       localUpdatedAt: "10",
       resolution: "useRemote",
     });
+  });
+
+  it("treats an empty preview as already synchronized", () => {
+    const preview: CloudImportPreview = {
+      importId: "import-1",
+      groupAdditions: 0,
+      groupUpdates: 0,
+      profileAdditions: 0,
+      profileUpdates: 0,
+      groupDeletions: 0,
+      profileDeletions: 0,
+      localNewer: 0,
+      conflicts: 0,
+      conflictItems: [],
+    };
+
+    expect(hasCloudSyncChanges(preview)).toBe(false);
+    expect(hasCloudSyncChanges({ ...preview, profileUpdates: 1 })).toBe(true);
+    expect(hasCloudSyncChanges({ ...preview, localNewer: 1 })).toBe(true);
   });
 });

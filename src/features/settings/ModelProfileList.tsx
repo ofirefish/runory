@@ -15,11 +15,11 @@ export function ModelProfileList({ profiles, busy, onActivate, onEdit, onRemove 
   return <ul className="model-profile-list" aria-label={t("settings.models.saved")}>
     {profiles.map((profile) => {
       const name = profile.name || t(providerLabelKeys[profile.kind]);
-      const oauth = profile.authMode === "oauth";
+      const account = profile.authMode === "oauth" || profile.authMode === "account";
       return <li key={profile.id} className="model-profile" data-active={profile.active}>
         <span className="model-profile-icon" data-provider={profile.kind} aria-hidden="true"><Bot size={21} /></span>
         <div className="model-profile-info">
-          <div className="model-profile-title"><h4 title={name}>{name}</h4><span className="model-profile-auth">{oauth ? <ShieldCheck size={11} /> : <KeyRound size={11} />}{t(oauth ? "settings.models.account" : "settings.modelApiKey")}</span></div>
+          <div className="model-profile-title"><h4 title={name}>{name}</h4><span className="model-profile-auth">{account ? <ShieldCheck size={11} /> : <KeyRound size={11} />}{t(account ? "settings.models.account" : "settings.modelApiKey")}</span></div>
           <div className="model-profile-model" title={profile.model}>{profile.model}</div>
           <div className="model-profile-endpoint" title={profile.baseUrl}>{profile.baseUrl}</div>
         </div>

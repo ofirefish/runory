@@ -1,11 +1,13 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { ConnectRequest, ConnectResponse, CredentialKind, CredentialStatus, HostVerification, KnownHost, LocalFileSelection, PrivateKeyImport, RemoteImagePreview, RemoteTextPreview, SftpDirectory, SftpMetadata, TerminalEvent, TestConnectionRequest, TestConnectionResponse, TransferEvent, TransferJob, UploadDirectoryHistoryEntry } from "../../types/session";
+import type { ConnectRequest, ConnectResponse, CredentialInput, CredentialKind, CredentialStatus, HostVerification, KnownHost, LocalFileSelection, PrepareJumpConnectionResponse, PrivateKeyImport, RemoteImagePreview, RemoteTextPreview, SftpDirectory, SftpMetadata, TerminalEvent, TestConnectionRequest, TestConnectionResponse, TransferEvent, TransferJob, UploadDirectoryHistoryEntry } from "../../types/session";
 
 export const prepareHostVerification = (profileId: string) => invoke<HostVerification>("known_host_prepare", { request: { profileId } });
 export const trustHost = (attemptId: string, remember: boolean) => invoke<void>("known_host_trust", { request: { attemptId, remember } });
 export const cancelHostVerification = (attemptId: string) => invoke<void>("known_host_cancel", { request: { attemptId } });
 export const listKnownHosts = () => invoke<KnownHost[]>("known_host_list");
-export const removeKnownHost = (host: string, port: number) => invoke<void>("known_host_remove", { request: { host, port } });
+export const removeKnownHost = (routeScope: string | undefined, host: string, port: number) => invoke<void>("known_host_remove", { request: { routeScope: routeScope ?? "direct", host, port } });
+export const prepareJumpConnection = (targetProfileId: string, jumpVerificationAttemptId: string, jumpCredential: CredentialInput) => invoke<PrepareJumpConnectionResponse>("ssh_jump_prepare", { request: { targetProfileId, jumpVerificationAttemptId, jumpCredential } });
+export const cancelJumpConnection = (preparationId: string) => invoke<void>("ssh_jump_cancel", { request: { preparationId } });
 function openSsh(command: "ssh_connect" | "ssh_reconnect", request: ConnectRequest, onEvent: (event: TerminalEvent) => void) { const channel = new Channel<TerminalEvent>(); channel.onmessage = onEvent; return invoke<ConnectResponse>(command, { request, onEvent: channel }); }
 export const connectSsh = (request: ConnectRequest, onEvent: (event: TerminalEvent) => void) => openSsh("ssh_connect", request, onEvent);
 export const reconnectSsh = (request: ConnectRequest, onEvent: (event: TerminalEvent) => void) => openSsh("ssh_reconnect", request, onEvent);

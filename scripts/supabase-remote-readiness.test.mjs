@@ -21,6 +21,7 @@ test("machine-readable report has a stable shape and excludes supplied credentia
       applicationSourceSha256: "f".repeat(64),
       migrationsSha256: "a".repeat(64),
       policyFunctionSha256: "b".repeat(64),
+      managedAiFunctionSha256: "1".repeat(64),
       authTemplatesSha256: "c".repeat(64),
       readinessSqlSha256: "d".repeat(64),
       databaseTestsSha256: "e".repeat(64),
@@ -42,14 +43,18 @@ test("CLI JSON adapters accept raw and wrapped arrays", () => {
 test("function and secret checks require the signed policy deployment", () => {
   assert.doesNotThrow(() => verifyFunctionRows([
     { name: "evaluate-access-policy", verify_jwt: true },
+    { name: "agent-turn", verify_jwt: true },
   ]));
   assert.throws(() => verifyFunctionRows([]));
   assert.throws(() => verifyFunctionRows([
     { name: "evaluate-access-policy", verify_jwt: false },
+    { name: "agent-turn", verify_jwt: true },
   ]));
   assert.doesNotThrow(() => verifySecretRows([
     { name: "RUNORY_POLICY_ACTIVE_SIGNING_KEY_ID" },
     { name: "RUNORY_POLICY_SIGNING_KEYS_JSON" },
+    { name: "RUNORY_DEEPSEEK_API_KEY" },
+    { name: "RUNORY_GLM_API_KEY" },
   ]));
   assert.throws(() => verifySecretRows([
     { name: "RUNORY_POLICY_ACTIVE_SIGNING_KEY_ID" },
@@ -63,6 +68,8 @@ test("database readiness requires exact migrations and every security invariant"
     postgres_17_or_newer: true,
     all_business_tables_have_rls: true,
     policy_rpc_acl_valid: true,
+    billing_service_rpc_acl_valid: true,
+    billing_trial_rpc_acl_valid: true,
     retention_function_private: true,
     retention_index_present: true,
     audit_cron_unique: true,

@@ -34,8 +34,55 @@ describe("Agent run error presentation", () => {
     expect(markup).toContain(i18n.t("contextPanel.error.MODEL_AUTH_FAILED"));
   });
 
-  it("hides errors while retrying and after clearing the conversation", () => {
-    expect(renderToStaticMarkup(<AgentRunError events={[failure]} lastErrorCode="MODEL_UNAVAILABLE" running />)).toBe("");
+  it("hides replayed run failures while retrying and after clearing the conversation", () => {
+    expect(renderToStaticMarkup(<AgentRunError events={[failure]} lastErrorCode={null} running />)).toBe("");
     expect(renderToStaticMarkup(<AgentRunError events={[]} lastErrorCode={null} running={false} />)).toBe("");
+  });
+
+  it("renders the cached account avatar beside a user message", () => {
+    const userMessage: AgentEventEnvelope = {
+      runId: "run-1", seq: 1, timestampEpochMs: 1000,
+      event: { type: "user_message_added", payload: { content: "Install PM2" } },
+    };
+    const markup = renderToStaticMarkup(
+      <AgentTimeline events={[userMessage]} userAvatarUrl="data:image/webp;base64,cached" expanded={{}} onToggle={() => {}} onApprove={() => {}} onReject={() => {}} />,
+    );
+    expect(markup).toContain('class="agent-user-avatar"');
+    expect(markup).toContain('src="data:image/webp;base64,cached"');
+  });
+
+  it("shows an approval IPC failure while the run remains awaiting approval", () => {
+    const markup = renderToStaticMarkup(
+      <AgentRunError events={[]} lastErrorCode="INVALID_OPERATION" running />,
+    );
+    expect(markup).toContain('role="alert"');
+    expect(markup).not.toContain("agent-error-retry");
+  });
+
+  it("offers retry for transient model failures", () => {
+    const markup = renderToStaticMarkup(
+      <AgentRunError events={[failure]} lastErrorCode="MODEL_UNAVAILABLE" running={false} onRetry={() => undefined} />,
+    );
+    expect(markup).toContain(i18n.t("contextPanel.retry"));
+    expect(markup).toContain("agent-error-retry");
+  });
+
+  it("renders precise managed response failures", () => {
+    const emptyFailure: AgentEventEnvelope = {
+      ...failure,
+      event: { type: "run_failed", payload: { error_code: "MODEL_RESPONSE_EMPTY" } },
+    };
+    const markup = renderToStaticMarkup(
+      <AgentRunError events={[emptyFailure]} lastErrorCode="MODEL_RESPONSE_EMPTY" running={false} onRetry={() => undefined} />,
+    );
+    expect(markup).toContain(i18n.t("contextPanel.error.MODEL_RESPONSE_EMPTY"));
+    expect(markup).toContain(i18n.t("contextPanel.retry"));
+  });
+
+  it("hides retry for auth failures", () => {
+    const markup = renderToStaticMarkup(
+      <AgentRunError events={[]} lastErrorCode="MODEL_AUTH_FAILED" running={false} onRetry={() => undefined} />,
+    );
+    expect(markup).not.toContain("agent-error-retry");
   });
 });

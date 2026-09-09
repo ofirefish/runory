@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::SessionId;
@@ -142,4 +142,44 @@ pub struct DeploymentRecord {
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentHistoryRequest {
     pub profile_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentApp {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub name: String,
+    pub repository_path: String,
+    pub remote_url: String,
+    pub branch: String,
+    pub build: BuildPreset,
+    pub restart: RestartTarget,
+    pub updated_at_epoch_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentAppsListRequest {
+    pub profile_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentAppUpsertRequest {
+    pub id: Option<Uuid>,
+    pub profile_id: Uuid,
+    pub name: String,
+    pub repository_path: String,
+    pub remote_url: String,
+    pub branch: String,
+    pub build: BuildPreset,
+    pub restart: RestartTarget,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentAppDeleteRequest {
+    pub id: Uuid,
+    pub profile_id: Uuid,
 }

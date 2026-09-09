@@ -48,6 +48,8 @@ AgentPanel
 
 Typed Tool 模块不再是 V2 对话诊断的能力目录，也不要求为每个 Linux 操作新增 Tool。现有 Typed Tool 暂不物理删除，因为 Incident / Operations Pack / ChangeSet Preconditions / Verification / Rollback 等稳定子系统仍依赖它；这些子系统继续遵守原有 Registry、Policy 和审计边界。
 
+自动主机上下文：启动对话时 Rust 通过绑定 SSH session 的固定只读 metadata probe 采集 OS release/version、kernel、architecture、登录 user/UID/root，自动发送给所选模型（含托管提供方）。此用户授权的基础信息采集不接受模型命令或参数，不向 PTY 写入，不提升权限；对话 CommandProposal 仍逐条 Run / Cancel。结果只驻留当前运行内存，有界、脱敏并标记 untrusted；缺失字段为 unknown。登录身份不代表交互终端 sudo/su 后身份，不能作为 Verification 证据。
+
 Reasoner wire schema：
 
 ```json

@@ -1,9 +1,51 @@
 services:
+  tunnel-target:
+    build:
+      context: ./tests/ssh-server
+    profiles: ["tunnels"]
+    entrypoint: ["httpd", "-f", "-p", "8080", "-h", "/www"]
+    volumes:
+      - ./tests/ssh-server/tunnel-target:/www:ro
+  openssh-no-forward:
+    build:
+      context: ./tests/ssh-server
+    profiles: ["tunnels"]
+    ports:
+      - "127.0.0.1:2225:22"
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_FORWARDING: "no"
+    volumes:
+      - ./tests/ssh-server/generated:/fixtures
+  openssh-forward-only:
+    build:
+      context: ./tests/ssh-server
+    profiles: ["tunnels"]
+    ports:
+      - "127.0.0.1:2226:22"
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_MAX_SESSIONS: "0"
+    volumes:
+      - ./tests/ssh-server/generated:/fixtures
   openssh:
     build:
       context: ./tests/ssh-server
     ports:
       - "2222:22"
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+    volumes:
+      - ./tests/ssh-server/generated:/fixtures
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+  openssh-jump-target:
+    build:
+      context: ./tests/ssh-server
+    profiles: ["jump"]
     environment:
       RUNORY_TEST_PASSWORD: runory-spike
     volumes:

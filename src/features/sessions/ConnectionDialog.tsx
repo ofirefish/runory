@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { LoaderCircle, LockKeyhole, ShieldCheck, X } from "lucide-react";
+import { ArrowRight, KeyRound, LoaderCircle, LockKeyhole, Server, ShieldCheck, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
@@ -11,8 +11,11 @@ import { cancelHostVerification, credentialStatus, forgetCredential, initializeV
 import { vaultUnlockAction } from "../../lib/vault-unlock";
 import type { ServerProfile } from "../../types/domain";
 import type { CredentialInput, CredentialStatus, HostVerification } from "../../types/session";
+import { ConnectionAttemptProgress, type ConnectionProgressStage } from "./ConnectionAttemptProgress";
+import "./connection-dialog.css";
 import { connectionOutcome, type ConnectionAction } from "./connection-outcome";
 import { createCredentialInput } from "./credential-input";
+import { useConnectionDialogFocus } from "./use-connection-dialog-focus";
 
 const schema = z.object({
   password: z.string(), remember: z.boolean(), masterPassword: z.string(), confirmMasterPassword: z.string(),
@@ -22,7 +25,7 @@ type ConnectionValues = { profileId: string; verificationAttemptId: string; cred
 
 export function ConnectionDialog({ profile, mode, onClose, onConnect, onTest }: {
   profile: ServerProfile;
-  mode: "connect" | "reconnect";
+  mode: "connect" | "reconnect" | "tunnel";
   onClose: () => void;
   onConnect: (values: ConnectionValues) => Promise<boolean>;
   onTest: (values: ConnectionValues) => Promise<boolean>;
@@ -34,6 +37,7 @@ export function ConnectionDialog({ profile, mode, onClose, onConnect, onTest }: 
   const [saveWarning, setSaveWarning] = useState(false);
   const [testSucceeded, setTestSucceeded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [progressStage, setProgressStage] = useState<ConnectionProgressStage | null>(null);
   const [showManualCredential, setShowManualCredential] = useState(false);
   const pendingCredential = useRef<CredentialInput | null>(null);
   const pendingAction = useRef<ConnectionAction>("connect");
@@ -65,6 +69,7 @@ export function ConnectionDialog({ profile, mode, onClose, onConnect, onTest }: 
     reset({ password: "", remember: false, masterPassword: "", confirmMasterPassword: "" });
   }, [reset]);
   const runAttempt = useCallback(async (attemptId: string, credential: CredentialInput, action: ConnectionAction) => {
+    setProgressStage("connect");
     try {
       const values = { profileId: profile.id, verificationAttemptId: attemptId, credential };
       const credentialSaved = action === "test" ? await onTest(values) : await onConnect(values);
@@ -82,13 +87,14 @@ export function ConnectionDialog({ profile, mode, onClose, onConnect, onTest }: 
     }
   }, [clearSecrets, onClose, onConnect, onTest, profile.id]);
   const beginVerification = useCallback(async (credential: CredentialInput, action: ConnectionAction) => {
+    setProgressStage("verify");
     setBusy(true); setFailure(null); setSaveWarning(false); setTestSucceeded(false); pendingCredential.current = credential; pendingAction.current = action;
     try {
       const prepared = await prepareHostVerification(profile.id);
       if (prepared.status === "trusted") await runAttempt(prepared.attemptId, credential, action); else setVerification(prepared);
     } catch (error) {
       pendingCredential.current = null; setFailure(appErrorCode(error));
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setProgressStage(null); }
   }, [profile.id, runAttempt]);
   useEffect(() => {
     if (!vault?.vaultUnlocked || !vault.hasCredential || autoStoredAttempted.current) return;
@@ -136,22 +142,44 @@ export function ConnectionDialog({ profile, mode, onClose, onConnect, onTest }: 
   const trustAndConnect = async (rememberHost: boolean) => {
     if (!verification || !pendingCredential.current) return;
     setBusy(true); setFailure(null);
+    setProgressStage("verify");
     try { await trustHost(verification.attemptId, rememberHost); await runAttempt(verification.attemptId, pendingCredential.current, pendingAction.current); }
-    catch (error) { setFailure(appErrorCode(error)); } finally { setBusy(false); }
+    catch (error) { setFailure(appErrorCode(error)); } finally { setBusy(false); setProgressStage(null); }
   };
   const cancelVerification = () => {
     if (verification) void cancelHostVerification(verification.attemptId);
     pendingCredential.current = null; setVerification(null);
   };
   const close = () => {
+    if (busy) return;
     if (verification) void cancelHostVerification(verification.attemptId);
     clearSecrets(); onClose();
   };
 
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-labelledby="connection-title"><div className="w-full max-w-lg rounded-xl border bg-[hsl(var(--surface))] p-5 shadow-2xl">
-    <div className="mb-5 flex items-center justify-between"><h2 id="connection-title" className="text-lg font-semibold">{verification ? t("connection.fingerprintTitle") : t(mode === "reconnect" ? "connection.reconnectTo" : "connection.connectTo", { name: profile.name })}</h2><Button variant="ghost" size="icon" aria-label={t("a11y.close")} onClick={close}><X size={18} /></Button></div>
-    {!verification ? <form className="space-y-4" aria-busy={busy} onSubmit={submitEnteredCredential("connect")}>
-      <dl className="rounded-lg border bg-[hsl(var(--background))] p-4 text-sm"><dt className="text-[hsl(var(--muted))]">{t("connection.host")}</dt><dd className="mt-1 font-mono">{profile.host}:{profile.port}</dd><dt className="mt-3 text-[hsl(var(--muted))]">{t("connection.username")}</dt><dd className="mt-1 font-mono">{profile.username}</dd></dl>
+  const connecting = busy && progressStage !== null;
+  const dialogFocus = useConnectionDialogFocus(busy, close);
+  const endpoint = `${profile.host.includes(":") && !profile.host.startsWith("[") ? `[${profile.host}]` : profile.host}:${profile.port}`;
+
+  return <div {...dialogFocus} tabIndex={-1} className="connection-modal" role="dialog" aria-modal="true" aria-labelledby="connection-title">
+    <div className="connection-card">
+      <header className="connection-card-header">
+        <span className="connection-server-icon" aria-hidden="true"><Server size={22} strokeWidth={1.5} /></span>
+        <div className="connection-card-title">
+          <p>{t(verification && !connecting ? "connection.fingerprintTitle" : mode === "tunnel" ? "tunnels.connectTo" : "connection.title", { name: profile.name })}</p>
+          <h2 id="connection-title">{profile.name}</h2>
+        </div>
+        <Button variant="ghost" size="icon" aria-label={t("a11y.close")} disabled={busy} onClick={close}><X size={17} /></Button>
+      </header>
+      <div className="connection-card-body">
+        <dl className="connection-target">
+          <div><dt>{t("connection.host")}</dt><dd title={endpoint}>{endpoint}</dd></div>
+          <div><dt>{t("connection.username")}</dt><dd title={profile.username}>{profile.username}</dd></div>
+          <div className="connection-target-auth"><dt><KeyRound size={13} aria-hidden="true" />{t("profile.authMethod")}</dt><dd>{t(profile.authMethod === "password" ? "connection.password" : "profile.privateKey")}</dd></div>
+        </dl>
+        {mode === "tunnel" && <p className="mb-4 text-xs text-[hsl(var(--secondary))]">{t("tunnels.backgroundHint")}</p>}
+        {connecting && <ConnectionAttemptProgress stage={progressStage} testing={pendingAction.current === "test"} />}
+        <div hidden={connecting}>
+    {!verification ? <form className="connection-credential-form space-y-4" aria-busy={busy} onSubmit={submitEnteredCredential("connect")}>
       {vault?.vaultInitialized && !vault.vaultUnlocked && vault.platformUnlockConfigured && vault.platformUnlockAvailable && <div className="rounded-lg border p-3"><div className="flex items-center gap-2 text-sm font-medium"><LockKeyhole size={16} />{t("connection.vaultLocked")}</div><p className="mt-1 text-xs text-[hsl(var(--muted))]">{t("connection.platformUnlockHint")}</p><Button className="mt-3" type="button" variant="secondary" disabled={busy} onClick={() => void unlockOrInitialize()}>{t("connection.unlockVault")}</Button></div>}
       {vault?.vaultInitialized && !vault.vaultUnlocked && (!vault.platformUnlockConfigured || !vault.platformUnlockAvailable) && <div className="rounded-lg border p-3"><div className="flex items-center gap-2 text-sm font-medium"><LockKeyhole size={16} />{t(vault.platformUnlockAvailable ? "connection.vaultMigrationRequired" : "connection.vaultLocked")}</div><p className="mt-1 text-xs text-[hsl(var(--muted))]">{t(vault.platformUnlockAvailable ? "connection.vaultMigrationHint" : "connection.unlockHint")}</p><label className="mt-3 block text-sm font-medium">{t("connection.vaultPassword")}<Input className="mt-1" type="password" autoComplete="current-password" {...register("masterPassword")} /></label><Button className="mt-3" type="button" variant="secondary" disabled={busy} onClick={() => void unlockWithPassword()}>{t(vault.platformUnlockAvailable ? "connection.migrateVault" : "connection.unlockVault")}</Button></div>}
       {vault === null && <p className="flex items-center gap-2 text-xs text-[hsl(var(--muted))]" role="status"><LoaderCircle className="animate-spin" size={14} />{t("connection.checkingSavedCredential")}</p>}
@@ -164,11 +192,15 @@ export function ConnectionDialog({ profile, mode, onClose, onConnect, onTest }: 
         {remember && !vault?.vaultUnlocked && !vault?.vaultInitialized && !vault?.platformUnlockAvailable && <div className="rounded-lg border p-3"><p className="text-xs text-[hsl(var(--muted))]">{t("connection.createVaultHint")}</p><label className="mt-3 block text-sm font-medium">{t("connection.vaultPassword")}<Input className="mt-1" type="password" autoComplete="new-password" {...register("masterPassword")} /></label><label className="mt-3 block text-sm font-medium">{t("connection.confirmVaultPassword")}<Input className="mt-1" type="password" autoComplete="new-password" {...register("confirmMasterPassword")} /></label></div>}
         {!remember && <p className="text-xs text-[hsl(var(--muted))]">{t(profile.authMethod === "password" ? "connection.sessionOnlyPassword" : "connection.sessionOnlyPassphrase")}</p>}
       </>}
-      {busy && <p className="flex items-center gap-2 text-xs text-[hsl(var(--muted))]" role="status"><LoaderCircle className="animate-spin" size={14} />{t("connection.connectingProgress")}</p>}
-      <div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={close}>{t("connection.cancel")}</Button>{showManualCredential && <><Button type="button" variant="secondary" disabled={busy} onClick={() => void submitEnteredCredential("test")()}>{t("connection.test")}</Button><Button type="submit" disabled={busy}>{t(mode === "reconnect" ? "connection.scanReconnect" : "connection.scan")}</Button></>}</div>
-    </form> : <div><p className="mb-4 text-sm text-[hsl(var(--secondary))]">{t("connection.fingerprintHint")}</p><dl className="rounded-lg border bg-[hsl(var(--background))] p-4 text-sm"><dt className="text-[hsl(var(--muted))]">{t("connection.fingerprint")}</dt><dd className="mt-1 break-all font-mono">{verification.fingerprint}</dd><dt className="mt-3 text-[hsl(var(--muted))]">{t("connection.host")}</dt><dd className="mt-1 font-mono">{verification.host}:{verification.port} · {verification.keyType}</dd></dl><div className="mt-5 flex flex-wrap justify-end gap-2"><Button variant="ghost" onClick={cancelVerification}>{t("connection.cancel")}</Button><Button variant="secondary" disabled={busy} onClick={() => void trustAndConnect(false)}>{t("connection.trustOnce")}</Button><Button disabled={busy} onClick={() => void trustAndConnect(true)}>{t("connection.trustRemember")}</Button></div></div>}
+      <div className="connection-form-actions"><Button type="button" variant="ghost" disabled={busy} onClick={close}>{t("connection.cancel")}</Button>{showManualCredential && <><Button type="button" variant="secondary" disabled={busy} onClick={() => void submitEnteredCredential("test")()}>{t("connection.test")}</Button><Button type="submit" disabled={busy}>{t(mode === "tunnel" ? "tunnels.authenticateStart" : mode === "reconnect" ? "connection.scanReconnect" : "connection.scan")}<ArrowRight size={14} aria-hidden="true" /></Button></>}</div>
+    </form> : <div><p className="mb-4 text-sm text-[hsl(var(--secondary))]">{t("connection.fingerprintHint")}</p><dl className="rounded-lg border bg-[hsl(var(--background))] p-4 text-sm"><dt className="text-[hsl(var(--muted))]">{t("connection.fingerprint")}</dt><dd className="mt-1 break-all font-mono">{verification.fingerprint}</dd><dt className="mt-3 text-[hsl(var(--muted))]">{t("connection.host")}</dt><dd className="mt-1 font-mono">{verification.host}:{verification.port} · {verification.keyType}</dd></dl><div className="mt-5 flex flex-wrap justify-end gap-2"><Button variant="ghost" disabled={busy} onClick={cancelVerification}>{t("connection.cancel")}</Button><Button variant="secondary" disabled={busy} onClick={() => void trustAndConnect(false)}>{t("connection.trustOnce")}</Button><Button disabled={busy} onClick={() => void trustAndConnect(true)}>{t("connection.trustRemember")}</Button></div></div>}
+        </div>
+        {busy && !connecting && <p className="connection-vault-progress" role="status"><LoaderCircle size={14} aria-hidden="true" />{t("connection.progress.vault")}</p>}
     {testSucceeded && <div className="mt-4 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-600"><div className="font-medium">{t("connection.testSuccessTitle")}</div><div className="mt-1 text-xs">{t("connection.testSuccess")}</div></div>}
     {saveWarning && <div className="mt-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-600"><div className="font-medium">{t(testSucceeded ? "connection.testSaveWarningTitle" : "connection.saveWarningTitle")}</div><div className="mt-1 text-xs">{t(testSucceeded ? "connection.testSaveWarning" : "connection.saveWarning")}</div>{!testSucceeded && <Button className="mt-3" size="sm" variant="secondary" onClick={onClose}>{t("connection.close")}</Button>}</div>}
-    {failure && <div className="mt-4 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-500"><div className="font-medium">{failure === "HOST_KEY_CHANGED" ? t("connection.changedTitle") : t("connection.error")}</div><div className="mt-1 text-xs">{t(`connection.errors.${failure}`, { defaultValue: t("connection.defaultError") })}</div></div>}
-  </div></div>;
+    {failure && <div role="alert" className="mt-4 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-500"><div className="font-medium">{failure === "HOST_KEY_CHANGED" ? t("connection.changedTitle") : t("connection.error")}</div><div className="mt-1 text-xs">{t(`connection.errors.${failure}`, { defaultValue: t(`errors.${failure}`, { defaultValue: t("connection.defaultError") }) })}</div></div>}
+      </div>
+      <footer className="connection-card-footer"><LockKeyhole size={13} aria-hidden="true" /><span>{t(connecting ? pendingAction.current === "test" ? "connection.progress.testFooter" : mode === "tunnel" ? "connection.progress.tunnelFooter" : "connection.progress.footer" : "connection.progress.security")}</span></footer>
+    </div>
+  </div>;
 }

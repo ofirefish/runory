@@ -2,6 +2,21 @@
 
 ## Strategy
 
+### Authorized increment — SSH local TCP tunnels
+
+See `docs/SSH_TUNNELS.md`: independent tunnel management, saved loopback-only rules,
+explicit start/stop on verified ServerSessions, TCP reachability checks and server
+shortcuts. Reverse forwarding, SOCKS, jump hosts, public sharing and automatic
+reconnection are outside this increment; existing SSH and Agent boundaries remain.
+
+### Authorized increment — single-hop SSH jump hosts
+
+See `docs/SSH_JUMP_HOSTS.md`: a target profile may reference one direct profile as
+its jump host. Rust authenticates A, opens SSH `direct-tcpip` to B, verifies and
+authenticates B independently, then exposes only B's normal ServerSession. Nested
+jump routes, proxy chains, automatic fallback and background jump tunnels remain
+outside this increment.
+
 Runory 以稳定 SSH Core 为底座，逐步演化为 **AI-native Infrastructure Workspace**。
 
 ```text

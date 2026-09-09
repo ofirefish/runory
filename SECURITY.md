@@ -203,6 +203,7 @@ StrictHostKeyChecking=no
 使用标准 SHA256-style Fingerprint。
 
 Known Host 至少绑定：
+- Route Scope（direct 或 exact jump profile/endpoint）
 - Host
 - Port
 - Key Type
@@ -545,6 +546,50 @@ Model/Tool/MCP/HTTP/SSH timeout 与 Agent cancellation 由 Rust 强制。收到 
 - 远端验证只比较 Edge Secret 名称，不读取或输出 Secret 值；数据库探针不把密码或动态 SQL 放入命令参数
 - 机器可读发布证据只包含公开 Project Ref、版本、布尔结果、Cron 状态与源码 SHA-256；禁止包含 CLI 原始响应、Token、JWT、连接串、SMTP 密码或签名私钥
 - Production 部署前必须用新鲜 Staging `release_ready` 对比本地 `tooling_ready` 候选；部署后再与 Production `release_ready` 复核。同一 Project、额外字段、过期证据、Migration 或应用源码摘要漂移全部 fail-closed
+
+## SSH local TCP tunnel increment
+
+- Forwarding is a native Rust domain service, not a terminal command, Agent tool,
+  proxy, or generic TCP IPC. Only saved rule IDs may be started/probed.
+- The bind address is fixed to IPv4 loopback in Rust and cannot be supplied by UI.
+  Destinations are explicit host/port metadata; shell fragments, URLs and credentials
+  are not accepted. SSH resolves destination DNS; application TLS remains separate.
+- Start/probe require an exact saved profile match and existing Connect plus Operate
+  cloud authorization. Stop never requires authorization or reconnect.
+- Explicit start may establish a dedicated background SSH transport, without a
+  session channel, Shell, PTY or terminal output. Credential preparation, vault
+  access and one-use verified fingerprints share the terminal connection path.
+  Unknown hosts require trust; changed keys block. No automatic reconnect/start.
+- Pool reuse is bound to profile ID, host, port, username, authentication method
+  and key source. Only live forwarding tasks own connections; the pool is weak.
+  Last-rule stop or runtime failure releases its transport independently of UI polling.
+  Terminal closure cannot stop a dedicated forwarding connection.
+- Pending starts count toward the listener limit, have a 30-second deadline, and
+  can be cancelled by stop. Editing/deleting a pending rule is rejected, and an
+  obsolete start cannot replace a newer attempt. Newly supplied credentials are
+  remembered only after actual successful authentication, never merely on reuse.
+- Rules use the atomic JSON Repository and schema validation; corruption fails
+  closed without overwriting the file. Runtime-only disconnect impact does not
+  depend on reading a damaged catalog. Restart restores no listener or approval.
+- Limit listeners, concurrent connections, probe concurrency and channel-open time;
+  cancel all accepted streams when stopping. Never record payloads or SSH error text.
+  Only bounded lifecycle events, stable error codes and byte/connection counts enter UI.
+
+## SSH single-hop jump-host increment
+
+- Jumping is native SSH-over-SSH in Rust. Runory never opens a shell on A to execute
+  `ssh B`, never exposes a generic proxy IPC, and never routes credentials through React.
+- A and B have distinct profiles, credentials, host-key decisions and cloud authorization.
+  B's known-host entry is route-scoped so a direct observation cannot silently authorize
+  the same endpoint reached through a different A.
+- Only a direct profile can be A. Self-reference, missing references and nested routes
+  fail closed; a referenced A cannot be deleted or converted into a jump target.
+- Preparing B creates a one-use, endpoint-bound ticket retaining A's authenticated
+  transport for at most 120 seconds. Tickets are bounded, cancellable and not persisted.
+- B uses A's `direct-tcpip` channel as its SSH byte stream. B still performs its own key
+  exchange, exact fingerprint verification and authentication before opening PTY/Shell.
+- Closing B releases its ownership of A. No automatic retry, fallback route or reconnect
+  is performed, and neither terminal output nor forwarding payload is persisted.
 
 ## 26. v0.1 Security Checklist
 

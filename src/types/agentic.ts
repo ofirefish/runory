@@ -6,6 +6,7 @@ export type AgentRunMetrics = { runId: string; incidentId: string | null; modelC
 export type AgentRun = { id: string; model: string; sessionId: string; state: AgentRunState; activities: { invocationId: string; toolName: string; success: boolean; errorCode: string | null; durationMs: number }[]; evidence: AgentEvidence[]; externalEvidence: { id: string; source: string; trust: string; data: unknown }[]; diagnosis: { id: string; titleCode: string; rootCauseCode: string; confidence: number; evidenceIds: string[]; recommendedActionCode: string; risk: RiskLevel } | null; answer: string | null; answerEvidenceIds: string[]; goalAchieved: boolean; clarificationQuestion: string | null; failureCode: string | null; changeSet: ChangeSet | null; maxToolCalls: number; usedToolCalls: number; maxModelTokens: number; usedModelTokens: number; metrics: AgentRunMetrics };
 export type ModelProviderKind =
   | "local"
+  | "runory-managed"
   | "deep-seek"
   | "glm"
   | "open-ai-compatible"
@@ -17,15 +18,16 @@ export type ModelProviderKind =
   | "qwen"
   | "kimi"
   | "minimax";
-export type ModelAuthMode = "none" | "api-key" | "oauth";
+export type ModelAuthMode = "none" | "account" | "api-key" | "oauth";
 export type OauthProvider = "chat-gpt" | "open-router";
-export type AdvancedProviderKind = Exclude<ModelProviderKind, "local" | "chat-gpt">;
+export type AdvancedProviderKind = Exclude<ModelProviderKind, "local" | "runory-managed" | "chat-gpt">;
 export type ModelProviderStatus = {
   kind: ModelProviderKind;
   name: string;
   baseUrl: string;
   model: string;
   maxContextTokens: number;
+  organizationId: string | null;
   apiKeyConfigured: boolean;
   authMode: ModelAuthMode;
   oauthInProgress: boolean;
@@ -38,6 +40,7 @@ export type ModelConfigureRequest = {
   baseUrl: string;
   model: string;
   maxContextTokens: number;
+  organizationId: string | null;
   apiKey: string | null;
 };
 export type DoctorRequest = { runId: string; sessionId: string; userRequest: string; service: string | null; httpUrl: string | null; portHost: string | null; port: number | null; includeNginxTest: boolean; skillId: string | null; mcpContext: { serverId: string; toolName: string; arguments: Record<string, unknown> } | null; incidentId?: string | null; budget?: { maxModelCalls: number; maxToolCalls: number; maxInputTokens: number; maxOutputTokens: number; timeBudgetMs: number; maxCostMicrousd: number | null; context: { maxItems: number; maxBytes: number; maxTokens: number } } | null };

@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{ipc::Channel, AppHandle, State};
 use uuid::Uuid;
 
-use crate::agent::{AgentEvent, AgentEventEnvelope, AgentRun, AgentRuntimeV2Service};
+use crate::agent::{
+    AgentEvent, AgentEventEnvelope, AgentRun, AgentRuntimeV2Service, HostSessionContext,
+};
 use crate::agentic::ModelGateway;
 use crate::domain::{AppResult, SessionId};
 use crate::profiles::ProfileService;
@@ -29,6 +31,13 @@ pub struct AgentV2SubscribeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentV2RunActionRequest {
     pub run_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2ApprovalActionRequest {
+    pub run_id: Uuid,
+    pub approval_id: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,13 +84,17 @@ pub async fn agent_v2_run_start(
     let directory = sessions
         .current_terminal_directory(request.session_id, &profile.username)
         .await?
-        .unwrap_or_else(|| {
-            if profile.username == "root" {
-                "/root".into()
-            } else {
-                format!("/home/{}", profile.username)
-            }
-        });
+        .unwrap_or_else(|| "unknown".into());
+    let os = profile
+        .os_distribution
+        .map(|value| value.display_label().to_owned())
+        .unwrap_or_else(|| "Linux".into());
+    let host_context = HostSessionContext {
+        os: os.clone(),
+        user: profile.username.clone(),
+        directory: directory.clone(),
+        system_info: sessions.host_system_info(request.session_id).await,
+    };
     let run_id = runtime
         .start_run(
             app,
@@ -89,12 +102,13 @@ pub async fn agent_v2_run_start(
             request.session_id,
             server_id,
             request.goal,
+            Some(host_context),
         )
         .await?;
     Ok(AgentV2StartResponse {
         run_id,
         context: AgentV2DisplayContext {
-            os: "Linux".into(),
+            os,
             user: profile.username,
             directory,
         },
@@ -128,25 +142,35 @@ pub async fn agent_v2_run_subscribe(
 
 #[tauri::command]
 pub async fn agent_v2_run_approve(
-    request: AgentV2RunActionRequest,
+    request: AgentV2ApprovalActionRequest,
     app: AppHandle,
     runtime: State<'_, AgentRuntimeV2Service>,
     gateway: State<'_, Arc<ModelGateway>>,
 ) -> AppResult<()> {
     runtime
-        .approve(app, gateway.inner().clone(), request.run_id)
+        .approve(
+            app,
+            gateway.inner().clone(),
+            request.run_id,
+            request.approval_id,
+        )
         .await
 }
 
 #[tauri::command]
 pub async fn agent_v2_run_reject(
-    request: AgentV2RunActionRequest,
+    request: AgentV2ApprovalActionRequest,
     app: AppHandle,
     runtime: State<'_, AgentRuntimeV2Service>,
     gateway: State<'_, Arc<ModelGateway>>,
 ) -> AppResult<()> {
     runtime
-        .reject(app, gateway.inner().clone(), request.run_id)
+        .reject(
+            app,
+            gateway.inner().clone(),
+            request.run_id,
+            request.approval_id,
+        )
         .await
 }
 
@@ -159,6 +183,18 @@ pub async fn agent_v2_run_reply(
 ) -> AppResult<()> {
     runtime
         .reply(app, gateway.inner().clone(), request.run_id, request.text)
+        .await
+}
+
+#[tauri::command]
+pub async fn agent_v2_run_retry(
+    request: AgentV2RunActionRequest,
+    app: AppHandle,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    gateway: State<'_, Arc<ModelGateway>>,
+) -> AppResult<()> {
+    runtime
+        .retry(app, gateway.inner().clone(), request.run_id)
         .await
 }
 

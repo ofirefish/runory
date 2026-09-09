@@ -19,6 +19,7 @@ fn request(name: &str, key: Option<&str>) -> ModelConfigureRequest {
         base_url: "https://api.example.com/v1".into(),
         model: "test-model".into(),
         max_context_tokens: 8192,
+        organization_id: None,
         api_key: key.map(str::to_owned),
     }
 }
@@ -211,7 +212,7 @@ async fn editing_endpoint_never_reuses_saved_key_and_active_deletion_is_blocked(
 }
 
 #[tokio::test]
-async fn legacy_configuration_migrates_on_save_without_exposing_or_losing_credentials() {
+async fn legacy_configuration_migrates_on_startup_without_exposing_or_losing_credentials() {
     let directory = tempfile::tempdir().expect("directory");
     let path = directory.path().join("models.json");
     let config = configured_model(
@@ -226,12 +227,12 @@ async fn legacy_configuration_migrates_on_save_without_exposing_or_losing_creden
     let gateway = ModelGateway::at_path(&path)
         .expect("gateway")
         .with_credentials(credentials(directory.path()));
-    gateway.load().await.expect("load legacy");
-    let old_id = gateway.profiles().await.expect("profiles")[0].id;
-    gateway
-        .save_profile(None, request("New", Some("new-secret-key")))
+    assert!(gateway
+        .migrate_legacy_configuration()
         .await
-        .expect("save");
+        .expect("migrate legacy"));
+    gateway.load().await.expect("load migrated profile");
+    let old_id = gateway.profiles().await.expect("profiles")[0].id;
     assert_eq!(
         gateway
             .repository
@@ -246,7 +247,45 @@ async fn legacy_configuration_migrates_on_save_without_exposing_or_losing_creden
     );
     let json = tokio::fs::read_to_string(&path).await.expect("JSON");
     assert!(!json.contains("legacy-secret-key"));
-    assert!(!json.contains("new-secret-key"));
+    assert!(json.contains("credentialId"));
+}
+
+#[tokio::test]
+async fn locked_vault_preserves_legacy_file_until_migration_can_complete() {
+    let directory = tempfile::tempdir().expect("directory");
+    let path = directory.path().join("models.json");
+    let config = configured_model(
+        request("Legacy", Some("legacy-secret-key")),
+        &ModelProviderConfig::default(),
+    )
+    .expect("config");
+    JsonRepository::new(&path)
+        .save_atomic(&config)
+        .await
+        .expect("legacy fixture");
+    let credentials = credentials(directory.path());
+    credentials.lock().await.expect("lock");
+    let gateway = ModelGateway::at_path(&path)
+        .expect("gateway")
+        .with_credentials(credentials.clone());
+    let before = tokio::fs::read(&path).await.expect("before");
+
+    assert!(matches!(
+        gateway.migrate_legacy_configuration().await,
+        Err(AppError::VaultLocked)
+    ));
+    assert_eq!(tokio::fs::read(&path).await.expect("after"), before);
+
+    credentials
+        .unlock("test-vault-master-password".into())
+        .await
+        .expect("unlock");
+    assert!(gateway
+        .migrate_legacy_configuration()
+        .await
+        .expect("migrate after unlock"));
+    let json = tokio::fs::read_to_string(&path).await.expect("JSON");
+    assert!(!json.contains("legacy-secret-key"));
 }
 
 #[tokio::test]

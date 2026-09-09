@@ -106,7 +106,7 @@ pub struct ChangeProposalRequest {
     pub title: String,
     pub summary: String,
     pub evidence_ids: Vec<Uuid>,
-    pub steps: Vec<ChangeStepDraft>,
+    pub(crate) steps: Vec<ChangeStepDraft>,
 }
 
 /// One proposed tool call. `reason_summary` is a user-visible progress
@@ -149,7 +149,7 @@ pub struct ValidatedChangeProposal {
     pub title: String,
     pub summary: String,
     pub evidence_ids: Vec<Uuid>,
-    pub steps: Vec<ChangeStepDraft>,
+    pub(crate) steps: Vec<ChangeStepDraft>,
 }
 
 /// A validated, dispatch-ready read tool call. The typed invocation is

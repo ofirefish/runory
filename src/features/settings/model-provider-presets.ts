@@ -1,6 +1,7 @@
 import type { AdvancedProviderKind, ModelProviderKind } from "../../types/agentic";
 
 export const chatgptModels = ["gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-4.1", "o4-mini"];
+export const managedModels = ["runory-agent-fast", "runory-agent-pro"];
 export const openRouterQuickModels = [
   "openai/gpt-4o-mini",
   "openai/gpt-4o",
@@ -105,7 +106,7 @@ export function isAdvancedKind(kind: ModelProviderKind): kind is AdvancedProvide
 
 export const providerLabelKeys: Record<ModelProviderKind, string> = {
   qwen: "settings.modelProvider.qwen", kimi: "settings.modelProvider.kimi", minimax: "settings.modelProvider.minimax",
-  local: "settings.modelProvider.local", "chat-gpt": "settings.provider.chatgpt",
+  local: "settings.modelProvider.local", "runory-managed": "settings.modelProvider.runoryManaged", "chat-gpt": "settings.provider.chatgpt",
   "open-router": "settings.modelProvider.openrouter", "open-ai": "settings.modelProvider.openai",
   anthropic: "settings.modelProvider.anthropic", google: "settings.modelProvider.google",
   "open-ai-compatible": "settings.modelProvider.custom", "deep-seek": "settings.modelProvider.deepseek", glm: "settings.modelProvider.glm",

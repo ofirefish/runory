@@ -1,6 +1,7 @@
 import { Check, Trash2, UserPlus, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { Input } from "../../components/ui/input";
@@ -38,8 +39,10 @@ export function CloudTeamPanel({ organizationId, userId, onMembershipChanged }: 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<InviteRole>("viewer");
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<OrganizationMemberDetails | null>(null);
+  const showTeamError = useCallback(() => {
+    toast.error(t("cloud.teamError"), { id: "cloud-team-error" });
+  }, [t]);
 
   const load = useCallback(async () => {
     const received = await listMyOrganizationInvites();
@@ -62,37 +65,38 @@ export function CloudTeamPanel({ organizationId, userId, onMembershipChanged }: 
     }
   }, [organizationId, userId]);
 
-  useEffect(() => { void load().catch(() => setFailed(true)); }, [load]);
+  useEffect(() => { void load().catch(showTeamError); }, [load, showTeamError]);
 
   const createInvite = async () => {
     if (!organizationId || !inviteEmail.trim()) return;
-    setBusy(true); setFailed(false);
+    setBusy(true);
     try {
       await createOrganizationInvite(organizationId, inviteEmail.trim(), inviteRole);
       setInviteEmail(""); await load(); await onMembershipChanged();
-    } catch { setFailed(true); } finally { setBusy(false); }
+      toast.success(t("cloud.inviteSent"));
+    } catch { showTeamError(); } finally { setBusy(false); }
   };
   const acceptInvite = async (id: string) => {
-    setBusy(true); setFailed(false);
-    try { await acceptOrganizationInvite(id); await onMembershipChanged(); await load(); }
-    catch { setFailed(true); } finally { setBusy(false); }
+    setBusy(true);
+    try { await acceptOrganizationInvite(id); await onMembershipChanged(); await load(); toast.success(t("cloud.inviteAccepted")); }
+    catch { showTeamError(); } finally { setBusy(false); }
   };
   const revokeInvite = async (id: string) => {
-    setBusy(true); setFailed(false);
-    try { await revokeOrganizationInvite(id); await load(); await onMembershipChanged(); }
-    catch { setFailed(true); } finally { setBusy(false); }
+    setBusy(true);
+    try { await revokeOrganizationInvite(id); await load(); await onMembershipChanged(); toast.success(t("cloud.inviteRevoked")); }
+    catch { showTeamError(); } finally { setBusy(false); }
   };
   const updateMemberRole = async (memberId: string, nextRole: InviteRole) => {
     if (!organizationId) return;
-    setBusy(true); setFailed(false);
-    try { await updateOrganizationMemberRole(organizationId, memberId, nextRole); await load(); await onMembershipChanged(); }
-    catch { setFailed(true); } finally { setBusy(false); }
+    setBusy(true);
+    try { await updateOrganizationMemberRole(organizationId, memberId, nextRole); await load(); await onMembershipChanged(); toast.success(t("cloud.memberRoleUpdated")); }
+    catch { showTeamError(); } finally { setBusy(false); }
   };
   const removeMember = async () => {
     if (!organizationId || !memberToRemove) return;
-    setBusy(true); setFailed(false);
-    try { await removeOrganizationMember(organizationId, memberToRemove.user_id); await load(); await onMembershipChanged(); setMemberToRemove(null); }
-    catch (error) { setFailed(true); throw error; } finally { setBusy(false); }
+    setBusy(true);
+    try { await removeOrganizationMember(organizationId, memberToRemove.user_id); await load(); await onMembershipChanged(); setMemberToRemove(null); toast.success(t("cloud.memberRemoved")); }
+    catch (error) { showTeamError(); throw error; } finally { setBusy(false); }
   };
 
   const canManage = role === "owner" || role === "admin";
@@ -104,7 +108,6 @@ export function CloudTeamPanel({ organizationId, userId, onMembershipChanged }: 
       <div className="mt-3 grid gap-2"><p className="text-xs font-medium">{t("cloud.inviteMember")}</p><Input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder={t("cloud.inviteEmail")} aria-label={t("cloud.inviteEmail")} /><div className="flex gap-2"><SelectControl className="min-w-0 flex-1 text-xs" value={inviteRole} onValueChange={setInviteRole} disabled={busy} label={t("cloud.inviteRole")} options={(["admin", "operator", "viewer"] as const).map((value) => ({ value, label: t(`cloud.role.${value}`) }))} /><Button size="sm" disabled={busy || !inviteEmail.trim()} onClick={() => void createInvite()}><UserPlus size={13} />{t("cloud.sendInvite")}</Button></div></div>
       {sentInvites.length > 0 && <div className="mt-3 grid gap-2"><p className="text-xs font-medium">{t("cloud.pendingInvites")}</p>{sentInvites.map((invite) => <div key={invite.id} className="flex items-center justify-between gap-2 rounded border p-2 text-xs"><span className="truncate">{invite.email} · {t(`cloud.role.${invite.role}`)}</span><Button size="icon" variant="ghost" disabled={busy} aria-label={t("cloud.revokeInvite")} onClick={() => void revokeInvite(invite.id)}><Trash2 size={13} /></Button></div>)}</div>}
     </>}
-    {failed && <p className="mt-2 text-xs text-red-500">{t("cloud.teamError")}</p>}
     {memberToRemove && <ConfirmDialog title={t("cloud.removeMemberTitle")} description={t("cloud.removeMemberDescription", { email: memberToRemove.email })} onConfirm={removeMember} onClose={() => setMemberToRemove(null)} />}
   </section>;
 }

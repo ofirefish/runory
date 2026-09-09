@@ -1,11 +1,13 @@
 use tauri::State;
 
 use crate::cloud::{CloudPolicyAction, CloudPolicyService};
-use crate::deployment::DeploymentService;
+use crate::deployment::{DeploymentAppsRepository, DeploymentService};
 use crate::domain::{
     AppResult, BackupRequest, CronAddRequest, CronEntry, CronRemoveRequest, DeployRequest,
-    DeploymentHistoryRequest, DeploymentRecord, EnvironmentConfigRequest, GitSetupRequest,
-    OperationResult, OperationsRequest, SslInspectRequest, SslIssueRequest,
+    DeploymentApp, DeploymentAppDeleteRequest, DeploymentAppUpsertRequest,
+    DeploymentAppsListRequest, DeploymentHistoryRequest, DeploymentRecord,
+    EnvironmentConfigRequest, GitSetupRequest, OperationResult, OperationsRequest,
+    SslInspectRequest, SslIssueRequest,
 };
 use crate::ssh::ServerSessionManager;
 
@@ -19,6 +21,12 @@ async fn authorize(
             sessions.profile_id(session_id).await?,
             CloudPolicyAction::Deploy,
         )
+        .await
+}
+
+async fn authorize_profile(policies: &CloudPolicyService, profile_id: uuid::Uuid) -> AppResult<()> {
+    policies
+        .authorize(profile_id, CloudPolicyAction::Deploy)
         .await
 }
 
@@ -147,4 +155,42 @@ pub async fn deployment_history(
     service: State<'_, DeploymentService>,
 ) -> AppResult<Vec<DeploymentRecord>> {
     service.history(request.profile_id).await
+}
+
+#[tauri::command]
+pub async fn deployment_apps_list(
+    request: DeploymentAppsListRequest,
+    apps: State<'_, DeploymentAppsRepository>,
+) -> AppResult<Vec<DeploymentApp>> {
+    apps.list(request.profile_id).await
+}
+
+#[tauri::command]
+pub async fn deployment_apps_upsert(
+    request: DeploymentAppUpsertRequest,
+    apps: State<'_, DeploymentAppsRepository>,
+    policies: State<'_, CloudPolicyService>,
+) -> AppResult<DeploymentApp> {
+    authorize_profile(&policies, request.profile_id).await?;
+    apps.upsert(
+        request.id,
+        request.profile_id,
+        request.name,
+        request.repository_path,
+        request.remote_url,
+        request.branch,
+        request.build,
+        request.restart,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn deployment_apps_delete(
+    request: DeploymentAppDeleteRequest,
+    apps: State<'_, DeploymentAppsRepository>,
+    policies: State<'_, CloudPolicyService>,
+) -> AppResult<()> {
+    authorize_profile(&policies, request.profile_id).await?;
+    apps.delete(request.profile_id, request.id).await
 }

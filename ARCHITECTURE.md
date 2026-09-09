@@ -604,7 +604,7 @@ Supabase Data API → GRANT + RLS → Organization-scoped opaque sync objects
 
 生产 Auth 邮件由部署工具通过固定 Supabase Management API Auth Configuration endpoint 配置。五套双语 HTML 模板在仓库内接受静态校验，本地 Supabase 使用同一模板与 Inbucket；Hosted Project 的 SMTP Host/User/Password 和 Management Access Token 只从部署环境读取，不进入 Vite、React、Rust Core 或版本库。配置写入后必须重新读取并核对所有非秘密字段与模板。
 
-WebView 不持久化 Supabase Session，`persistSession=false`，避免 Refresh Token 写入 localStorage。Profile/Group 清单在 Rust 使用 Argon2id 派生的 AES-256-GCM 密钥加密，并将 Organization ID 绑定为 AAD；Supabase 只接收不透明密文。同步格式主动移除 Credential、Private Key、Vault Secret、Terminal Output、`key_source` 与 `last_connected_at`。
+WebView 不持久化 Supabase Session，`persistSession=false`，避免 Refresh Token 写入 localStorage。Desktop 的 Supabase Session 只通过业务专用 Rust Command 写入当前 OS 用户的系统凭据存储，启动时短暂恢复到 Supabase 内存客户端；退出登录同时清除系统记录。移动端在 Platform Keystore 门禁完成前保持进程内会话。Profile/Group 清单在 Rust 使用 Argon2id 派生的 AES-256-GCM 密钥加密，并将 Organization ID 绑定为 AAD；Supabase 只接收不透明密文。同步格式主动移除 Credential、Private Key、Vault Secret、Terminal Output、`key_source` 与 `last_connected_at`。
 
 每个 Organization 在本机维护只含 UUID 与删除时间的 `cloud-sync-state.json`。只有已同步记录随后在本机消失时才生成 tombstone，因此首次同步和不完整快照不会被误判为删除。v2 加密快照携带 tombstone，同时继续兼容读取 v1。拉取先生成 Rust 内存 Preview；新增与远端较新项自动应用，本地较新、同版本差异、远端删除冲突由用户逐项选择。选择绑定预览时的对象类型、UUID 与本地时间戳，Apply 时在同一写锁内重新校验，避免 TOCTOU 覆盖。数据库写入通过 revision RPC 原子比较，防止多设备静默覆盖。
 

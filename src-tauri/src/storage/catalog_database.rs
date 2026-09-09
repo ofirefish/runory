@@ -12,11 +12,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Serialize};
 use uuid::Uuid;
 
-use crate::domain::{
-    AppError, AppResult, AuthMethod, HostGroup, KeySource, KnownHost, OsDistribution, ServerProfile,
-};
+use crate::domain::{AppError, AppResult, HostGroup, KnownHost, ServerProfile};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// SQLite-backed local catalog for SSH metadata only.
 #[derive(Clone)]
@@ -31,7 +29,7 @@ impl CatalogDatabase {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|_| AppError::Storage)?;
         }
-        let connection = Connection::open(path).map_err(|_| AppError::Storage)?;
+        let mut connection = Connection::open(path).map_err(|_| AppError::Storage)?;
         connection
             .execute_batch(
                 "PRAGMA foreign_keys = ON;
@@ -57,6 +55,7 @@ impl CatalogDatabase {
                     group_id TEXT,
                     auth_method_json TEXT NOT NULL,
                     key_source_json TEXT,
+                    connection_route_json TEXT NOT NULL DEFAULT '{\"type\":\"direct\"}',
                     sort_order INTEGER NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -66,13 +65,14 @@ impl CatalogDatabase {
                  CREATE INDEX IF NOT EXISTS server_profiles_group_sort_idx
                     ON server_profiles (group_id, sort_order);
                  CREATE TABLE IF NOT EXISTS known_hosts (
+                    route_scope TEXT NOT NULL DEFAULT 'direct',
                     host TEXT NOT NULL,
                     port INTEGER NOT NULL,
                     key_type TEXT NOT NULL,
                     fingerprint TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    PRIMARY KEY (host, port)
+                    PRIMARY KEY (route_scope, host, port)
                  );",
             )
             .map_err(|_| AppError::Storage)?;
@@ -95,6 +95,34 @@ impl CatalogDatabase {
                     .map_err(|_| AppError::Storage)?;
             }
             Some(SCHEMA_VERSION) => {}
+            Some(1) => {
+                let transaction = connection.transaction().map_err(|_| AppError::Storage)?;
+                transaction
+                    .execute_batch(
+                        "ALTER TABLE server_profiles
+                           ADD COLUMN connection_route_json TEXT NOT NULL DEFAULT '{\"type\":\"direct\"}';
+                         ALTER TABLE known_hosts RENAME TO known_hosts_v1;
+                         CREATE TABLE known_hosts (
+                            route_scope TEXT NOT NULL DEFAULT 'direct',
+                            host TEXT NOT NULL,
+                            port INTEGER NOT NULL,
+                            key_type TEXT NOT NULL,
+                            fingerprint TEXT NOT NULL,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL,
+                            PRIMARY KEY (route_scope, host, port)
+                         );
+                         INSERT INTO known_hosts (
+                            route_scope, host, port, key_type, fingerprint, created_at, updated_at
+                         ) SELECT 'direct', host, port, key_type, fingerprint, created_at, updated_at
+                           FROM known_hosts_v1;
+                         DROP TABLE known_hosts_v1;
+                         DELETE FROM catalog_schema_version;
+                         INSERT INTO catalog_schema_version (version) VALUES (2);",
+                    )
+                    .map_err(|_| AppError::Storage)?;
+                transaction.commit().map_err(|_| AppError::Storage)?;
+            }
             Some(_) => return Err(AppError::Storage),
         }
 
@@ -170,8 +198,8 @@ impl CatalogDatabase {
         let mut statement = connection
             .prepare(
                 "SELECT id, name, host, port, username, group_id, auth_method_json,
-                        key_source_json, sort_order, created_at, updated_at, last_connected_at,
-                        os_distribution_json
+                        key_source_json, connection_route_json, sort_order, created_at, updated_at,
+                        last_connected_at, os_distribution_json
                  FROM server_profiles ORDER BY sort_order, id",
             )
             .map_err(|_| AppError::Storage)?;
@@ -186,11 +214,12 @@ impl CatalogDatabase {
                     group_id: row.get(5)?,
                     auth_method_json: row.get(6)?,
                     key_source_json: row.get(7)?,
-                    sort_order: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
-                    last_connected_at: row.get(11)?,
-                    os_distribution_json: row.get(12)?,
+                    connection_route_json: row.get(8)?,
+                    sort_order: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    last_connected_at: row.get(12)?,
+                    os_distribution_json: row.get(13)?,
                 })
             })
             .map_err(|_| AppError::Storage)?;
@@ -217,10 +246,10 @@ impl CatalogDatabase {
                 .prepare(
                     "INSERT INTO server_profiles (
                         id, name, host, port, username, group_id, auth_method_json,
-                        key_source_json, sort_order, created_at, updated_at, last_connected_at,
-                        os_distribution_json
+                        key_source_json, connection_route_json, sort_order, created_at, updated_at,
+                        last_connected_at, os_distribution_json
                      ) VALUES (
-                        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+                        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
                      )",
                 )
                 .map_err(|_| AppError::Storage)?;
@@ -235,6 +264,7 @@ impl CatalogDatabase {
                         profile.group_id,
                         profile.auth_method_json,
                         profile.key_source_json,
+                        profile.connection_route_json,
                         profile.sort_order,
                         profile.created_at,
                         profile.updated_at,
@@ -251,19 +281,20 @@ impl CatalogDatabase {
         let connection = self.connection.lock().map_err(|_| AppError::Storage)?;
         let mut statement = connection
             .prepare(
-                "SELECT host, port, key_type, fingerprint, created_at, updated_at
-                 FROM known_hosts ORDER BY host, port",
+                "SELECT route_scope, host, port, key_type, fingerprint, created_at, updated_at
+                 FROM known_hosts ORDER BY route_scope, host, port",
             )
             .map_err(|_| AppError::Storage)?;
         let rows = statement
             .query_map([], |row| {
                 Ok(StoredKnownHost {
-                    host: row.get(0)?,
-                    port: row.get(1)?,
-                    key_type: row.get(2)?,
-                    fingerprint: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    route_scope: row.get(0)?,
+                    host: row.get(1)?,
+                    port: row.get(2)?,
+                    key_type: row.get(3)?,
+                    fingerprint: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 })
             })
             .map_err(|_| AppError::Storage)?;
@@ -289,13 +320,14 @@ impl CatalogDatabase {
         {
             let mut insert = transaction
                 .prepare(
-                    "INSERT INTO known_hosts (host, port, key_type, fingerprint, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT INTO known_hosts (route_scope, host, port, key_type, fingerprint, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 )
                 .map_err(|_| AppError::Storage)?;
             for host in hosts {
                 insert
                     .execute(params![
+                        host.route_scope,
                         host.host,
                         host.port,
                         host.key_type,
@@ -361,6 +393,7 @@ struct StoredProfile {
     group_id: Option<String>,
     auth_method_json: String,
     key_source_json: Option<String>,
+    connection_route_json: String,
     sort_order: i32,
     created_at: String,
     updated_at: String,
@@ -381,6 +414,7 @@ impl TryFrom<&ServerProfile> for StoredProfile {
             group_id: profile.group_id.map(|id| id.to_string()),
             auth_method_json: encode_json(&profile.auth_method)?,
             key_source_json: profile.key_source.as_ref().map(encode_json).transpose()?,
+            connection_route_json: encode_json(&profile.connection_route)?,
             sort_order: profile.sort_order,
             created_at: profile.created_at.clone(),
             updated_at: profile.updated_at.clone(),
@@ -411,6 +445,7 @@ impl TryFrom<StoredProfile> for ServerProfile {
                 .as_deref()
                 .map(decode_json)
                 .transpose()?,
+            connection_route: decode_json(&profile.connection_route_json)?,
             sort_order: profile.sort_order,
             created_at: profile.created_at,
             updated_at: profile.updated_at,
@@ -425,6 +460,7 @@ impl TryFrom<StoredProfile> for ServerProfile {
 }
 
 struct StoredKnownHost {
+    route_scope: String,
     host: String,
     port: i64,
     key_type: String,
@@ -436,6 +472,7 @@ struct StoredKnownHost {
 impl From<KnownHost> for StoredKnownHost {
     fn from(host: KnownHost) -> Self {
         Self {
+            route_scope: host.route_scope,
             host: host.host,
             port: i64::from(host.port),
             key_type: host.key_type,
@@ -451,6 +488,7 @@ impl TryFrom<StoredKnownHost> for KnownHost {
 
     fn try_from(host: StoredKnownHost) -> AppResult<Self> {
         Ok(Self {
+            route_scope: host.route_scope,
             host: host.host,
             port: parse_port(host.port)?,
             key_type: host.key_type,
@@ -484,6 +522,7 @@ fn decode_json<T: DeserializeOwned>(value: &str) -> AppResult<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{AuthMethod, ConnectionRoute, KeySource, OsDistribution};
 
     #[test]
     fn round_trips_all_catalog_records_in_one_database() {
@@ -508,6 +547,7 @@ mod tests {
             key_source: Some(KeySource::Vault {
                 key_id: Uuid::new_v4(),
             }),
+            connection_route: ConnectionRoute::Direct,
             sort_order: 0,
             created_at: "3".into(),
             updated_at: "4".into(),
@@ -515,6 +555,7 @@ mod tests {
             os_distribution: Some(OsDistribution::Ubuntu),
         };
         let known_host = KnownHost {
+            route_scope: "direct".into(),
             host: "api.example.com".into(),
             port: 22,
             key_type: "ssh-ed25519".into(),
@@ -562,5 +603,79 @@ mod tests {
         assert!(database.list_groups().expect("groups").is_empty());
         assert!(database.list_profiles().expect("profiles").is_empty());
         assert!(database.list_known_hosts().expect("known hosts").is_empty());
+    }
+
+    #[test]
+    fn migrates_v1_profiles_and_known_hosts_as_direct_routes() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("runory.db");
+        let profile_id = Uuid::new_v4();
+        let connection = Connection::open(&path).expect("open v1 fixture");
+        connection
+            .execute_batch(
+                "CREATE TABLE catalog_schema_version (version INTEGER NOT NULL);
+                 INSERT INTO catalog_schema_version (version) VALUES (1);
+                 CREATE TABLE host_groups (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL,
+                    collapsed INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                 );
+                 CREATE TABLE server_profiles (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    name TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    username TEXT NOT NULL,
+                    group_id TEXT,
+                    auth_method_json TEXT NOT NULL,
+                    key_source_json TEXT,
+                    sort_order INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_connected_at TEXT,
+                    os_distribution_json TEXT
+                 );
+                 CREATE TABLE known_hosts (
+                    host TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    key_type TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (host, port)
+                 );",
+            )
+            .expect("create v1 schema");
+        connection
+            .execute(
+                "INSERT INTO server_profiles (
+                    id, name, host, port, username, group_id, auth_method_json,
+                    key_source_json, sort_order, created_at, updated_at,
+                    last_connected_at, os_distribution_json
+                 ) VALUES (?1, 'Legacy', 'legacy.example.com', 22, 'root', NULL,
+                    '\"password\"', NULL, 0, '1', '2', NULL, NULL)",
+                params![profile_id.to_string()],
+            )
+            .expect("insert v1 profile");
+        connection
+            .execute(
+                "INSERT INTO known_hosts (
+                    host, port, key_type, fingerprint, created_at, updated_at
+                 ) VALUES ('legacy.example.com', 22, 'ssh-ed25519', 'SHA256:legacy', '1', '2')",
+                [],
+            )
+            .expect("insert v1 known host");
+        drop(connection);
+
+        let database = CatalogDatabase::open(&path).expect("migrate v1 database");
+        let profiles = database.list_profiles().expect("profiles");
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].connection_route, ConnectionRoute::Direct);
+        let hosts = database.list_known_hosts().expect("known hosts");
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].route_scope, "direct");
     }
 }

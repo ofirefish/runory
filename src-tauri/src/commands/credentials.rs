@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::agentic::ModelGateway;
 use crate::credentials::CredentialService;
 use crate::domain::{
     AppError, AppResult, CredentialStatus, CredentialStatusRequest, ForgetCredentialRequest,
@@ -11,20 +14,31 @@ use crate::domain::{
 pub async fn vault_unlock(
     request: VaultUnlockRequest,
     credentials: State<'_, CredentialService>,
+    models: State<'_, Arc<ModelGateway>>,
 ) -> AppResult<()> {
-    credentials.unlock(request.master_password).await
+    credentials.unlock(request.master_password).await?;
+    models.migrate_legacy_configuration().await?;
+    models.load().await
 }
 
 #[tauri::command]
-pub async fn vault_initialize(credentials: State<'_, CredentialService>) -> AppResult<()> {
-    credentials.initialize_with_platform_key().await
+pub async fn vault_initialize(
+    credentials: State<'_, CredentialService>,
+    models: State<'_, Arc<ModelGateway>>,
+) -> AppResult<()> {
+    credentials.initialize_with_platform_key().await?;
+    models.migrate_legacy_configuration().await?;
+    models.load().await
 }
 
 #[tauri::command]
 pub async fn vault_unlock_with_platform(
     credentials: State<'_, CredentialService>,
+    models: State<'_, Arc<ModelGateway>>,
 ) -> AppResult<()> {
-    credentials.unlock_with_platform_key().await
+    credentials.unlock_with_platform_key().await?;
+    models.migrate_legacy_configuration().await?;
+    models.load().await
 }
 
 #[tauri::command]

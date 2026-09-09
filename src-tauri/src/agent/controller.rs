@@ -118,7 +118,7 @@ pub struct AgentStores {
 pub struct AgentControllerConfig {
     pub gate: Arc<dyn AuthorizationGate>,
     pub policy_matcher: Arc<dyn PolicySnapshotMatcher>,
-    pub changesets: Arc<dyn ChangeSetExecutor>,
+    pub(crate) changesets: Arc<dyn ChangeSetExecutor>,
     pub artifacts: Arc<dyn ArtifactStore>,
     pub target_ids: Vec<Uuid>,
     pub session_id: Option<SessionId>,
@@ -148,6 +148,8 @@ pub enum AgentControllerError {
     ApprovalNotFound,
     #[error("run is already terminal")]
     AlreadyTerminal,
+    #[error("run is not in a failed state that can be retried")]
+    NotFailed,
 }
 
 impl AgentControllerError {
@@ -162,6 +164,7 @@ impl AgentControllerError {
             AgentControllerError::InvalidUserInput => AGENT_INVALID_USER_INPUT,
             AgentControllerError::ApprovalNotFound => super::repository::AGENT_APPROVAL_NOT_FOUND,
             AgentControllerError::AlreadyTerminal => "AGENT_ALREADY_TERMINAL",
+            AgentControllerError::NotFailed => "AGENT_NOT_FAILED",
         }
     }
 }
@@ -394,6 +397,45 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
             self.emit(AgentEvent::RunStarted)?;
         }
         let started = *self.loop_started_at.get_or_insert_with(Instant::now);
+        self.drive_loop(started).await
+    }
+
+    /// Retries reasoning on the same failed `AgentRun` after a transient
+    /// infrastructure failure (for example model unavailable). Does not create
+    /// a new run, restore approvals, or claim the previous failure never happened.
+    pub async fn retry_after_failure(&mut self) -> Result<RunOutcome, AgentControllerError> {
+        if self.run.state() != AgentRunStateV2::Failed {
+            return Err(AgentControllerError::NotFailed);
+        }
+        while let Some(mut approval) = self.approvals.pending_for_run(self.run.id())? {
+            approval.decide(ApprovalRequestState::Invalidated);
+            self.approvals.save(&approval)?;
+            self.emit(AgentEvent::ApprovalInvalidated {
+                approval_id: approval.id,
+                reason_code: "APPROVAL_RETRY_AFTER_FAILURE".into(),
+            })?;
+        }
+        self.run.begin_user_turn()?;
+        self.run_store.save(&self.run)?;
+        let started = Instant::now();
+        self.loop_started_at = Some(started);
+        self.pending_command_analysis = None;
+        self.observations.push(Observation {
+            tool_call_id: None,
+            tool_name: None,
+            success: true,
+            error_code: None,
+            summary: "Retrying after a transient model or infrastructure failure".into(),
+            detail: Some(
+                "The previous reasoner call failed; continue with existing observations on the same run."
+                    .into(),
+            ),
+        });
+        self.emit(AgentEvent::ObservationAdded {
+            summary: "Retrying after a transient model or infrastructure failure".into(),
+        })?;
+        self.emit(AgentEvent::RunResumed)?;
+        self.save_checkpoint(None, started)?;
         self.drive_loop(started).await
     }
 
@@ -2563,6 +2605,45 @@ mod tests {
                 error_code: AGENT_REASONER_FAILED
             }
         );
+    }
+
+    #[tokio::test]
+    async fn failed_run_can_retry_reasoning_on_the_same_run_id() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        let harness = Harness::new();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_for_reasoner = attempts.clone();
+        let mut controller = harness.auto_controller(
+            FnReasoner(move |input: &ReasonerInput<'_>| {
+                let n = attempts_for_reasoner.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    return Err(ReasonerError::unavailable());
+                }
+                assert!(
+                    input
+                        .observations
+                        .iter()
+                        .any(|item| item.summary.contains("Retrying after a transient")),
+                    "retry must keep prior loop context and add a retry observation"
+                );
+                Ok(final_answer("Recovered after retry."))
+            }),
+            FnDispatcher(|_: &PreparedToolCall| panic!("no tool")),
+            RunBudget::default(),
+        );
+        let run_id = controller.run_id();
+        assert!(matches!(
+            controller.run_to_interrupt().await.expect("first"),
+            RunOutcome::Failed { .. }
+        ));
+        assert!(matches!(
+            controller.retry_after_failure().await.expect("retry"),
+            RunOutcome::Completed { .. }
+        ));
+        assert_eq!(controller.run_id(), run_id);
+        assert!(harness.event_types(run_id).contains(&"run_resumed"));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

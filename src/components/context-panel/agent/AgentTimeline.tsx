@@ -9,9 +9,10 @@ const COMPACT_TOOL_EVENTS = new Set([
   "tool_completed",
   "tool_failed",
 ]);
-export function AgentTimeline({ events, displayContext, pendingApproval, busy, expanded, onToggle, onApprove, onReject, readOnly = false }: {
+export function AgentTimeline({ events, displayContext, userAvatarUrl, pendingApproval, busy, expanded, onToggle, onApprove, onReject, readOnly = false }: {
   events: AgentEventEnvelope[];
   displayContext?: AgentV2DisplayContext;
+  userAvatarUrl?: string | null;
   pendingApproval?: TimelineApproval;
   busy?: boolean;
   readOnly?: boolean;
@@ -30,7 +31,9 @@ export function AgentTimeline({ events, displayContext, pendingApproval, busy, e
       if (type === "user_message_added") {
         return <div key={key} className="agent-user-turn">
           <div className="agent-user-message"><p>{String(payload.content ?? "")}</p></div>
-          <span className="agent-user-avatar" aria-hidden><UserRound size={13} /></span>
+          <span className="agent-user-avatar" aria-hidden>
+            {userAvatarUrl ? <img src={userAvatarUrl} alt="" /> : <UserRound size={13} />}
+          </span>
           {displayContext && <p className="agent-runtime-context">
             <span>OS: {displayContext.os}</span>
             <span>User: {displayContext.user}</span>

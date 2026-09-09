@@ -23,14 +23,17 @@ export const subscribeAgentV2Run = (
   });
 };
 
-export const approveAgentV2Run = (runId: string) =>
-  invoke<void>("agent_v2_run_approve", { request: { runId } });
+export const approveAgentV2Run = (runId: string, approvalId: string) =>
+  invoke<void>("agent_v2_run_approve", { request: { runId, approvalId } });
 
-export const rejectAgentV2Run = (runId: string) =>
-  invoke<void>("agent_v2_run_reject", { request: { runId } });
+export const rejectAgentV2Run = (runId: string, approvalId: string) =>
+  invoke<void>("agent_v2_run_reject", { request: { runId, approvalId } });
 
 export const replyAgentV2Run = (runId: string, text: string) =>
   invoke<void>("agent_v2_run_reply", { request: { runId, text } });
+
+export const retryAgentV2Run = (runId: string) =>
+  invoke<void>("agent_v2_run_retry", { request: { runId } });
 
 export const cancelAgentV2Run = (runId: string) =>
   invoke<void>("agent_v2_run_cancel", { runId });

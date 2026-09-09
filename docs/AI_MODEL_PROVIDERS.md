@@ -1,6 +1,6 @@
 # AI Model Providers
 
-Runory's Agent Runtime can use a remote model through Quick connect (ChatGPT / OpenRouter account OAuth) or a BYOK OpenAI-compatible Chat Completions API. DeepSeek and Zhipu GLM remain API-key presets over the same Completions protocol.
+Runory's Agent Runtime can use Runory Managed AI, Quick connect (ChatGPT / OpenRouter account OAuth), or a BYOK OpenAI-compatible Chat Completions API. DeepSeek and Zhipu GLM remain available as direct API-key presets as well as server-side routes behind the managed product.
 
 ## Architecture
 
@@ -8,6 +8,7 @@ Runory's Agent Runtime can use a remote model through Quick connect (ChatGPT / O
 React settings (saved model list + Quick add / Add API Key)
   -> business-specific Tauri commands
     -> Rust ModelGateway / ProviderOAuth
+      -> Runory Managed: Supabase account token -> agent-turn Edge Function
       -> ChatGPT: browser PKCE -> OAuth tokens -> Codex Responses API
       -> OpenRouter: browser PKCE -> user API key -> Chat Completions
       -> DeepSeek / GLM / compatible: HTTPS Chat Completions + API key
@@ -17,6 +18,13 @@ Agent Runtime
   -> sanitized evidence
   -> ModelGateway turn
   -> existing Policy / ChangeSet / Approval / Verification pipeline
+
+Runory Managed AI backend
+  -> authenticate the Runory Cloud account
+  -> reserve workspace credits atomically
+  -> resolve the public model alias to a versioned GLM / DeepSeek route
+  -> validate the single Runtime V2 decision
+  -> settle actual token usage or release the reservation
 ```
 
 The model is not a tool executor. It never receives SSH passwords, private keys, vault contents, or unrestricted terminal access. Remote output is untrusted. A model diagnosis remains non-authoritative for execution: Rust classifies risk and the user approves commands.
@@ -60,11 +68,17 @@ GLM, DeepSeek, Qwen, Kimi, and MiniMax use the existing Rust OpenAI-compatible t
 
 Preset references: [GLM](https://docs.bigmodel.cn/cn/guide/models/text/glm-4.7), [DeepSeek](https://api-docs.deepseek.com/), [Qwen](https://help.aliyun.com/en/model-studio/model-calling-in-sub-workspace), [Kimi](https://platform.kimi.ai/docs/overview), [MiniMax](https://platform.minimaxi.com/docs/api-reference/text-openai-api).
 
-## Why there is no separate managed backend yet
+## Runory Managed AI backend
 
-BYOK and account-linked OAuth fit Runory's local-first architecture. A separate managed backend would add authentication, key custody, quotas, abuse prevention, billing, telemetry, regional routing, and operational ownership without improving the local execution boundary.
+The explicitly authorized managed product is implemented as the narrow `agent-turn` Supabase Edge Function. Open **Settings → Agent & models → Quick add**, choose **Runory Managed AI**, and bind the profile to a personal or team billing workspace. The saved profile contains only the Supabase project URL, public model alias, and workspace UUID. It never contains a GLM or DeepSeek provider key.
 
-Introduce a standalone backend only for an explicitly authorized **Runory Managed AI** product. Keep tool execution and approvals in the local Rust Runtime.
+The Rust gateway loads the existing Runory Cloud access token from the platform credential store and sends a typed Runtime V2 turn. The backend authenticates the user, verifies workspace membership through the billing RPC, reserves credits under a request/idempotency UUID, resolves `runory-agent-fast` or `runory-agent-pro` through `model_price_versions`, calls the official provider API, validates the one-decision JSON contract, and settles actual input/output tokens. Provider failures release the hold; an under-reserved request remains `settlement-pending` for operator reconciliation and never silently creates a negative balance.
+
+`runory-agent-fast` uses DeepSeek in non-thinking mode for Runtime V2 turns. These turns need one short structured decision, and DeepSeek's default high-effort thinking can otherwise consume the bounded output budget before emitting JSON. Provider response failures retain distinct stable codes for empty content, malformed/truncated JSON, invalid decision fields, invalid multiline commands, missing usage, and invalid provider envelopes.
+
+This endpoint is intentionally not OpenAI-compatible and is not a general model proxy. It accepts only the Runtime V2 goal, bounded/redacted observations, user replies, language, workspace, public model alias, and output budget. SSH, Terminal injection, Tool Registry, Policy, risk classification, approvals, ChangeSet, verification, and rollback remain local Rust responsibilities.
+
+Deployment requires `RUNORY_DEEPSEEK_API_KEY` and/or `RUNORY_GLM_API_KEY` as Edge Function secrets. Supabase service credentials are read only by the function. Apply the billing migrations, deploy `agent-turn`, and configure the desktop build with `VITE_SUPABASE_URL` plus `VITE_SUPABASE_PUBLISHABLE_KEY`. A provider key must never be placed in a `VITE_` variable.
 
 ## Verification
 

@@ -1,7 +1,12 @@
-// Agent Runtime V2 domain contracts (AR2-A). Public library API with no
+﻿// Agent Runtime V2 domain contracts (AR2-A). Public library API with no
 // production caller yet; the legacy Agent paths run unchanged until AR2-B+.
 pub mod agent;
+// The legacy typed Agent/ChangeSet runtime remains available to Incident and
+// Operations workflows while Runtime V2 replaces its former UI entry points.
+#[allow(dead_code)]
 mod agentic;
+#[cfg(not(mobile))]
+mod app_update;
 mod cloud;
 mod commands;
 mod credentials;
@@ -10,11 +15,17 @@ mod deployment;
 mod domain;
 mod groups;
 mod known_hosts;
+// MCP stays behind the typed gateway and is currently consumed only by the
+// retained legacy Agent runtime; keep the guarded implementation compiled.
+#[allow(dead_code)]
 mod mcp;
 mod operations;
 mod policy;
 mod profiles;
 mod settings;
+// Skills remain policy-bound data for the typed Agent runtime while the V2
+// conversation path is integrated incrementally.
+#[allow(dead_code)]
 mod skills;
 mod ssh;
 mod storage;
@@ -22,11 +33,14 @@ mod storage;
 #[allow(dead_code)]
 mod tools;
 mod transfers;
+mod tunnels;
 
-use ssh::ServerSessionManager;
+use ssh::{JumpConnectionManager, ServerSessionManager};
 use std::path::Path;
 use std::sync::Arc;
 use tauri::{DragDropEvent, Manager, WindowEvent};
+#[cfg(any(target_os = "linux", windows))]
+use tauri_plugin_deep_link::DeepLinkExt;
 use tokio::sync::Mutex;
 
 use agent::AgentRuntimeV2Service;
@@ -34,11 +48,21 @@ use agentic::{
     AgentRuntimeService, ChangeSetService, FleetExecutionService, IncidentService, ModelGateway,
     ObservationCache,
 };
-use cloud::{CloudPolicyService, CloudSyncService, CloudSyncStateRepository};
-use deployment::{DeploymentHistoryRepository, DeploymentService};
+#[cfg(not(mobile))]
+use app_update::AppUpdateService;
+#[cfg(not(mobile))]
+use cloud::NativeCloudSyncKeyStore;
+#[cfg(mobile)]
+use cloud::UnavailableCloudSyncKeyStore;
+use cloud::{
+    CloudAuthSessionStore, CloudPolicyService, CloudSyncKeyStore, CloudSyncService,
+    CloudSyncStateRepository,
+};
+use deployment::{DeploymentAppsRepository, DeploymentHistoryRepository, DeploymentService};
 use groups::{GroupRepository, GroupService};
 use known_hosts::{KnownHostRepository, KnownHostService};
 use mcp::{McpConfigRepository, McpGateway};
+use operations::DockerRegistriesRepository;
 use policy::AgentPolicyService;
 use profiles::{ProfileRepository, ProfileService};
 use settings::{SettingsRepository, SettingsService};
@@ -77,9 +101,26 @@ pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    #[cfg(not(mobile))]
+    {
+        // Desktop deep links launch a second process; forward them to the existing window.
+        builder = builder
+            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_focus();
+                }
+            }))
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .manage(AppUpdateService::default());
+    }
+    builder
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ServerSessionManager::default())
+        .manage(JumpConnectionManager::default())
+        .manage(CloudAuthSessionStore)
         // The assistant panel is LLM-backed: the provider talks to the
         // configured model through ModelGateway and only classifies its
         // output. Registration happens in `setup` once the gateway exists.
@@ -99,9 +140,14 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            #[cfg(any(target_os = "linux", windows))]
+            app.deep_link().register_all()?;
             #[cfg(mobile)]
             app.handle().plugin(tauri_plugin_biometric::init())?;
             let data_directory = app.path().app_data_dir()?;
+            app.manage(tunnels::TunnelService::at_path(
+                data_directory.join("ssh-tunnels.json"),
+            ));
             let credentials = credential_service(&data_directory);
             if let Err(error) = tauri::async_runtime::block_on(credentials.auto_unlock()) {
                 tracing::warn!(
@@ -117,8 +163,18 @@ pub fn run() {
             let models = Arc::new(
                 ModelGateway::at_path(data_directory.join("agent-model.json"))?
                     .with_credentials(credentials.clone())
+                    .with_cloud_auth_sessions(CloudAuthSessionStore)
                     .with_settings(settings.clone()),
             );
+            match tauri::async_runtime::block_on(models.migrate_legacy_configuration()) {
+                Ok(true) => tracing::info!("legacy model credentials migrated to the Vault"),
+                Ok(false) => {}
+                Err(domain::AppError::VaultLocked) => tracing::warn!(
+                    error_code = domain::AppError::VaultLocked.code(),
+                    "legacy model credential migration is waiting for Vault unlock"
+                ),
+                Err(error) => return Err(error.into()),
+            }
             tauri::async_runtime::block_on(models.load())?;
             app.manage(models);
             let agent_policy = AgentPolicyService::at_path(
@@ -126,7 +182,7 @@ pub fn run() {
                 data_directory.join("agent-policy-audit.json"),
             );
             tauri::async_runtime::block_on(agent_policy.load())?;
-            // Rust-only Policy → Risk → Approval → Audit → Registry service; no generic IPC.
+            // Rust-only Policy 鈫?Risk 鈫?Approval 鈫?Audit 鈫?Registry service; no generic IPC.
             app.manage(
                 NativeToolExecutionService::approved_repair_with_agent_policy(
                     ToolAuditRepository::new(JsonRepository::new(
@@ -173,11 +229,18 @@ pub fn run() {
                 profile_repository.clone(),
                 Arc::clone(&write_lock),
             ));
-            app.manage(CloudSyncService::new(
+            #[cfg(not(mobile))]
+            let cloud_key_store: Arc<dyn CloudSyncKeyStore> =
+                Arc::new(NativeCloudSyncKeyStore::new());
+            #[cfg(mobile)]
+            let cloud_key_store: Arc<dyn CloudSyncKeyStore> =
+                Arc::new(UnavailableCloudSyncKeyStore);
+            app.manage(CloudSyncService::with_key_store(
                 profile_repository.clone(),
                 group_repository.clone(),
                 Arc::clone(&write_lock),
                 CloudSyncStateRepository::at_path(data_directory.join("cloud-sync-state.json")),
+                cloud_key_store,
             ));
             let cloud_policy =
                 CloudPolicyService::at_path(data_directory.join("cloud-policy-bindings.json"))?;
@@ -200,9 +263,31 @@ pub fn run() {
             app.manage(DeploymentService::new(DeploymentHistoryRepository::new(
                 JsonRepository::new(data_directory.join("deployment-history.json")),
             )));
+            app.manage(DeploymentAppsRepository::new(JsonRepository::new(
+                data_directory.join("deployment-apps.json"),
+            )));
+            app.manage(DockerRegistriesRepository::new(JsonRepository::new(
+                data_directory.join("docker-registries.json"),
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            #[cfg(not(mobile))]
+            commands::app_update::app_update_status,
+            #[cfg(not(mobile))]
+            commands::app_update::app_update_check,
+            #[cfg(not(mobile))]
+            commands::app_update::app_update_download,
+            #[cfg(not(mobile))]
+            commands::app_update::app_update_install,
+            commands::tunnels::tunnel_list,
+            commands::tunnels::tunnel_session_impact,
+            commands::tunnels::tunnel_save,
+            commands::tunnels::tunnel_delete,
+            commands::tunnels::tunnel_start,
+            commands::tunnels::tunnel_connect_start,
+            commands::tunnels::tunnel_stop,
+            commands::tunnels::tunnel_check,
             commands::agentic::agent_model_get,
             commands::agentic::agent_model_profiles,
             commands::agentic::agent_model_profile_save,
@@ -227,6 +312,7 @@ pub fn run() {
             commands::agent_v2::agent_v2_run_approve,
             commands::agent_v2::agent_v2_run_reject,
             commands::agent_v2::agent_v2_run_reply,
+            commands::agent_v2::agent_v2_run_retry,
             commands::agent_v2::agent_v2_run_cancel,
             commands::agent_v2::agent_v2_run_pause,
             commands::agent_v2::agent_v2_run_resume,
@@ -243,6 +329,9 @@ pub fn run() {
             commands::agentic::agent_mcp_set_tool_enabled,
             commands::agentic::agent_mcp_set_enabled,
             commands::agentic::agent_mcp_remove,
+            commands::cloud_avatar::cloud_avatar_cache_get,
+            commands::cloud_avatar::cloud_avatar_cache_store,
+            commands::cloud_avatar::cloud_avatar_cache_remove,
             commands::catalog::group_list,
             commands::catalog::group_create,
             commands::catalog::group_update,
@@ -255,8 +344,14 @@ pub fn run() {
             commands::catalog::profile_reorder,
             commands::cloud::cloud_sync_export,
             commands::cloud::cloud_sync_preview,
+            commands::cloud::cloud_sync_key_status,
+            commands::cloud::cloud_sync_forget_key,
+            commands::cloud::cloud_sync_rotate_recovery_passphrase,
             commands::cloud::cloud_sync_apply,
             commands::cloud::cloud_sync_discard,
+            commands::cloud_auth::cloud_auth_session_load,
+            commands::cloud_auth::cloud_auth_session_save,
+            commands::cloud_auth::cloud_auth_session_clear,
             commands::cloud_policy::cloud_policy_bind,
             commands::cloud_policy::cloud_policy_refresh,
             commands::cloud_policy::cloud_policy_lock,
@@ -278,6 +373,8 @@ pub fn run() {
             commands::ssh::ssh_connect,
             commands::ssh::ssh_reconnect,
             commands::ssh::ssh_test,
+            commands::ssh::ssh_jump_prepare,
+            commands::ssh::ssh_jump_cancel,
             commands::ssh::ssh_write,
             commands::ssh::ssh_resize,
             commands::ssh::ssh_disconnect,
@@ -306,6 +403,18 @@ pub fn run() {
             commands::dashboard::dashboard_service_health,
             commands::operations::docker_list,
             commands::operations::docker_action,
+            commands::operations::docker_images_list,
+            commands::operations::docker_images_search,
+            commands::operations::docker_image_action,
+            commands::operations::docker_networks_list,
+            commands::operations::docker_network_action,
+            commands::operations::docker_volumes_list,
+            commands::operations::docker_volume_action,
+            commands::operations::docker_settings_get,
+            commands::operations::docker_settings_apply,
+            commands::operations::docker_registries_list,
+            commands::operations::docker_registries_upsert,
+            commands::operations::docker_registries_delete,
             commands::operations::pm2_list,
             commands::operations::pm2_action,
             commands::operations::nginx_action,
@@ -321,7 +430,10 @@ pub fn run() {
             commands::deployment::deployment_cron_list,
             commands::deployment::deployment_cron_add,
             commands::deployment::deployment_cron_remove,
-            commands::deployment::deployment_history
+            commands::deployment::deployment_history,
+            commands::deployment::deployment_apps_list,
+            commands::deployment::deployment_apps_upsert,
+            commands::deployment::deployment_apps_delete
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| eprintln!("failed to run Runory: {error}"));

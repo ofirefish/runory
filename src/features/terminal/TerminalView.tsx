@@ -33,10 +33,10 @@ const lightSearchOptions = {
 };
 
 const darkTerminalTheme = {
-  background: "#081220",
+  background: "#0f1a29",
   foreground: "#d7e0ec",
   cursor: "#94a3b8",
-  cursorAccent: "#081220",
+  cursorAccent: "#0f1a29",
   selectionBackground: "#33415599",
   black: "#0f172a",
   red: "#ef4444",
@@ -83,7 +83,7 @@ const lightTerminalTheme = {
 const currentTerminalTheme = () => document.documentElement.classList.contains("dark") ? darkTerminalTheme : lightTerminalTheme;
 const currentSearchOptions = () => document.documentElement.classList.contains("dark") ? darkSearchOptions : lightSearchOptions;
 
-export const TerminalView = forwardRef<TerminalHandle, { sessionId: string | null; active?: boolean; onTransportError?: () => void }>(function TerminalView({ sessionId, active = true, onTransportError }, ref) {
+export const TerminalView = forwardRef<TerminalHandle, { sessionId: string | null; active?: boolean; toolbarHost?: HTMLDivElement | null; onTransportError?: () => void }>(function TerminalView({ sessionId, active = true, toolbarHost, onTransportError }, ref) {
   const container = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const fit = useRef<FitAddon | null>(null);
@@ -211,7 +211,7 @@ export const TerminalView = forwardRef<TerminalHandle, { sessionId: string | nul
   }, []);
 
   return <div className="terminal-view relative flex h-full min-h-0 w-full flex-col">
-    <TerminalToolbar searchOpen={searchOpen} query={query} result={searchResult} clipboardError={clipboardError} onOpenSearch={() => setSearchOpen(true)} onCloseSearch={closeSearch} onQueryChange={(value) => { setQuery(value); findNext(value); }} onFindNext={() => findNext()} onFindPrevious={findPrevious} onCopy={() => void copySelection()} onPaste={() => void paste()} />
+    <TerminalToolbar toolbarHost={toolbarHost} searchOpen={searchOpen} query={query} result={searchResult} clipboardError={clipboardError} onOpenSearch={() => setSearchOpen(true)} onCloseSearch={closeSearch} onQueryChange={(value) => { setQuery(value); findNext(value); }} onFindNext={() => findNext()} onFindPrevious={findPrevious} onCopy={() => void copySelection()} onPaste={() => void paste()} />
     <div
       ref={container}
       className="min-h-0 w-full flex-1"

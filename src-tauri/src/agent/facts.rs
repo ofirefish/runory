@@ -65,14 +65,17 @@ pub struct WorkingFactSet {
 }
 
 impl WorkingFactSet {
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.facts.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.facts.is_empty()
     }
 
+    #[cfg(test)]
     pub fn all(&self) -> &[WorkingFact] {
         &self.facts
     }

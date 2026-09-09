@@ -314,8 +314,8 @@ Current session rules remain:
 - publishable key only in the app;
 - no service-role key in React, Rust, or the application package;
 - `persistSession=false` in WebView storage;
-- the Supabase session exists only in WebView process memory; Rust receives the current access token through a narrow session-update command and keeps its copy in zeroizing process memory;
-- refresh token remains process-memory-only under the current sign-in policy;
+- Desktop persists the Supabase session only through a business-specific Rust command backed by the current OS user's Platform Keychain/Keystore; startup restores it into the in-memory Supabase client and sign-out deletes it;
+- access/refresh tokens never enter WebView `localStorage`, application JSON repositories, logs, sync payloads, or model context; mobile remains process-memory-only until its Platform Keystore gate is complete;
 - MFA and verified email are required for device enrollment, recovery use, destructive reset, and organization key administration.
 
 Account password changes do not rotate VEKs. Recovery-code rotation changes only the recovery envelope unless compromise is suspected, in which case VEK rotation is also required.
@@ -646,6 +646,15 @@ M1 implementation checkpoint (2026-09-01):
 - An existing Stronghold Vault is opened once with its original password. Only after successful decryption is that same unlock secret written to the OS store. A read-only runtime probe distinguishes a compiled backend from a usable login-session backend: known-unavailable storage permits password unlock for the current session, while an unexpected write failure after a successful probe re-locks the Vault and reports a stable error.
 - App startup automatically unlocks only an already-existing Vault. A stale OS credential can never create a replacement empty Vault. Manual session lock remains available and does not delete the OS credential.
 - This is the M1 desktop unlock migration slice, not completion of M1. It deliberately leaves the existing Stronghold ciphertext in place instead of performing a risky record rewrite. The native Windows write/read integration test is isolated and ignored by default; the current non-interactive development logon session returned Windows error 1312, so an interactive packaged-app restart test remains a release gate. Remaining work includes Android Keystore/iOS Keychain adapters, device identity, encrypted metadata v2, atomic record migration with verified backup, and cross-platform restart tests.
+
+Transitional inventory-key checkpoint (2026-09-06):
+
+- Snapshot v4 generates a random per-organization data key. The recovery passphrase derives only an Argon2id wrapping key and no longer encrypts inventory data directly.
+- Desktop stores the opaque data-key material in the existing native system credential backend. Unsupported platforms keep it only in Rust memory for the current application session and require recovery again after restart.
+- The wrapped data key travels with the encrypted snapshot so a new device can recover it. Snapshot v1–v3 remain readable and migrate to v4 only after the user applies the preview; cancelling a preview does not commit a migration key.
+- React can query only configured/persisted capability flags and can remove the current device key. Neither the recovery passphrase nor data key crosses back from Rust to the UI.
+- A device that still holds the data key can replace the recovery passphrase. Rust first authenticates the current snapshot with that key, re-wraps the same data key with a fresh salt and nonce, and returns only the updated opaque envelope; the Supabase write remains revision-checked and never receives plaintext inventory data.
+- This checkpoint improves the current snapshot UX and does not claim completion of the M2 per-object, signed-device architecture below.
 
 ### Gate M2: personal metadata sync v3
 

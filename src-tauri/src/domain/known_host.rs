@@ -4,6 +4,8 @@ use uuid::Uuid;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnownHost {
+    #[serde(default = "direct_route_scope")]
+    pub route_scope: String,
     pub host: String,
     pub port: u16,
     pub key_type: String,
@@ -28,6 +30,7 @@ pub struct HostVerification {
     pub key_type: String,
     pub fingerprint: String,
     pub status: HostVerificationStatus,
+    pub route_scope: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +55,12 @@ pub struct CancelHostVerificationRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveKnownHostRequest {
+    #[serde(default = "direct_route_scope")]
+    pub route_scope: String,
     pub host: String,
     pub port: u16,
+}
+
+fn direct_route_scope() -> String {
+    "direct".to_owned()
 }

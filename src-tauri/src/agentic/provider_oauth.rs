@@ -15,8 +15,7 @@ use crate::domain::{AppError, AppResult};
 
 pub(crate) const CHATGPT_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub(crate) const CHATGPT_ISSUER: &str = "https://auth.openai.com";
-pub(crate) const CHATGPT_RESPONSES_URL: &str =
-    "https://chatgpt.com/backend-api/codex/responses";
+pub(crate) const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CHATGPT_CALLBACK_PORTS: &[u16] = &[1455, 1457, 1456];
 const OPENROUTER_AUTH_BASE: &str = "https://openrouter.ai/auth";
 const OPENROUTER_KEY_EXCHANGE: &str = "https://openrouter.ai/api/v1/auth/keys";
@@ -72,11 +71,7 @@ pub(crate) fn generate_state() -> AppResult<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-pub(crate) fn chatgpt_authorize_url(
-    redirect_uri: &str,
-    pkce: &PkceCodes,
-    state: &str,
-) -> String {
+pub(crate) fn chatgpt_authorize_url(redirect_uri: &str, pkce: &PkceCodes, state: &str) -> String {
     format!(
         "{}/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state={}&originator=runory",
         CHATGPT_ISSUER,
@@ -183,7 +178,11 @@ pub(crate) async fn await_authorization_code(
                 .await;
                 return Err(AppError::ModelAuthFailed);
             }
-            let Some(code) = params.get("code").cloned().filter(|value| !value.is_empty()) else {
+            let Some(code) = params
+                .get("code")
+                .cloned()
+                .filter(|value| !value.is_empty())
+            else {
                 let _ = write_callback_response(
                     &mut stream,
                     "Missing authorization code. You can close this window.",
@@ -329,10 +328,7 @@ fn parse_query(query: &str) -> std::collections::HashMap<String, String> {
             continue;
         };
         let value = parts.next().unwrap_or("");
-        map.insert(
-            urlencoding_decode(key),
-            urlencoding_decode(value),
-        );
+        map.insert(urlencoding_decode(key), urlencoding_decode(value));
     }
     map
 }

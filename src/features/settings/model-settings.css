@@ -36,6 +36,10 @@
 .model-profile-form .provider-field input, .model-profile-form .provider-field-select { width: 100%; background: hsl(var(--surface)); }
 .model-form-footer { justify-content: flex-end; margin-top: 24px; padding-top: 16px; border-top: 1px solid hsl(var(--border-soft)); }
 .model-quick-options { display: grid; gap: 12px; }
+.model-managed-quick { display: grid; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid hsl(var(--border-soft)); }
+.model-managed-quick > small { color: hsl(var(--muted)); font-size: 11px; line-height: 1.5; }
+.model-managed-workspace { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 10px; color: hsl(var(--muted)); font-size: 11px; }
+.model-managed-workspace select { min-width: 0; height: 32px; padding: 0 9px; border: 1px solid hsl(var(--border)); border-radius: 7px; color: hsl(var(--foreground)); background: hsl(var(--surface)); }
 .model-quick-option { display: flex; align-items: center; gap: 14px; padding: 20px; border: 1px solid hsl(var(--border)); border-radius: 10px; text-align: left; color: hsl(var(--foreground)); background: hsl(var(--surface)); transition: border-color 140ms, background-color 140ms; }
 .model-quick-option:hover:not(:disabled) { border-color: hsl(var(--primary)/.5); background: hsl(var(--primary)/.06); }
 .model-quick-option:hover:not(:disabled) .model-profile-icon { color: hsl(var(--primary)); border-color: hsl(var(--primary)/.2); background: hsl(var(--primary)/.08); }

@@ -43,6 +43,23 @@ describe("session store", () => {
     });
   });
 
+  it("preserves each session view across activation, disconnect and reconnect", () => {
+    const store = useSessionStore.getState();
+    store.addTab(tab("one", "shared-profile"));
+    store.addTab(tab("two", "shared-profile"));
+    store.setView("two", "files");
+    store.setActive("one");
+    store.markClosed("two", "attempt-two");
+    store.beginReconnect("two", "attempt-new");
+    store.attachSession("two", "attempt-new", "session-new");
+
+    expect(useSessionStore.getState().tabs).toMatchObject([
+      { id: "one", view: "terminal" },
+      { id: "two", view: "files", state: "connected" },
+    ]);
+    expect(useSessionStore.getState().activeTabId).toBe("two");
+  });
+
   it("selects an adjacent tab when the active tab closes", () => {
     const store = useSessionStore.getState();
     store.addTab(tab("one"));

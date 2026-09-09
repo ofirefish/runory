@@ -1,0 +1,167 @@
+.connection-dialog-panel {
+  position: relative;
+}
+
+.connection-dialog-bar {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  height: 2px;
+  overflow: hidden;
+  background: hsl(var(--primary) / .12);
+  pointer-events: none;
+}
+
+.connection-dialog-bar > i {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, hsl(var(--primary)), transparent);
+  animation: connection-dialog-bar-slide 1.15s ease-in-out infinite;
+}
+
+.connection-progress {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid hsl(var(--primary) / .22);
+  border-radius: 8px;
+  background: hsl(var(--primary) / .06);
+}
+
+.connection-progress-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 28px;
+}
+
+.connection-progress-node {
+  position: relative;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border: 1px solid hsl(var(--primary) / .45);
+  border-radius: 6px;
+  color: hsl(var(--primary));
+  background: hsl(var(--surface));
+}
+
+.connection-progress-node.local::before,
+.connection-progress-node.remote::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border: 1px solid hsl(var(--primary) / .28);
+  border-radius: 9px;
+  animation: connection-progress-pulse 1.6s ease-out infinite;
+}
+
+.connection-progress-node.remote::after {
+  animation-delay: .8s;
+}
+
+.connection-progress-node.local {
+  background: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  box-shadow: inset 0 0 0 4px hsl(var(--surface));
+}
+
+.connection-progress-link {
+  position: relative;
+  display: flex;
+  width: min(140px, 42%);
+  height: 2px;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 999px;
+  background: hsl(var(--primary) / .18);
+  overflow: hidden;
+}
+
+.connection-progress-link > i {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  opacity: 0;
+  animation: connection-progress-packet 1.4s linear infinite;
+}
+
+.connection-progress-link > i:nth-child(2) { animation-delay: .45s; }
+.connection-progress-link > i:nth-child(3) { animation-delay: .9s; }
+
+.connection-progress-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: hsl(var(--secondary));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.connection-progress-spinner {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: hsl(var(--primary));
+  animation: connection-progress-spin .8s linear infinite;
+}
+
+@keyframes connection-dialog-bar-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}
+
+@keyframes connection-progress-packet {
+  0% { left: -10%; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { left: 105%; opacity: 0; }
+}
+
+@keyframes connection-progress-pulse {
+  0% { opacity: .7; transform: scale(.85); }
+  70%, 100% { opacity: 0; transform: scale(1.35); }
+}
+
+@keyframes connection-progress-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-dialog-bar > i,
+  .connection-progress-link > i,
+  .connection-progress-node.local::before,
+  .connection-progress-node.remote::after,
+  .connection-progress-spinner {
+    animation: none;
+  }
+
+  .connection-dialog-bar > i {
+    width: 100%;
+    transform: none;
+    opacity: .85;
+  }
+
+  .connection-progress-link > i:first-child {
+    left: 50%;
+    margin-left: -3.5px;
+    opacity: .7;
+  }
+
+  .connection-progress-node.local::before,
+  .connection-progress-node.remote::after {
+    opacity: .35;
+    transform: none;
+  }
+}

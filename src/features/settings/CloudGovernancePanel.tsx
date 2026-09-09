@@ -1,6 +1,7 @@
 import { Plus, ScrollText, Shield, ShieldCheck, ShieldOff, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { SelectControl } from "../../components/ui/select-control";
@@ -36,10 +37,12 @@ export function CloudGovernancePanel({ organizationId, userId }: { organizationI
   const [effect, setEffect] = useState<AccessPolicyEffect>("deny");
   const [action, setAction] = useState<AccessPolicyAction>("connect");
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
   const [enforced, setEnforced] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const profiles = useCatalogStore((state) => state.profiles);
+  const showGovernanceError = useCallback(() => {
+    toast.error(t("cloud.governanceError"), { id: "cloud-governance-error" });
+  }, [t]);
 
   const load = useCallback(async () => {
     const [membership, policyRows, status] = await Promise.all([
@@ -59,41 +62,42 @@ export function CloudGovernancePanel({ organizationId, userId }: { organizationI
   }, [organizationId, userId]);
 
   useEffect(() => {
-    setPolicies([]); setAudit([]); setFailed(false);
-    void load().catch(() => setFailed(true));
-  }, [load]);
+    setPolicies([]); setAudit([]);
+    void load().catch(showGovernanceError);
+  }, [load, showGovernanceError]);
 
   const addPolicy = async () => {
     if (!name.trim()) return;
-    setBusy(true); setFailed(false);
-    try { await createAccessPolicy(organizationId, name.trim(), effect, action); setName(""); await load(); }
-    catch { setFailed(true); } finally { setBusy(false); }
+    setBusy(true);
+    try { await createAccessPolicy(organizationId, name.trim(), effect, action); setName(""); await load(); toast.success(t("cloud.policyCreated")); }
+    catch { showGovernanceError(); } finally { setBusy(false); }
   };
   const removePolicy = async (id: string) => {
-    setBusy(true); setFailed(false);
-    try { await deleteAccessPolicy(id); await load(); }
-    catch { setFailed(true); } finally { setBusy(false); }
+    setBusy(true);
+    try { await deleteAccessPolicy(id); await load(); toast.success(t("cloud.policyDeleted")); }
+    catch { showGovernanceError(); } finally { setBusy(false); }
   };
   const loadMoreAudit = async () => {
     const cursor = audit.at(-1);
     if (!cursor) return;
-    setBusy(true); setFailed(false);
+    setBusy(true);
     try {
       const rows = await listCloudAuditRecords(organizationId, cursor, PAGE_SIZE);
       setAudit((current) => [...current, ...rows]); setHasMoreAudit(rows.length === PAGE_SIZE);
-    } catch { setFailed(true); } finally { setBusy(false); }
+    } catch { showGovernanceError(); } finally { setBusy(false); }
   };
   const toggleEnforcement = async () => {
-    setBusy(true); setFailed(false);
+    setBusy(true);
     try {
       if (enforced) {
-        const status = await unbindCloudPolicy(organizationId); setEnforced(status.enabled); setAuthenticated(status.authenticated); return;
+        const status = await unbindCloudPolicy(organizationId); setEnforced(status.enabled); setAuthenticated(status.authenticated); toast.success(t("cloud.policyEnforcementDisabled")); return;
       }
       const session = await cloudSession();
       if (!session || !session.expires_at || !cloudEndpoint || !cloudPublishableKey || profiles.length === 0) throw new Error("POLICY_BIND_UNAVAILABLE");
       const status = await bindCloudPolicy({ organizationId, profileIds: profiles.map((profile) => profile.id), supabaseUrl: cloudEndpoint, publishableKey: cloudPublishableKey, accessToken: session.access_token, expiresAt: session.expires_at });
       setEnforced(status.enabled); setAuthenticated(status.authenticated);
-    } catch { setFailed(true); } finally { setBusy(false); }
+      toast.success(t("cloud.policyEnforcementEnabled"));
+    } catch { showGovernanceError(); } finally { setBusy(false); }
   };
 
   const canManage = role === "owner" || role === "admin";
@@ -105,6 +109,5 @@ export function CloudGovernancePanel({ organizationId, userId }: { organizationI
     <div className="mt-3 grid gap-2">{policies.map((policy) => <div key={policy.id} className="flex items-center justify-between gap-2 rounded border p-2 text-xs"><span className="min-w-0 flex-1 truncate">{policy.name} · {t(`cloud.effect.${policy.effect}`)} · {t(`cloud.action.${policy.action}`)}</span>{canManage && <Button size="icon" variant="ghost" disabled={busy} aria-label={t("cloud.deletePolicy")} onClick={() => void removePolicy(policy.id)}><Trash2 size={13} /></Button>}</div>)}</div>
     {canManage && <div className="mt-3 grid gap-2"><Input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("cloud.policyName")} aria-label={t("cloud.policyName")} /><div className="flex gap-2"><SelectControl className="w-28 shrink-0 text-xs" value={effect} onValueChange={setEffect} disabled={busy} label={t("cloud.policyEffect")} options={(["deny", "allow"] as const).map((value) => ({ value, label: t(`cloud.effect.${value}`) }))} /><SelectControl className="min-w-0 flex-1 text-xs" value={action} onValueChange={setAction} disabled={busy} label={t("cloud.policyAction")} options={actions.map((value) => ({ value, label: t(`cloud.action.${value}`) }))} /><Button size="icon" disabled={busy || !name.trim()} aria-label={t("cloud.createPolicy")} onClick={() => void addPolicy()}><Plus size={13} /></Button></div></div>}
     {canManage && <div className="mt-4 border-t pt-3"><div className="flex items-center gap-2"><ScrollText size={14} /><h5 className="text-xs font-medium">{t("cloud.audit")}</h5></div><div className="mt-2 grid gap-2">{audit.map((record) => <div key={record.id} className="rounded border p-2 text-xs"><div className="flex justify-between gap-2"><span className="truncate">{record.action} · {record.resource_type}</span><span className={record.result === "failed" || record.result === "denied" ? "text-red-500" : "text-[hsl(var(--muted))]"}>{t(`cloud.auditResult.${record.result}`)}</span></div><p className="mt-1 text-[hsl(var(--muted))]">{new Date(record.occurred_at).toLocaleString()}</p></div>)}</div>{hasMoreAudit && <Button className="mt-2" size="sm" variant="secondary" disabled={busy} onClick={() => void loadMoreAudit()}>{t("cloud.loadMoreAudit")}</Button>}</div>}
-    {failed && <p className="mt-2 text-xs text-red-500">{t("cloud.governanceError")}</p>}
   </section>;
 }

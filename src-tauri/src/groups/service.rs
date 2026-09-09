@@ -181,6 +181,7 @@ mod tests {
                 group_id: Some(group.id),
                 auth_method: AuthMethod::Password,
                 key_source: None,
+                connection_route: crate::domain::ConnectionRoute::Direct,
                 sort_order: 0,
                 created_at: timestamp(),
                 updated_at: timestamp(),

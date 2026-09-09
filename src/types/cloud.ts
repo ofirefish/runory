@@ -1,5 +1,58 @@
 export type OrganizationRole = "owner" | "admin" | "operator" | "viewer";
-export type Organization = { id: string; name: string; owner_id: string; created_at: string; updated_at: string };
+export type OrganizationKind = "personal" | "team";
+export type Organization = { id: string; name: string; kind: OrganizationKind; owner_id: string; created_at: string; updated_at: string };
+export type BillingPlanCode = "free" | "pro" | "team" | "business";
+export type BillingPlan = {
+  code: BillingPlanCode;
+  monthly_price_cents: number;
+  annual_monthly_price_cents: number;
+  currency: "USD";
+  per_seat: boolean;
+  trial_days: number;
+  included_monthly_credits: number;
+  feature_codes: string[];
+  sort_order: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+export type OrganizationSubscription = {
+  organization_id: string;
+  plan_code: BillingPlanCode;
+  status: "trialing" | "active" | "past-due" | "cancelled" | "expired";
+  seat_quantity: number;
+  billing_cycle: "monthly" | "annual";
+  current_period_start: string;
+  current_period_end: string;
+  trial_ends_at: string | null;
+  trial_started_at: string | null;
+  cancel_at_period_end: boolean;
+  provider_customer_ref: string | null;
+  provider_subscription_ref: string | null;
+  created_at: string;
+  updated_at: string;
+};
+export type CreditAccount = {
+  organization_id: string;
+  balance_microcredits: number;
+  held_microcredits: number;
+  lifetime_granted_microcredits: number;
+  lifetime_spent_microcredits: number;
+  version: number;
+  updated_at: string;
+};
+export type CreditLedgerEntry = {
+  id: number;
+  organization_id: string;
+  actor_id: string | null;
+  request_id: string | null;
+  entry_type: "grant" | "purchase" | "charge" | "refund" | "expiry" | "adjustment";
+  amount_microcredits: number;
+  balance_after_microcredits: number;
+  external_reference: string | null;
+  description_code: string;
+  created_at: string;
+};
 export type OrganizationMember = { organization_id: string; user_id: string; role: OrganizationRole; created_at: string };
 export type OrganizationMemberDetails = { user_id: string; email: string; role: OrganizationRole; created_at: string };
 export type OrganizationInvite = { id: string; organization_id: string; email: string; role: Exclude<OrganizationRole, "owner">; invited_by: string; expires_at: string; accepted_at: string | null; created_at: string };
@@ -18,7 +71,9 @@ export type CloudAuditRecord = {
   error_code: string | null; occurred_at: string;
 };
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
-export type CloudEncryptedPayload = { version: number; salt: number[]; nonce: number[]; ciphertext: number[] };
+export type CloudKeyEnvelope = { salt: number[]; nonce: number[]; ciphertext: number[] };
+export type CloudEncryptedPayload = { version: number; salt: number[]; nonce: number[]; ciphertext: number[]; keyEnvelope?: CloudKeyEnvelope };
+export type CloudSyncKeyStatus = { configured: boolean; persistedOnDevice: boolean; secureStorageAvailable: boolean };
 export type SyncObject = {
   id: string; organization_id: string; kind: "profile" | "group" | "inventory" | "known-host";
   logical_id: string; encrypted_payload: Json; revision: number; updated_by: string;
@@ -33,14 +88,52 @@ export type CloudObjectKind = "group" | "profile";
 export type CloudConflictItem = { kind: CloudObjectKind; id: string; label: string; localUpdatedAt: string; remoteUpdatedAt: string; remoteDeleted: boolean };
 export type CloudConflictDecision = CloudConflictItem & { resolution: "keepLocal" | "useRemote" };
 export type CloudApplyResult = { groupsApplied: number; profilesApplied: number; groupsDeleted: number; profilesDeleted: number; skipped: number };
+export type CloudUserProfile = {
+  id: string;
+  display_name: string;
+  avatar_path: string | null;
+  avatar_version: number;
+  created_at: string;
+  updated_at: string;
+};
 
 export type CloudDatabase = {
   public: {
     Tables: {
       organizations: {
         Row: Organization;
-        Insert: { id?: string; name: string; owner_id: string; created_at?: string; updated_at?: string };
+        Insert: { id?: string; name: string; kind?: OrganizationKind; owner_id: string; created_at?: string; updated_at?: string };
         Update: { name?: string; updated_at?: string };
+        Relationships: [];
+      };
+      billing_plans: {
+        Row: BillingPlan;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      organization_subscriptions: {
+        Row: OrganizationSubscription;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      credit_accounts: {
+        Row: CreditAccount;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      credit_ledger: {
+        Row: CreditLedgerEntry;
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      user_profiles: {
+        Row: CloudUserProfile;
+        Insert: { id: string; display_name: string; avatar_path?: string | null; avatar_version?: number; created_at?: string; updated_at?: string };
+        Update: Partial<Pick<CloudUserProfile, "display_name" | "avatar_path" | "avatar_version" | "updated_at">>;
         Relationships: [];
       };
       organization_members: {
@@ -91,6 +184,11 @@ export type CloudDatabase = {
       delete_access_policy: { Args: { target_policy_id: string }; Returns: undefined };
       list_audit_records: { Args: { target_organization_id: string; cursor_occurred_at: string | null; cursor_id: number | null; target_page_size: number }; Returns: CloudAuditRecord[] };
       evaluate_access_policy: { Args: { target_organization_id: string; target_action: AccessPolicyAction; target_resource_type: "server-profile"; target_resource_id: string }; Returns: boolean };
+      ensure_personal_workspace: { Args: Record<PropertyKey, never>; Returns: Organization };
+      ensure_my_profile: { Args: { target_display_name: string }; Returns: CloudUserProfile };
+      update_my_display_name: { Args: { target_display_name: string }; Returns: CloudUserProfile };
+      set_my_avatar: { Args: { target_avatar_path: string | null; expected_avatar_version: number }; Returns: CloudUserProfile };
+      start_billing_trial: { Args: { target_organization_id: string; target_plan_code: BillingPlanCode }; Returns: OrganizationSubscription };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

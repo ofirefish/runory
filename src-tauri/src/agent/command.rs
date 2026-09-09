@@ -132,6 +132,7 @@ fn looks_like_shell_failure(value: &str) -> bool {
         "permission denied",
         "operation not permitted",
         "syntax error",
+        "cannot be installed without",
     ]
     .iter()
     .any(|needle| lower.contains(needle))
@@ -153,6 +154,9 @@ mod tests {
     fn common_shell_errors_are_reported_as_failed_execution() {
         assert!(looks_like_shell_failure(
             "find: '/var/log/nginx': No such file or directory"
+        ));
+        assert!(looks_like_shell_failure(
+            "npm cannot be installed without node.js.\ninstall node first, and then try again."
         ));
         assert!(!looks_like_shell_failure("/dev/sda2 100G 94G 6G 94% /"));
     }

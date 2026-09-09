@@ -2,8 +2,8 @@ use tauri::State;
 
 use crate::cloud::{CloudPolicyAction, CloudPolicyService};
 use crate::domain::{
-    AppResult, CancelHostVerificationRequest, HostVerification, KnownHost,
-    PrepareHostVerificationRequest, RemoveKnownHostRequest, TrustHostRequest,
+    AppError, AppResult, CancelHostVerificationRequest, ConnectionRoute, HostVerification,
+    KnownHost, PrepareHostVerificationRequest, RemoveKnownHostRequest, TrustHostRequest,
 };
 use crate::known_hosts::KnownHostService;
 use crate::profiles::ProfileService;
@@ -20,6 +20,9 @@ pub async fn known_host_prepare(
         .authorize(request.profile_id, CloudPolicyAction::Connect)
         .await?;
     let profile = profiles.get(request.profile_id).await?;
+    if profile.connection_route != ConnectionRoute::Direct {
+        return Err(AppError::InvalidJumpHost);
+    }
     let observed = SshService::scan_host_key(&profile.host, profile.port).await?;
     known_hosts
         .prepare(&profile.host, profile.port, observed)
@@ -57,5 +60,7 @@ pub async fn known_host_remove(
     request: RemoveKnownHostRequest,
     known_hosts: State<'_, KnownHostService>,
 ) -> AppResult<()> {
-    known_hosts.remove(&request.host, request.port).await
+    known_hosts
+        .remove_scoped(&request.route_scope, &request.host, request.port)
+        .await
 }

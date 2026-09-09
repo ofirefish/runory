@@ -14,6 +14,18 @@ vi.mock("../../components/ui/select", async (importOriginal) => {
   return { ...actual, SelectContent: (props: ComponentProps<typeof actual.SelectContent>) => <actual.SelectContent {...props} position="item-aligned" /> };
 });
 
+const sampleApp = {
+  id: "app-1",
+  profileId: "test-profile",
+  name: "Demo",
+  repositoryPath: "/srv/app",
+  remoteUrl: "https://example.com/demo.git",
+  branch: "main",
+  build: "none" as const,
+  restart: { kind: "none" as const },
+  updatedAtEpochSeconds: 1,
+};
+
 let root: Root;
 let container: HTMLDivElement;
 
@@ -57,7 +69,7 @@ async function select(key: string, optionKey: string, expectedOptions?: string[]
 }
 
 function writes() {
-  return vi.mocked(invoke).mock.calls.filter(([command]) => !["deployment_cron_list", "deployment_history"].includes(command));
+  return vi.mocked(invoke).mock.calls.filter(([command]) => !["deployment_cron_list", "deployment_history", "deployment_apps_list"].includes(command as string));
 }
 
 beforeEach(async () => {
@@ -71,7 +83,11 @@ beforeEach(async () => {
   layoutStyle.cssText = "position: static; display: block; visibility: visible; direction: ltr; width: 180px; height: 36px; transform: none; filter: none; perspective: none;";
   vi.spyOn(window, "getComputedStyle").mockReturnValue(layoutStyle);
   vi.mocked(invoke).mockReset().mockImplementation(async (command) => {
-    if (["deployment_cron_list", "deployment_history"].includes(command)) return [];
+    if (command === "deployment_apps_list") return [sampleApp];
+    if (["deployment_cron_list", "deployment_history"].includes(command as string)) return [];
+    if (command === "deployment_apps_upsert") {
+      return { ...sampleApp, id: "app-saved", name: "Saved", repositoryPath: "/srv/demo", branch: "release", build: "pnpm", restart: { kind: "systemd", service: "demo.service" }, updatedAtEpochSeconds: 2 };
+    }
     return { output: "ok", success: true };
   });
   container = document.createElement("div");
@@ -171,5 +187,33 @@ describe.each(["en-US", "zh-CN"])("Deployment forms (%s)", (language) => {
     await clickButton("deployment.confirm", document.querySelector('[role="dialog"]')!);
     expect(writes().at(-1)).toEqual(["deployment_environment_write", { request: { sessionId: "test-session", path: "/srv/app/.env", entries: [{ key: "DEMO", value: "one=two" }, { key: "EMPTY", value: "" }] } }]);
     expect(textarea.value).toBe("");
+  });
+
+  it("loads apps, fills form from selection, and saves configuration", async () => {
+    expect(container.querySelector("aside")?.textContent).toContain("Demo");
+    await navigate("git");
+    expect(field<HTMLInputElement>("deployment.remoteUrl").value).toBe("https://example.com/demo.git");
+    await fill("deployment.repositoryPath", "/srv/demo");
+    await fill("deployment.branch", "release");
+    await navigate("deploy");
+    await select("deployment.buildPreset", "deployment.build.pnpm");
+    await select("deployment.restartTarget", "deployment.restart.systemd");
+    await fill("deployment.restartName", "demo.service");
+    await clickButton("deployment.saveApp");
+    expect(writes().some(([command, payload]) => command === "deployment_apps_upsert" && (payload as { request: { repositoryPath: string } }).request.repositoryPath === "/srv/demo")).toBe(true);
+  });
+
+  it("shows empty state when no apps exist", async () => {
+    await act(async () => { root.unmount(); });
+    root = createRoot(container);
+    vi.mocked(invoke).mockReset().mockImplementation(async (command) => {
+      if (command === "deployment_apps_list") return [];
+      if (["deployment_cron_list", "deployment_history"].includes(command as string)) return [];
+      return { output: "ok", success: true };
+    });
+    await act(async () => { root.render(<DeploymentView sessionId="test-session" profileId="test-profile" />); });
+    await act(async () => { await Promise.resolve(); });
+    expect(container.textContent).toContain(i18n.t("deployment.appsEmpty"));
+    expect(container.querySelector("nav")).toBeNull();
   });
 });

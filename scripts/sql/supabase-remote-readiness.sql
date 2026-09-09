@@ -5,7 +5,15 @@ with expected_tables(table_name) as (
     ('organization_invites'),
     ('sync_objects'),
     ('access_policies'),
-    ('audit_records')
+    ('audit_records'),
+    ('billing_plans'),
+    ('organization_subscriptions'),
+    ('billing_trial_claims'),
+    ('credit_accounts'),
+    ('model_price_versions'),
+    ('ai_usage_requests'),
+    ('credit_holds'),
+    ('credit_ledger')
 ), migration_state as (
   select
     count(*)::integer as migration_count,
@@ -44,6 +52,56 @@ select
     'public.evaluate_access_policy(uuid,text,text,uuid)',
     'EXECUTE'
   ) as policy_rpc_acl_valid,
+  has_function_privilege(
+    'service_role',
+    'public.billing_reserve_ai_credits(uuid,uuid,uuid,uuid,text,integer,integer)',
+    'EXECUTE'
+  ) and not has_function_privilege(
+    'authenticated',
+    'public.billing_reserve_ai_credits(uuid,uuid,uuid,uuid,text,integer,integer)',
+    'EXECUTE'
+  ) and has_function_privilege(
+    'service_role',
+    'public.billing_settle_ai_credits(uuid,integer,integer)',
+    'EXECUTE'
+  ) and not has_function_privilege(
+    'authenticated',
+    'public.billing_settle_ai_credits(uuid,integer,integer)',
+    'EXECUTE'
+  ) and has_function_privilege(
+    'service_role',
+    'public.billing_release_ai_credits(uuid,text)',
+    'EXECUTE'
+  ) and not has_function_privilege(
+    'authenticated',
+    'public.billing_release_ai_credits(uuid,text)',
+    'EXECUTE'
+  ) and has_function_privilege(
+    'service_role',
+    'public.billing_apply_credit_grant(uuid,bigint,text,text,text)',
+    'EXECUTE'
+  ) and not has_function_privilege(
+    'authenticated',
+    'public.billing_apply_credit_grant(uuid,bigint,text,text,text)',
+    'EXECUTE'
+  ) and has_function_privilege(
+    'service_role',
+    'public.billing_release_expired_ai_holds(uuid)',
+    'EXECUTE'
+  ) and not has_function_privilege(
+    'authenticated',
+    'public.billing_release_expired_ai_holds(uuid)',
+    'EXECUTE'
+  ) as billing_service_rpc_acl_valid,
+  has_function_privilege(
+    'authenticated',
+    'public.start_billing_trial(uuid,text)',
+    'EXECUTE'
+  ) and not has_function_privilege(
+    'anon',
+    'public.start_billing_trial(uuid,text)',
+    'EXECUTE'
+  ) as billing_trial_rpc_acl_valid,
   to_regprocedure('private.prune_audit_records(integer)') is not null
     and not has_function_privilege(
       'authenticated',

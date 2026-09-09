@@ -18,7 +18,7 @@ use super::controller::{
 };
 use super::event::{AgentEvent, AgentEventEnvelope};
 use super::reasoner::Observation;
-use super::reasoner_planning::PlanningReasoner;
+use super::reasoner_planning::{HostSessionContext, PlanningReasoner};
 use super::repository::{
     AgentEventRepository, AgentRunStore, AgentStoreError, ApprovalStore, CheckpointStore,
 };
@@ -41,6 +41,7 @@ struct ActiveRun {
     session_id: SessionId,
     server_id: Uuid,
     hints: PlanningHints,
+    host_context: Option<HostSessionContext>,
 }
 
 /// Shared V2 runtime wired from Tauri setup.
@@ -99,12 +100,13 @@ impl AgentRuntimeV2Service {
         session_id: SessionId,
         server_id: Uuid,
         goal: String,
+        host_context: Option<HostSessionContext>,
     ) -> AppResult<Uuid> {
         let hints = planning_hints_from_goal(&goal);
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let stores = self.stores();
         let config = self.controller_config(app.clone(), session_id, server_id, cancel_rx);
-        let reasoner = PlanningReasoner::new(gateway, hints.clone());
+        let reasoner = PlanningReasoner::new(gateway, hints.clone(), host_context.clone());
         let dispatcher =
             SessionToolDispatcher::new(app.clone(), session_id, server_id, cancel_tx.subscribe());
         let controller = V2Controller::new(&goal, reasoner, dispatcher, stores, config)
@@ -122,6 +124,7 @@ impl AgentRuntimeV2Service {
                 session_id,
                 server_id,
                 hints,
+                host_context,
             },
         );
         Self::spawn_drive(app, run_id, controller_slot);
@@ -133,11 +136,14 @@ impl AgentRuntimeV2Service {
         app: AppHandle,
         gateway: Arc<ModelGateway>,
         run_id: Uuid,
+        approval_id: Uuid,
     ) -> AppResult<()> {
-        let approval_id = ApprovalStore::pending_for_run(self.database.as_ref(), run_id)
+        let pending = ApprovalStore::pending_for_run(self.database.as_ref(), run_id)
             .map_err(store_error)?
-            .ok_or(AppError::InvalidOperation)?
-            .id;
+            .ok_or(AppError::InvalidOperation)?;
+        if pending.id != approval_id {
+            return Err(AppError::InvalidOperation);
+        }
         let outcome = {
             let active = self.active_entry(run_id)?;
             let controller_slot = active.controller.clone();
@@ -162,11 +168,14 @@ impl AgentRuntimeV2Service {
         app: AppHandle,
         gateway: Arc<ModelGateway>,
         run_id: Uuid,
+        approval_id: Uuid,
     ) -> AppResult<()> {
-        let approval_id = ApprovalStore::pending_for_run(self.database.as_ref(), run_id)
+        let pending = ApprovalStore::pending_for_run(self.database.as_ref(), run_id)
             .map_err(store_error)?
-            .ok_or(AppError::InvalidOperation)?
-            .id;
+            .ok_or(AppError::InvalidOperation)?;
+        if pending.id != approval_id {
+            return Err(AppError::InvalidOperation);
+        }
         let outcome = {
             let active = self.active_entry(run_id)?;
             let controller_slot = active.controller.clone();
@@ -218,6 +227,31 @@ impl AgentRuntimeV2Service {
                     .await
                     .map_err(controller_error)?
             }
+        };
+        self.finish_outcome(run_id, outcome).await
+    }
+
+    pub async fn retry(
+        &self,
+        app: AppHandle,
+        gateway: Arc<ModelGateway>,
+        run_id: Uuid,
+    ) -> AppResult<()> {
+        let outcome = {
+            let active = self.active_entry(run_id)?;
+            let controller_slot = active.controller.clone();
+            let mut guard = controller_slot.lock().await;
+            if guard.is_none() {
+                *guard = Some(
+                    self.rehydrate(app.clone(), gateway.clone(), run_id, &active)
+                        .map_err(controller_error)?,
+                );
+            }
+            let controller = guard.as_mut().expect("controller");
+            controller
+                .retry_after_failure()
+                .await
+                .map_err(controller_error)?
         };
         self.finish_outcome(run_id, outcome).await
     }
@@ -305,6 +339,7 @@ impl AgentRuntimeV2Service {
                 session_id,
                 server_id,
                 hints,
+                host_context: None,
             },
         );
         Ok(())
@@ -321,6 +356,7 @@ impl AgentRuntimeV2Service {
                 session_id: entry.session_id,
                 server_id: entry.server_id,
                 hints: entry.hints.clone(),
+                host_context: entry.host_context.clone(),
             })
             .ok_or(AppError::InvalidOperation)
     }
@@ -382,7 +418,8 @@ impl AgentRuntimeV2Service {
         let stores = self.stores();
         let config =
             self.controller_config(app.clone(), active.session_id, active.server_id, cancel_rx);
-        let reasoner = PlanningReasoner::new(gateway, active.hints.clone());
+        let reasoner =
+            PlanningReasoner::new(gateway, active.hints.clone(), active.host_context.clone());
         let dispatcher = SessionToolDispatcher::new(
             app,
             active.session_id,

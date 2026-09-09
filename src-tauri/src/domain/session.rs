@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use super::CredentialInput;
+use super::{CredentialInput, HostVerification};
 
 pub type SessionId = Uuid;
 
@@ -71,6 +71,8 @@ pub struct ConnectProfileRequest {
     pub verification_attempt_id: Uuid,
     pub profile_id: Uuid,
     pub credential: CredentialInput,
+    #[serde(default)]
+    pub jump_preparation_id: Option<Uuid>,
     pub cols: u32,
     pub rows: u32,
 }
@@ -81,6 +83,30 @@ pub struct TestConnectionProfileRequest {
     pub verification_attempt_id: Uuid,
     pub profile_id: Uuid,
     pub credential: CredentialInput,
+    #[serde(default)]
+    pub jump_preparation_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareJumpConnectionRequest {
+    pub target_profile_id: Uuid,
+    pub jump_verification_attempt_id: Uuid,
+    pub jump_credential: CredentialInput,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareJumpConnectionResponse {
+    pub preparation_id: Uuid,
+    pub target_verification: HostVerification,
+    pub jump_credential_saved: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelJumpConnectionRequest {
+    pub preparation_id: Uuid,
 }
 
 #[derive(Serialize)]

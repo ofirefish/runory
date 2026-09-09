@@ -16,6 +16,8 @@ import type { AdvancedProviderKind } from "../../types/agentic";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../../lib/supabase/client", () => ({ cloudConfigured: false, cloudEndpoint: null, cloudPublishableKey: null }));
 vi.mock("../../lib/supabase/cloud", () => ({
+  cloudOAuthErrorEvent: "runory:cloud-oauth-error",
+  cloudSignInWithGitHub: vi.fn(),
   getMyMembership: vi.fn(), listOrganizationMembers: vi.fn(), listOrganizationInvites: vi.fn().mockResolvedValue([]), listMyOrganizationInvites: vi.fn().mockResolvedValue([]),
   createOrganizationInvite: vi.fn(), updateOrganizationMemberRole: vi.fn(), acceptOrganizationInvite: vi.fn(), removeOrganizationMember: vi.fn(), revokeOrganizationInvite: vi.fn(),
   listAccessPolicies: vi.fn().mockResolvedValue([]), listCloudAuditRecords: vi.fn().mockResolvedValue([]), createAccessPolicy: vi.fn(), deleteAccessPolicy: vi.fn(), cloudSession: vi.fn(),
@@ -67,9 +69,17 @@ beforeEach(() => {
   vi.mocked(listOrganizationInvites).mockResolvedValue([]);
   vi.mocked(listAccessPolicies).mockResolvedValue([]);
   vi.mocked(listCloudAuditRecords).mockResolvedValue([]);
-  vi.mocked(invoke).mockImplementation(async (command) => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "known_host_list") return [];
     if (command === "credential_status") return { vaultInitialized: true, vaultUnlocked: false, platformUnlockConfigured: false, platformUnlockAvailable: false };
+    if (command === "settings_get") {
+      const state = useSettingsStore.getState();
+      return { theme: state.theme, language: state.language };
+    }
+    if (command === "settings_update") {
+      const state = useSettingsStore.getState();
+      return { theme: state.theme, language: state.language, ...(args as { request: object }).request };
+    }
     return { enabled: false, authenticated: false };
   });
   vi.mocked(getMyMembership).mockResolvedValue({ organization_id: "org", user_id: "me", role: "owner", created_at: "" });
@@ -96,7 +106,7 @@ afterEach(async () => {
 
 describe.each(["en-US", "zh-CN"])("settings controls (%s)", (language) => {
   beforeEach(async () => {
-    useSettingsStore.setState({ theme: "system", language: language as "en-US" | "zh-CN" });
+    useSettingsStore.setState({ theme: "system", language: language as "en-US" | "zh-CN", saving: false, persistenceError: false });
     await i18n.changeLanguage(language);
   });
   it("persists theme/language choices through the existing settings command", async () => {
@@ -106,6 +116,30 @@ describe.each(["en-US", "zh-CN"])("settings controls (%s)", (language) => {
     await choose("settings.language", language === "en-US" ? "settings.chinese" : "settings.english");
     expect(useSettingsStore.getState().language).toBe(language === "en-US" ? "zh-CN" : "en-US");
     expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === "settings_update")).toHaveLength(2);
+  });
+  it("restores persisted settings and reports a failed write", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "known_host_list") return [];
+      if (command === "credential_status") return { vaultInitialized: true, vaultUnlocked: false, platformUnlockConfigured: false, platformUnlockAvailable: false };
+      if (command === "settings_get") return { theme: "system", language };
+      if (command === "settings_update") throw new Error("STORAGE_ERROR");
+      return { enabled: false, authenticated: false };
+    });
+    await render(<SettingsPanel onClose={() => {}} />);
+    await choose("settings.theme", "settings.dark", ["settings.system", "settings.light", "settings.dark"]);
+    await act(async () => { await useSettingsStore.getState().setTheme("dark"); });
+    expect(useSettingsStore.getState().theme).toBe("system");
+    expect(document.body.textContent).toContain(i18n.t("settings.persistenceError"));
+  });
+  it("keeps account management separate from cloud workspace settings", async () => {
+    await render(<SettingsPanel onClose={() => {}} />);
+    expect(button("settings.section.account")).toBeTruthy();
+    expect(button("settings.section.cloud")).toBeTruthy();
+    await click(button("settings.section.account"));
+    await act(async () => { await import("./AccountSettings"); });
+    expect(document.querySelector(".settings-content-header h3")?.textContent).toBe(i18n.t("settings.section.account"));
+    expect(document.body.textContent).toContain(i18n.t("cloud.accountUnavailable"));
+    expect(document.body.textContent?.toLowerCase()).not.toMatch(/rust|supabase|stronghold/);
   });
   it("keeps the vault password transient and clears the input after unlocking", async () => {
     await render(<SettingsPanel onClose={() => {}} />);

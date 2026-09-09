@@ -1,8 +1,13 @@
 pub mod agent_v2;
 pub mod agentic;
+#[cfg(not(mobile))]
+pub mod app_update;
 pub mod catalog;
 pub mod cloud;
+pub mod cloud_auth;
+pub mod cloud_avatar;
 pub mod cloud_policy;
+mod connection;
 pub mod credentials;
 pub mod dashboard;
 pub mod deployment;
@@ -11,3 +16,4 @@ pub mod operations;
 pub mod settings;
 pub mod sftp;
 pub mod ssh;
+pub mod tunnels;

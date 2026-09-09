@@ -14,17 +14,24 @@ use zeroize::Zeroizing;
 use crate::domain::{
     AppError, AppResult, AuthMethod, CloudApplyResult, CloudConflictDecision, CloudConflictItem,
     CloudConflictResolution, CloudEncryptedPayload, CloudGroup, CloudImportPreview,
-    CloudObjectKind, CloudProfile, HostGroup, ServerProfile,
+    CloudKeyEnvelope, CloudObjectKind, CloudProfile, CloudSyncKeyStatus, HostGroup, ServerProfile,
 };
 use crate::groups::timestamp;
 use crate::groups::GroupRepository;
 use crate::profiles::ProfileRepository;
 
 use super::state::{CloudSyncStateRepository, CloudTombstone, OrganizationSyncState};
+use super::CloudSyncKeyStore;
 
-const SYNC_VERSION: u8 = 2;
+const SYNC_VERSION: u8 = 4;
+const LEGACY_SYNC_VERSION: u8 = 3;
 const SALT_LENGTH: usize = 16;
 const NONCE_LENGTH: usize = 12;
+const DATA_KEY_LENGTH: usize = 32;
+const WRAPPED_KEY_LENGTH: usize = DATA_KEY_LENGTH + 16;
+const STORED_KEY_MATERIAL_VERSION: u8 = 1;
+const STORED_KEY_MATERIAL_LENGTH: usize =
+    1 + DATA_KEY_LENGTH + SALT_LENGTH + NONCE_LENGTH + WRAPPED_KEY_LENGTH;
 const MAX_PLAINTEXT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECTS: usize = 20_000;
 const MAX_PENDING_IMPORTS: usize = 8;
@@ -42,6 +49,21 @@ struct CloudSnapshot {
 struct PendingImport {
     organization_id: Uuid,
     snapshot: CloudSnapshot,
+    migration_key: Option<CloudKeyMaterial>,
+}
+
+struct CloudKeyMaterial {
+    key: Zeroizing<[u8; DATA_KEY_LENGTH]>,
+    envelope: CloudKeyEnvelope,
+}
+
+impl Clone for CloudKeyMaterial {
+    fn clone(&self) -> Self {
+        Self {
+            key: Zeroizing::new(*self.key),
+            envelope: self.envelope.clone(),
+        }
+    }
 }
 
 pub struct CloudSyncService {
@@ -50,14 +72,17 @@ pub struct CloudSyncService {
     write_lock: Arc<Mutex<()>>,
     state: CloudSyncStateRepository,
     pending: Mutex<HashMap<Uuid, PendingImport>>,
+    key_store: Arc<dyn CloudSyncKeyStore>,
+    active_keys: Mutex<HashMap<Uuid, (CloudKeyMaterial, bool)>>,
 }
 
 impl CloudSyncService {
-    pub fn new(
+    pub fn with_key_store(
         profiles: ProfileRepository,
         groups: GroupRepository,
         write_lock: Arc<Mutex<()>>,
         state: CloudSyncStateRepository,
+        key_store: Arc<dyn CloudSyncKeyStore>,
     ) -> Self {
         Self {
             profiles,
@@ -65,15 +90,177 @@ impl CloudSyncService {
             write_lock,
             state,
             pending: Mutex::new(HashMap::new()),
+            key_store,
+            active_keys: Mutex::new(HashMap::new()),
         }
+    }
+
+    async fn secure_storage_available(&self) -> bool {
+        if !self.key_store.is_supported() {
+            return false;
+        }
+        let key_store = Arc::clone(&self.key_store);
+        tokio::task::spawn_blocking(move || key_store.probe().is_ok())
+            .await
+            .unwrap_or(false)
+    }
+
+    async fn load_key_material(
+        &self,
+        organization_id: Uuid,
+    ) -> AppResult<(Option<CloudKeyMaterial>, bool)> {
+        if let Some((material, persisted)) =
+            self.active_keys.lock().await.get(&organization_id).cloned()
+        {
+            return Ok((Some(material), persisted));
+        }
+        if !self.secure_storage_available().await {
+            return Ok((None, false));
+        }
+        let key_store = Arc::clone(&self.key_store);
+        let stored = tokio::task::spawn_blocking(move || key_store.load(organization_id))
+            .await
+            .map_err(|_| AppError::PlatformKeyStoreUnavailable)??;
+        let Some(stored) = stored else {
+            return Ok((None, true));
+        };
+        let material = decode_key_material(stored.as_slice())?;
+        self.active_keys
+            .lock()
+            .await
+            .insert(organization_id, (material.clone(), true));
+        Ok((Some(material), true))
+    }
+
+    async fn remember_key_material(
+        &self,
+        organization_id: Uuid,
+        material: CloudKeyMaterial,
+    ) -> AppResult<bool> {
+        let storage_available = self.secure_storage_available().await;
+        let persisted = if storage_available {
+            let encoded = encode_key_material(&material);
+            let key_store = Arc::clone(&self.key_store);
+            match tokio::task::spawn_blocking(move || {
+                key_store.store(organization_id, encoded.as_slice())
+            })
+            .await
+            {
+                Ok(Ok(())) => true,
+                Ok(Err(error)) => {
+                    tracing::warn!(error_code = error.code(), %organization_id, "cloud sync key remains session-only");
+                    false
+                }
+                Err(_) => {
+                    tracing::warn!(%organization_id, "cloud sync key store task failed; key remains session-only");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        self.active_keys
+            .lock()
+            .await
+            .insert(organization_id, (material, persisted));
+        Ok(persisted)
+    }
+
+    async fn export_key(
+        &self,
+        organization_id: Uuid,
+        recovery_passphrase: Option<Zeroizing<String>>,
+    ) -> AppResult<CloudKeyMaterial> {
+        if let Some(material) = self.load_key_material(organization_id).await?.0 {
+            return Ok(material);
+        }
+        let recovery_passphrase = recovery_passphrase.ok_or(AppError::CloudRecoveryRequired)?;
+        validate_passphrase(&recovery_passphrase)?;
+        let material = tokio::task::spawn_blocking(move || {
+            create_key_material(organization_id, recovery_passphrase)
+        })
+        .await
+        .map_err(|_| AppError::CloudCrypto)??;
+        self.remember_key_material(organization_id, material.clone())
+            .await?;
+        Ok(material)
+    }
+
+    pub async fn key_status(&self, organization_id: Uuid) -> AppResult<CloudSyncKeyStatus> {
+        let (material, persisted_on_device) = self.load_key_material(organization_id).await?;
+        Ok(CloudSyncKeyStatus {
+            configured: material.is_some(),
+            persisted_on_device: material.is_some() && persisted_on_device,
+            secure_storage_available: self.secure_storage_available().await,
+        })
+    }
+
+    pub async fn forget_key(&self, organization_id: Uuid) -> AppResult<()> {
+        if self.key_store.is_supported() {
+            if !self.secure_storage_available().await {
+                return Err(AppError::PlatformKeyStoreUnavailable);
+            }
+            let key_store = Arc::clone(&self.key_store);
+            tokio::task::spawn_blocking(move || key_store.delete(organization_id))
+                .await
+                .map_err(|_| AppError::PlatformKeyStoreUnavailable)??;
+        }
+        self.active_keys.lock().await.remove(&organization_id);
+        Ok(())
+    }
+
+    pub async fn rotate_recovery_passphrase(
+        &self,
+        organization_id: Uuid,
+        new_recovery_passphrase: Zeroizing<String>,
+        payload: CloudEncryptedPayload,
+    ) -> AppResult<CloudEncryptedPayload> {
+        validate_passphrase(&new_recovery_passphrase)?;
+        if payload.version != SYNC_VERSION {
+            return Err(AppError::CloudInvalid);
+        }
+        let (material, persisted_on_device) = self.load_key_material(organization_id).await?;
+        let material = material.ok_or(AppError::CloudRecoveryRequired)?;
+        let (rotated_material, rotated_payload) = tokio::task::spawn_blocking(move || {
+            decrypt_snapshot_with_key(organization_id, material.key.as_ref(), &payload)?;
+            let rotated_material = wrap_key_material(
+                organization_id,
+                Zeroizing::new(*material.key),
+                new_recovery_passphrase,
+            )?;
+            let mut rotated_payload = payload;
+            rotated_payload.key_envelope = Some(rotated_material.envelope.clone());
+            Ok::<_, AppError>((rotated_material, rotated_payload))
+        })
+        .await
+        .map_err(|_| AppError::CloudCrypto)??;
+        if persisted_on_device {
+            let encoded = encode_key_material(&rotated_material);
+            let key_store = Arc::clone(&self.key_store);
+            tokio::task::spawn_blocking(move || {
+                key_store.store(organization_id, encoded.as_slice())
+            })
+            .await
+            .map_err(|_| AppError::PlatformKeyStoreUnavailable)??;
+            self.active_keys
+                .lock()
+                .await
+                .insert(organization_id, (rotated_material, true));
+        } else {
+            self.remember_key_material(organization_id, rotated_material)
+                .await?;
+        }
+        Ok(rotated_payload)
     }
 
     pub async fn export(
         &self,
         organization_id: Uuid,
-        passphrase: Zeroizing<String>,
+        recovery_passphrase: Option<Zeroizing<String>>,
     ) -> AppResult<CloudEncryptedPayload> {
-        validate_passphrase(&passphrase)?;
+        let key_material = self
+            .export_key(organization_id, recovery_passphrase)
+            .await?;
         let _guard = self.write_lock.lock().await;
         let groups: Vec<_> = self
             .groups
@@ -101,7 +288,7 @@ impl CloudSyncService {
         self.state.save(&state).await?;
         drop(_guard);
         tokio::task::spawn_blocking(move || {
-            encrypt_snapshot(organization_id, passphrase, &snapshot)
+            encrypt_snapshot_with_key(organization_id, &key_material, &snapshot)
         })
         .await
         .map_err(|_| AppError::CloudCrypto)?
@@ -110,15 +297,67 @@ impl CloudSyncService {
     pub async fn preview(
         &self,
         organization_id: Uuid,
-        passphrase: Zeroizing<String>,
+        recovery_passphrase: Option<Zeroizing<String>>,
         payload: CloudEncryptedPayload,
     ) -> AppResult<CloudImportPreview> {
-        validate_passphrase(&passphrase)?;
-        let snapshot = tokio::task::spawn_blocking(move || {
-            decrypt_snapshot(organization_id, passphrase, payload)
-        })
-        .await
-        .map_err(|_| AppError::CloudCrypto)??;
+        let (snapshot, migration_key) = if payload.version == SYNC_VERSION {
+            let local_material = self.load_key_material(organization_id).await?.0;
+            let local_attempt = if let Some(material) = local_material {
+                let local_payload = payload.clone();
+                Some(
+                    tokio::task::spawn_blocking(move || {
+                        decrypt_snapshot_with_key(
+                            organization_id,
+                            material.key.as_ref(),
+                            &local_payload,
+                        )
+                    })
+                    .await
+                    .map_err(|_| AppError::CloudCrypto)?,
+                )
+            } else {
+                None
+            };
+            let snapshot = match local_attempt {
+                Some(Ok(snapshot)) => snapshot,
+                Some(Err(error)) if recovery_passphrase.is_none() => return Err(error),
+                _ => {
+                    let recovery_passphrase =
+                        recovery_passphrase.ok_or(AppError::CloudRecoveryRequired)?;
+                    validate_passphrase(&recovery_passphrase)?;
+                    let envelope = payload.key_envelope.clone().ok_or(AppError::CloudInvalid)?;
+                    let (material, snapshot) = tokio::task::spawn_blocking(move || {
+                        let material =
+                            unwrap_key_material(organization_id, recovery_passphrase, envelope)?;
+                        let snapshot = decrypt_snapshot_with_key(
+                            organization_id,
+                            material.key.as_ref(),
+                            &payload,
+                        )?;
+                        Ok::<_, AppError>((material, snapshot))
+                    })
+                    .await
+                    .map_err(|_| AppError::CloudCrypto)??;
+                    self.remember_key_material(organization_id, material)
+                        .await?;
+                    snapshot
+                }
+            };
+            (snapshot, None)
+        } else {
+            let recovery_passphrase = recovery_passphrase.ok_or(AppError::CloudRecoveryRequired)?;
+            validate_passphrase(&recovery_passphrase)?;
+            let migration_passphrase = Zeroizing::new(recovery_passphrase.to_string());
+            let (snapshot, material) = tokio::task::spawn_blocking(move || {
+                let snapshot =
+                    decrypt_legacy_snapshot(organization_id, recovery_passphrase, payload)?;
+                let material = create_key_material(organization_id, migration_passphrase)?;
+                Ok::<_, AppError>((snapshot, material))
+            })
+            .await
+            .map_err(|_| AppError::CloudCrypto)??;
+            (snapshot, Some(material))
+        };
         validate_snapshot(&snapshot)?;
 
         let _guard = self.write_lock.lock().await;
@@ -147,6 +386,7 @@ impl CloudSyncService {
             PendingImport {
                 organization_id,
                 snapshot,
+                migration_key,
             },
         );
         Ok(preview)
@@ -157,12 +397,16 @@ impl CloudSyncService {
         import_id: Uuid,
         decisions: Vec<CloudConflictDecision>,
     ) -> AppResult<CloudApplyResult> {
-        let (organization_id, snapshot) = {
+        let (organization_id, snapshot, migration_key) = {
             let pending = self.pending.lock().await;
             let import = pending
                 .get(&import_id)
                 .ok_or(AppError::CloudImportNotFound)?;
-            (import.organization_id, import.snapshot.clone())
+            (
+                import.organization_id,
+                import.snapshot.clone(),
+                import.migration_key.clone(),
+            )
         };
         let _guard = self.write_lock.lock().await;
         let original_groups = self.groups.list().await?;
@@ -218,6 +462,11 @@ impl CloudSyncService {
             self.profiles.save(&original_profiles).await?;
             return Err(AppError::Storage);
         }
+        drop(_guard);
+        if let Some(material) = migration_key {
+            self.remember_key_material(organization_id, material)
+                .await?;
+        }
         self.pending.lock().await.remove(&import_id);
         tracing::info!(%organization_id, %import_id, groups_applied, profiles_applied, groups_deleted, profiles_deleted, "cloud sync import applied");
         Ok(CloudApplyResult {
@@ -263,6 +512,7 @@ impl From<ServerProfile> for CloudProfile {
             username: profile.username,
             group_id: profile.group_id,
             auth_method: profile.auth_method,
+            connection_route: profile.connection_route,
             sort_order: profile.sort_order,
             created_at: profile.created_at,
             updated_at: profile.updated_at,
@@ -282,6 +532,10 @@ fn aad(version: u8, organization_id: Uuid) -> String {
     format!("runory-cloud-sync-v{version}:{organization_id}")
 }
 
+fn key_aad(organization_id: Uuid) -> String {
+    format!("runory-cloud-sync-key-v{SYNC_VERSION}:{organization_id}")
+}
+
 fn derive_key(passphrase: &str, salt: &[u8; SALT_LENGTH]) -> AppResult<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0_u8; 32]);
     Argon2::default()
@@ -290,9 +544,94 @@ fn derive_key(passphrase: &str, salt: &[u8; SALT_LENGTH]) -> AppResult<Zeroizing
     Ok(key)
 }
 
-fn encrypt_snapshot(
+fn create_key_material(
     organization_id: Uuid,
-    passphrase: Zeroizing<String>,
+    recovery_passphrase: Zeroizing<String>,
+) -> AppResult<CloudKeyMaterial> {
+    let mut key = Zeroizing::new([0_u8; DATA_KEY_LENGTH]);
+    OsRng.fill_bytes(key.as_mut());
+    wrap_key_material(organization_id, key, recovery_passphrase)
+}
+
+fn wrap_key_material(
+    organization_id: Uuid,
+    key: Zeroizing<[u8; DATA_KEY_LENGTH]>,
+    recovery_passphrase: Zeroizing<String>,
+) -> AppResult<CloudKeyMaterial> {
+    let mut salt = [0_u8; SALT_LENGTH];
+    let mut nonce = [0_u8; NONCE_LENGTH];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut nonce);
+    let wrapping_key = derive_key(recovery_passphrase.as_str(), &salt)?;
+    let cipher =
+        Aes256Gcm::new_from_slice(wrapping_key.as_ref()).map_err(|_| AppError::CloudCrypto)?;
+    let ciphertext = cipher
+        .encrypt(
+            &Nonce::from(nonce),
+            Payload {
+                msg: key.as_ref(),
+                aad: key_aad(organization_id).as_bytes(),
+            },
+        )
+        .map_err(|_| AppError::CloudCrypto)?;
+    Ok(CloudKeyMaterial {
+        key,
+        envelope: CloudKeyEnvelope {
+            salt: salt.to_vec(),
+            nonce: nonce.to_vec(),
+            ciphertext,
+        },
+    })
+}
+
+fn unwrap_key_material(
+    organization_id: Uuid,
+    recovery_passphrase: Zeroizing<String>,
+    envelope: CloudKeyEnvelope,
+) -> AppResult<CloudKeyMaterial> {
+    if envelope.salt.len() != SALT_LENGTH
+        || envelope.nonce.len() != NONCE_LENGTH
+        || envelope.ciphertext.len() != WRAPPED_KEY_LENGTH
+    {
+        return Err(AppError::CloudInvalid);
+    }
+    let salt: [u8; SALT_LENGTH] = envelope
+        .salt
+        .as_slice()
+        .try_into()
+        .map_err(|_| AppError::CloudInvalid)?;
+    let nonce: [u8; NONCE_LENGTH] = envelope
+        .nonce
+        .as_slice()
+        .try_into()
+        .map_err(|_| AppError::CloudInvalid)?;
+    let wrapping_key = derive_key(recovery_passphrase.as_str(), &salt)?;
+    let cipher =
+        Aes256Gcm::new_from_slice(wrapping_key.as_ref()).map_err(|_| AppError::CloudCrypto)?;
+    let decrypted = Zeroizing::new(
+        cipher
+            .decrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: &envelope.ciphertext,
+                    aad: key_aad(organization_id).as_bytes(),
+                },
+            )
+            .map_err(|_| AppError::CloudDecrypt)?,
+    );
+    let key: [u8; DATA_KEY_LENGTH] = decrypted
+        .as_slice()
+        .try_into()
+        .map_err(|_| AppError::CloudInvalid)?;
+    Ok(CloudKeyMaterial {
+        key: Zeroizing::new(key),
+        envelope,
+    })
+}
+
+fn encrypt_snapshot_with_key(
+    organization_id: Uuid,
+    material: &CloudKeyMaterial,
     snapshot: &CloudSnapshot,
 ) -> AppResult<CloudEncryptedPayload> {
     let plaintext =
@@ -304,8 +643,8 @@ fn encrypt_snapshot(
     let mut nonce = [0_u8; NONCE_LENGTH];
     OsRng.fill_bytes(&mut salt);
     OsRng.fill_bytes(&mut nonce);
-    let key = derive_key(passphrase.as_str(), &salt)?;
-    let cipher = Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| AppError::CloudCrypto)?;
+    let cipher =
+        Aes256Gcm::new_from_slice(material.key.as_ref()).map_err(|_| AppError::CloudCrypto)?;
     let ciphertext = cipher
         .encrypt(
             &Nonce::from(nonce),
@@ -320,15 +659,54 @@ fn encrypt_snapshot(
         salt: salt.to_vec(),
         nonce: nonce.to_vec(),
         ciphertext,
+        key_envelope: Some(material.envelope.clone()),
     })
 }
 
-fn decrypt_snapshot(
+fn decrypt_snapshot_with_key(
+    organization_id: Uuid,
+    key: &[u8],
+    payload: &CloudEncryptedPayload,
+) -> AppResult<CloudSnapshot> {
+    if payload.version != SYNC_VERSION
+        || payload.salt.len() != SALT_LENGTH
+        || payload.nonce.len() != NONCE_LENGTH
+        || payload.ciphertext.len() > MAX_PLAINTEXT_BYTES + 32
+        || payload.key_envelope.is_none()
+    {
+        return Err(AppError::CloudInvalid);
+    }
+    let nonce: [u8; NONCE_LENGTH] = payload
+        .nonce
+        .as_slice()
+        .try_into()
+        .map_err(|_| AppError::CloudInvalid)?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| AppError::CloudCrypto)?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: &payload.ciphertext,
+                    aad: aad(payload.version, organization_id).as_bytes(),
+                },
+            )
+            .map_err(|_| AppError::CloudDecrypt)?,
+    );
+    let snapshot: CloudSnapshot =
+        serde_json::from_slice(plaintext.as_slice()).map_err(|_| AppError::CloudInvalid)?;
+    if snapshot.version != payload.version {
+        return Err(AppError::CloudInvalid);
+    }
+    Ok(snapshot)
+}
+
+fn decrypt_legacy_snapshot(
     organization_id: Uuid,
     passphrase: Zeroizing<String>,
     payload: CloudEncryptedPayload,
 ) -> AppResult<CloudSnapshot> {
-    if !matches!(payload.version, 1 | SYNC_VERSION)
+    if !matches!(payload.version, 1 | 2 | LEGACY_SYNC_VERSION)
         || payload.salt.len() != SALT_LENGTH
         || payload.nonce.len() != NONCE_LENGTH
         || payload.ciphertext.len() > MAX_PLAINTEXT_BYTES + 32
@@ -365,8 +743,44 @@ fn decrypt_snapshot(
     Ok(snapshot)
 }
 
+fn encode_key_material(material: &CloudKeyMaterial) -> Zeroizing<Vec<u8>> {
+    let mut encoded = Zeroizing::new(Vec::with_capacity(STORED_KEY_MATERIAL_LENGTH));
+    encoded.push(STORED_KEY_MATERIAL_VERSION);
+    encoded.extend_from_slice(material.key.as_ref());
+    encoded.extend_from_slice(&material.envelope.salt);
+    encoded.extend_from_slice(&material.envelope.nonce);
+    encoded.extend_from_slice(&material.envelope.ciphertext);
+    encoded
+}
+
+fn decode_key_material(encoded: &[u8]) -> AppResult<CloudKeyMaterial> {
+    if encoded.len() != STORED_KEY_MATERIAL_LENGTH
+        || encoded.first().copied() != Some(STORED_KEY_MATERIAL_VERSION)
+    {
+        return Err(AppError::CloudCrypto);
+    }
+    let mut offset = 1;
+    let key = encoded[offset..offset + DATA_KEY_LENGTH]
+        .try_into()
+        .map_err(|_| AppError::CloudCrypto)?;
+    offset += DATA_KEY_LENGTH;
+    let salt = encoded[offset..offset + SALT_LENGTH].to_vec();
+    offset += SALT_LENGTH;
+    let nonce = encoded[offset..offset + NONCE_LENGTH].to_vec();
+    offset += NONCE_LENGTH;
+    let ciphertext = encoded[offset..].to_vec();
+    Ok(CloudKeyMaterial {
+        key: Zeroizing::new(key),
+        envelope: CloudKeyEnvelope {
+            salt,
+            nonce,
+            ciphertext,
+        },
+    })
+}
+
 fn validate_snapshot(snapshot: &CloudSnapshot) -> AppResult<()> {
-    if !matches!(snapshot.version, 1 | SYNC_VERSION)
+    if !matches!(snapshot.version, 1 | 2 | LEGACY_SYNC_VERSION | SYNC_VERSION)
         || snapshot
             .groups
             .len()
@@ -789,6 +1203,7 @@ fn merge_profiles(
                     group_id,
                     auth_method: item.auth_method,
                     key_source: None,
+                    connection_route: item.connection_route.clone(),
                     sort_order: item.sort_order,
                     created_at: item.created_at.clone(),
                     updated_at: item.updated_at.clone(),
@@ -823,6 +1238,7 @@ fn merge_profiles(
                     group_id,
                     auth_method: item.auth_method,
                     key_source,
+                    connection_route: item.connection_route.clone(),
                     sort_order: item.sort_order,
                     created_at: item.created_at.clone(),
                     updated_at: item.updated_at.clone(),
@@ -930,34 +1346,133 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_snapshot_is_bound_to_organization_and_passphrase() {
+    fn encrypted_snapshot_uses_a_random_key_wrapped_by_the_recovery_passphrase() {
         let organization_id = Uuid::new_v4();
-        let encrypted = encrypt_snapshot(
+        let material = create_key_material(
             organization_id,
             Zeroizing::new("a sufficiently long passphrase".into()),
-            &snapshot(),
         )
-        .expect("encrypt");
+        .expect("create key material");
+        let encrypted =
+            encrypt_snapshot_with_key(organization_id, &material, &snapshot()).expect("encrypt");
         assert!(!encrypted
             .ciphertext
             .windows("Production".len())
             .any(|bytes| bytes == b"Production"));
+        let recovered = unwrap_key_material(
+            organization_id,
+            Zeroizing::new("a sufficiently long passphrase".into()),
+            encrypted.key_envelope.clone().expect("key envelope"),
+        )
+        .expect("recover data key");
+        assert_eq!(recovered.key.as_ref(), material.key.as_ref());
         assert!(matches!(
-            decrypt_snapshot(
+            unwrap_key_material(
                 Uuid::new_v4(),
                 Zeroizing::new("a sufficiently long passphrase".into()),
-                encrypted.clone()
+                encrypted.key_envelope.clone().expect("key envelope")
             ),
             Err(AppError::CloudDecrypt)
         ));
         assert!(matches!(
-            decrypt_snapshot(
+            unwrap_key_material(
                 organization_id,
                 Zeroizing::new("the wrong long passphrase".into()),
-                encrypted
+                encrypted.key_envelope.expect("key envelope")
             ),
             Err(AppError::CloudDecrypt)
         ));
+    }
+
+    #[test]
+    fn stored_key_material_round_trips_without_the_recovery_passphrase() {
+        let material = create_key_material(
+            Uuid::new_v4(),
+            Zeroizing::new("a sufficiently long passphrase".into()),
+        )
+        .expect("create key material");
+        let encoded = encode_key_material(&material);
+        let decoded = decode_key_material(encoded.as_slice()).expect("decode key material");
+        assert_eq!(decoded.key.as_ref(), material.key.as_ref());
+        assert_eq!(decoded.envelope, material.envelope);
+    }
+
+    #[test]
+    fn recovery_passphrase_rotation_keeps_the_data_key_and_snapshot_ciphertext() {
+        let organization_id = Uuid::new_v4();
+        let material = create_key_material(
+            organization_id,
+            Zeroizing::new("the original recovery phrase".into()),
+        )
+        .expect("create key material");
+        let encrypted =
+            encrypt_snapshot_with_key(organization_id, &material, &snapshot()).expect("encrypt");
+        let rotated = wrap_key_material(
+            organization_id,
+            Zeroizing::new(*material.key),
+            Zeroizing::new("the replacement recovery phrase".into()),
+        )
+        .expect("rotate recovery envelope");
+        let mut rotated_payload = encrypted.clone();
+        rotated_payload.key_envelope = Some(rotated.envelope.clone());
+
+        assert_eq!(rotated.key.as_ref(), material.key.as_ref());
+        assert_eq!(rotated_payload.ciphertext, encrypted.ciphertext);
+        assert!(
+            decrypt_snapshot_with_key(organization_id, rotated.key.as_ref(), &rotated_payload)
+                .is_ok()
+        );
+        assert!(unwrap_key_material(
+            organization_id,
+            Zeroizing::new("the original recovery phrase".into()),
+            rotated.envelope.clone(),
+        )
+        .is_err());
+        assert!(unwrap_key_material(
+            organization_id,
+            Zeroizing::new("the replacement recovery phrase".into()),
+            rotated.envelope,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn legacy_snapshot_remains_recoverable_for_migration() {
+        let organization_id = Uuid::new_v4();
+        let mut legacy_snapshot = snapshot();
+        legacy_snapshot.version = LEGACY_SYNC_VERSION;
+        let plaintext =
+            Zeroizing::new(serde_json::to_vec(&legacy_snapshot).expect("serialize snapshot"));
+        let mut salt = [0_u8; SALT_LENGTH];
+        let mut nonce = [0_u8; NONCE_LENGTH];
+        OsRng.fill_bytes(&mut salt);
+        OsRng.fill_bytes(&mut nonce);
+        let passphrase = "a sufficiently long passphrase";
+        let key = derive_key(passphrase, &salt).expect("derive legacy key");
+        let cipher = Aes256Gcm::new_from_slice(key.as_ref()).expect("legacy cipher");
+        let ciphertext = cipher
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: plaintext.as_slice(),
+                    aad: aad(LEGACY_SYNC_VERSION, organization_id).as_bytes(),
+                },
+            )
+            .expect("legacy encrypt");
+        let payload = CloudEncryptedPayload {
+            version: LEGACY_SYNC_VERSION,
+            salt: salt.to_vec(),
+            nonce: nonce.to_vec(),
+            ciphertext,
+            key_envelope: None,
+        };
+
+        let recovered =
+            decrypt_legacy_snapshot(organization_id, Zeroizing::new(passphrase.into()), payload)
+                .expect("legacy decrypt");
+        assert_eq!(recovered.version, legacy_snapshot.version);
+        assert_eq!(recovered.groups, legacy_snapshot.groups);
+        assert_eq!(recovered.profiles, legacy_snapshot.profiles);
     }
 
     #[test]
@@ -973,6 +1488,7 @@ mod tests {
             key_source: Some(crate::domain::KeySource::File {
                 path: "C:/secret/id_ed25519".into(),
             }),
+            connection_route: crate::domain::ConnectionRoute::Direct,
             sort_order: 0,
             created_at: "1".into(),
             updated_at: "2".into(),
@@ -1000,6 +1516,7 @@ mod tests {
             key_source: Some(crate::domain::KeySource::File {
                 path: "C:/keys/id_ed25519".into(),
             }),
+            connection_route: crate::domain::ConnectionRoute::Direct,
             sort_order: 0,
             created_at: "1".into(),
             updated_at: "2".into(),
@@ -1094,6 +1611,7 @@ mod tests {
             group_id: Some(group_id),
             auth_method: AuthMethod::Password,
             key_source: None,
+            connection_route: crate::domain::ConnectionRoute::Direct,
             sort_order: 0,
             created_at: "1".into(),
             updated_at: "2".into(),

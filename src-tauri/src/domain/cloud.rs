@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::AuthMethod;
+use super::{AuthMethod, ConnectionRoute};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,9 +24,19 @@ pub struct CloudProfile {
     pub username: String,
     pub group_id: Option<Uuid>,
     pub auth_method: AuthMethod,
+    #[serde(default)]
+    pub connection_route: ConnectionRoute,
     pub sort_order: i32,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudKeyEnvelope {
+    pub salt: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub ciphertext: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -36,21 +46,47 @@ pub struct CloudEncryptedPayload {
     pub salt: Vec<u8>,
     pub nonce: Vec<u8>,
     pub ciphertext: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_envelope: Option<CloudKeyEnvelope>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudExportRequest {
     pub organization_id: Uuid,
-    pub passphrase: String,
+    #[serde(default)]
+    pub recovery_passphrase: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloudImportRequest {
     pub organization_id: Uuid,
-    pub passphrase: String,
+    #[serde(default)]
+    pub recovery_passphrase: Option<String>,
     pub payload: CloudEncryptedPayload,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSyncKeyRequest {
+    pub organization_id: Uuid,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudRecoveryPassphraseRotateRequest {
+    pub organization_id: Uuid,
+    pub new_recovery_passphrase: String,
+    pub payload: CloudEncryptedPayload,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudSyncKeyStatus {
+    pub configured: bool,
+    pub persisted_on_device: bool,
+    pub secure_storage_available: bool,
 }
 
 #[derive(Deserialize)]

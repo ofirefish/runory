@@ -1,134 +1,116 @@
+use std::sync::Arc;
+
 use tauri::{ipc::Channel, State};
-use uuid::Uuid;
-use zeroize::Zeroizing;
 
 use crate::cloud::{CloudPolicyAction, CloudPolicyService};
 use crate::credentials::CredentialService;
 use crate::domain::{
-    AppError, AppResult, AuthMethod, ConnectProfileRequest, ConnectRequest, ConnectResponse,
-    CredentialInput, CredentialKind, KeySource, ResizeRequest, SessionRequest, SshAuthentication,
-    SshConnectionRequest, TerminalEvent, TestConnectionProfileRequest, TestConnectionResponse,
-    WriteRequest,
+    AppError, AppResult, CancelJumpConnectionRequest, ConnectProfileRequest, ConnectRequest,
+    ConnectResponse, ConnectionRoute, PrepareJumpConnectionRequest, PrepareJumpConnectionResponse,
+    ResizeRequest, SessionRequest, TerminalEvent, TestConnectionProfileRequest,
+    TestConnectionResponse, WriteRequest,
 };
 use crate::known_hosts::KnownHostService;
 use crate::profiles::ProfileService;
-use crate::ssh::{ServerSessionManager, SshService};
+use crate::ssh::{
+    jump_route_scope, BackgroundConnection, JumpConnectionManager, ServerSessionManager, SshService,
+};
 
-struct PreparedConnection {
-    profile_id: Uuid,
-    detect_os_distribution: bool,
-    credential_kind: CredentialKind,
-    secret_to_remember: Option<Zeroizing<String>>,
-    expected_fingerprint: String,
-    request: Option<SshConnectionRequest>,
-}
+use super::connection::{prepare_connection, prepare_connection_scoped, remember_after_success};
 
-async fn prepare_connection(
-    profile_id: Uuid,
-    verification_attempt_id: Uuid,
-    credential: CredentialInput,
-    known_hosts: &KnownHostService,
+async fn authorize_jump_if_present(
+    profile_id: uuid::Uuid,
     profiles: &ProfileService,
-    credentials: &CredentialService,
-) -> AppResult<(PreparedConnection, String)> {
+    policies: &CloudPolicyService,
+) -> AppResult<()> {
     let profile = profiles.get(profile_id).await?;
-    let (credential_kind, allow_empty, auth_method) = match profile.auth_method {
-        AuthMethod::Password => (CredentialKind::Password, false, "password"),
-        AuthMethod::PrivateKey => (CredentialKind::KeyPassphrase, true, "private-key"),
-    };
-    let expected_fingerprint = known_hosts
-        .consume(verification_attempt_id, &profile.host, profile.port)
-        .await?;
-    let resolved = credentials
-        .resolve_for_profile(profile.id, credential_kind, credential, allow_empty)
-        .await?;
-    let secret_to_remember = resolved
-        .remember_after_auth
-        .then(|| Zeroizing::new(resolved.secret.to_string()));
-    let authentication = match profile.auth_method {
-        AuthMethod::Password => SshAuthentication::Password {
-            password: resolved.secret,
-        },
-        AuthMethod::PrivateKey => match profile.key_source {
-            Some(KeySource::File { path }) => SshAuthentication::PrivateKeyFile {
-                path,
-                passphrase: (!resolved.secret.is_empty()).then_some(resolved.secret),
-            },
-            Some(KeySource::Vault { key_id }) => SshAuthentication::PrivateKeyData {
-                content: credentials.private_key(key_id).await?,
-                passphrase: (!resolved.secret.is_empty()).then_some(resolved.secret),
-            },
-            None => return Err(AppError::InvalidProfile),
-        },
-    };
-    Ok((
-        PreparedConnection {
-            profile_id: profile.id,
-            detect_os_distribution: profile.os_distribution.is_none(),
-            credential_kind,
-            secret_to_remember,
-            expected_fingerprint,
-            request: Some(SshConnectionRequest {
-                host: profile.host,
-                port: profile.port,
-                username: profile.username,
-                authentication,
-            }),
-        },
-        auth_method.to_owned(),
-    ))
-}
-
-async fn remember_after_success(
-    prepared: &mut PreparedConnection,
-    credentials: &CredentialService,
-) -> bool {
-    let Some(secret) = prepared.secret_to_remember.take() else {
-        return true;
-    };
-    match credentials
-        .remember(prepared.profile_id, prepared.credential_kind, secret)
-        .await
-    {
-        Ok(()) => true,
-        Err(error) => {
-            tracing::warn!(profile_id = %prepared.profile_id, error_code = error.code(), "could not remember credential");
-            false
+    if let ConnectionRoute::JumpHost { profile_id } = profile.connection_route {
+        let jump = profiles.get(profile_id).await?;
+        if jump.connection_route != ConnectionRoute::Direct {
+            return Err(AppError::InvalidJumpHost);
         }
+        policies
+            .authorize(profile_id, CloudPolicyAction::Connect)
+            .await?;
     }
+    Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn open_profile_session(
     request: ConnectProfileRequest,
     on_event: Channel<TerminalEvent>,
     sessions: &ServerSessionManager,
+    jumps: &JumpConnectionManager,
     known_hosts: &KnownHostService,
     profiles: &ProfileService,
     credentials: &CredentialService,
     reconnecting: bool,
 ) -> AppResult<ConnectResponse> {
-    let (mut prepared, auth_method) = prepare_connection(
-        request.profile_id,
-        request.verification_attempt_id,
-        request.credential,
-        known_hosts,
-        profiles,
-        credentials,
-    )
-    .await?;
+    let profile = profiles.get(request.profile_id).await?;
+    let (mut prepared, auth_method, route_owner) = match profile.connection_route.clone() {
+        ConnectionRoute::Direct => {
+            let (prepared, auth_method) = prepare_connection(
+                request.profile_id,
+                request.verification_attempt_id,
+                request.credential,
+                known_hosts,
+                profiles,
+                credentials,
+            )
+            .await?;
+            (prepared, auth_method, None)
+        }
+        ConnectionRoute::JumpHost { profile_id } => {
+            let jump = profiles.get(profile_id).await?;
+            if jump.connection_route != ConnectionRoute::Direct {
+                return Err(AppError::InvalidJumpHost);
+            }
+            let preparation_id = request
+                .jump_preparation_id
+                .ok_or(AppError::JumpPreparationExpired)?;
+            let owner = jumps.consume(preparation_id, &profile, &jump).await?;
+            let scope = jump_route_scope(&jump);
+            let (prepared, auth_method) = prepare_connection_scoped(
+                request.profile_id,
+                request.verification_attempt_id,
+                request.credential,
+                &scope,
+                known_hosts,
+                profiles,
+                credentials,
+            )
+            .await?;
+            (prepared, auth_method, Some(owner))
+        }
+    };
     tracing::info!(profile_id = %prepared.profile_id, auth_method, reconnecting, "starting SSH connection");
-    let session_id = sessions
-        .connect(
-            prepared.profile_id,
-            ConnectRequest {
-                connection: prepared.request.take().ok_or(AppError::InvalidProfile)?,
-                cols: request.cols,
-                rows: request.rows,
-            },
-            std::mem::take(&mut prepared.expected_fingerprint),
-            on_event,
-        )
-        .await?;
+    let connect_request = ConnectRequest {
+        connection: prepared.request.take().ok_or(AppError::InvalidProfile)?,
+        cols: request.cols,
+        rows: request.rows,
+    };
+    let expected_fingerprint = std::mem::take(&mut prepared.expected_fingerprint);
+    let session_id = if let Some(owner) = route_owner {
+        sessions
+            .connect_via(
+                prepared.profile_id,
+                owner,
+                connect_request,
+                expected_fingerprint,
+                on_event,
+            )
+            .await?
+    } else {
+        sessions
+            .connect(
+                prepared.profile_id,
+                connect_request,
+                expected_fingerprint,
+                on_event,
+            )
+            .await?
+    };
     let credential_saved = remember_after_success(&mut prepared, credentials).await;
     let detected_os = if prepared.detect_os_distribution {
         match sessions.detect_os_distribution(session_id).await {
@@ -154,10 +136,85 @@ async fn open_profile_session(
 }
 
 #[tauri::command]
+pub async fn ssh_jump_prepare(
+    request: PrepareJumpConnectionRequest,
+    jumps: State<'_, JumpConnectionManager>,
+    known_hosts: State<'_, KnownHostService>,
+    profiles: State<'_, ProfileService>,
+    credentials: State<'_, CredentialService>,
+    policies: State<'_, CloudPolicyService>,
+) -> AppResult<PrepareJumpConnectionResponse> {
+    let target = profiles.get(request.target_profile_id).await?;
+    let ConnectionRoute::JumpHost { profile_id } = target.connection_route else {
+        return Err(AppError::InvalidJumpHost);
+    };
+    let jump = profiles.get(profile_id).await?;
+    if jump.connection_route != ConnectionRoute::Direct {
+        return Err(AppError::InvalidJumpHost);
+    }
+    policies
+        .authorize(target.id, CloudPolicyAction::Connect)
+        .await?;
+    policies
+        .authorize(jump.id, CloudPolicyAction::Connect)
+        .await?;
+
+    let (mut prepared_jump, auth_method) = prepare_connection(
+        jump.id,
+        request.jump_verification_attempt_id,
+        request.jump_credential,
+        &known_hosts,
+        &profiles,
+        &credentials,
+    )
+    .await?;
+    tracing::info!(
+        profile_id = %target.id,
+        jump_profile_id = %jump.id,
+        auth_method,
+        "preparing jump-host SSH connection"
+    );
+    let connection = Arc::new(
+        BackgroundConnection::connect(
+            prepared_jump
+                .request
+                .take()
+                .ok_or(AppError::InvalidProfile)?,
+            std::mem::take(&mut prepared_jump.expected_fingerprint),
+        )
+        .await?,
+    );
+    let jump_credential_saved = remember_after_success(&mut prepared_jump, &credentials).await;
+    let observed =
+        SshService::scan_host_key_via(&connection.transport(), &target.host, target.port).await?;
+    let scope = jump_route_scope(&jump);
+    let target_verification = known_hosts
+        .prepare_scoped(&scope, &target.host, target.port, observed)
+        .await?;
+    let preparation_id = jumps.store(&target, &jump, connection).await;
+    Ok(PrepareJumpConnectionResponse {
+        preparation_id,
+        target_verification,
+        jump_credential_saved,
+    })
+}
+
+#[tauri::command]
+pub async fn ssh_jump_cancel(
+    request: CancelJumpConnectionRequest,
+    jumps: State<'_, JumpConnectionManager>,
+) -> AppResult<()> {
+    jumps.cancel(request.preparation_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn ssh_connect(
     request: ConnectProfileRequest,
     on_event: Channel<TerminalEvent>,
     sessions: State<'_, ServerSessionManager>,
+    jumps: State<'_, JumpConnectionManager>,
     known_hosts: State<'_, KnownHostService>,
     profiles: State<'_, ProfileService>,
     credentials: State<'_, CredentialService>,
@@ -166,10 +223,12 @@ pub async fn ssh_connect(
     policies
         .authorize(request.profile_id, CloudPolicyAction::Connect)
         .await?;
+    authorize_jump_if_present(request.profile_id, &profiles, &policies).await?;
     open_profile_session(
         request,
         on_event,
         &sessions,
+        &jumps,
         &known_hosts,
         &profiles,
         &credentials,
@@ -179,10 +238,12 @@ pub async fn ssh_connect(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn ssh_reconnect(
     request: ConnectProfileRequest,
     on_event: Channel<TerminalEvent>,
     sessions: State<'_, ServerSessionManager>,
+    jumps: State<'_, JumpConnectionManager>,
     known_hosts: State<'_, KnownHostService>,
     profiles: State<'_, ProfileService>,
     credentials: State<'_, CredentialService>,
@@ -191,10 +252,12 @@ pub async fn ssh_reconnect(
     policies
         .authorize(request.profile_id, CloudPolicyAction::Connect)
         .await?;
+    authorize_jump_if_present(request.profile_id, &profiles, &policies).await?;
     open_profile_session(
         request,
         on_event,
         &sessions,
+        &jumps,
         &known_hosts,
         &profiles,
         &credentials,
@@ -206,6 +269,7 @@ pub async fn ssh_reconnect(
 #[tauri::command]
 pub async fn ssh_test(
     request: TestConnectionProfileRequest,
+    jumps: State<'_, JumpConnectionManager>,
     known_hosts: State<'_, KnownHostService>,
     profiles: State<'_, ProfileService>,
     credentials: State<'_, CredentialService>,
@@ -214,22 +278,54 @@ pub async fn ssh_test(
     policies
         .authorize(request.profile_id, CloudPolicyAction::Connect)
         .await?;
-    let (mut prepared, auth_method) = prepare_connection(
-        request.profile_id,
-        request.verification_attempt_id,
-        request.credential,
-        &known_hosts,
-        &profiles,
-        &credentials,
-    )
-    .await?;
+    authorize_jump_if_present(request.profile_id, &profiles, &policies).await?;
+    let profile = profiles.get(request.profile_id).await?;
+    let (mut prepared, auth_method, route_owner) = match profile.connection_route.clone() {
+        ConnectionRoute::Direct => {
+            let (prepared, auth_method) = prepare_connection(
+                request.profile_id,
+                request.verification_attempt_id,
+                request.credential,
+                &known_hosts,
+                &profiles,
+                &credentials,
+            )
+            .await?;
+            (prepared, auth_method, None)
+        }
+        ConnectionRoute::JumpHost { profile_id } => {
+            let jump = profiles.get(profile_id).await?;
+            let owner = jumps
+                .consume(
+                    request
+                        .jump_preparation_id
+                        .ok_or(AppError::JumpPreparationExpired)?,
+                    &profile,
+                    &jump,
+                )
+                .await?;
+            let (prepared, auth_method) = prepare_connection_scoped(
+                request.profile_id,
+                request.verification_attempt_id,
+                request.credential,
+                &jump_route_scope(&jump),
+                &known_hosts,
+                &profiles,
+                &credentials,
+            )
+            .await?;
+            (prepared, auth_method, Some(owner))
+        }
+    };
     tracing::info!(profile_id = %prepared.profile_id, auth_method, "testing SSH connection");
     let expected_fingerprint = std::mem::take(&mut prepared.expected_fingerprint);
-    SshService::test_connection(
-        prepared.request.take().ok_or(AppError::InvalidProfile)?,
-        expected_fingerprint,
-    )
-    .await?;
+    let connection = prepared.request.take().ok_or(AppError::InvalidProfile)?;
+    if let Some(owner) = route_owner {
+        SshService::test_connection_via(&owner.transport(), connection, expected_fingerprint)
+            .await?;
+    } else {
+        SshService::test_connection(connection, expected_fingerprint).await?;
+    }
     Ok(TestConnectionResponse {
         credential_saved: remember_after_success(&mut prepared, &credentials).await,
     })
@@ -257,6 +353,9 @@ pub async fn ssh_resize(
 pub async fn ssh_disconnect(
     request: SessionRequest,
     sessions: State<'_, ServerSessionManager>,
+    tunnels: State<'_, crate::tunnels::TunnelService>,
 ) -> AppResult<()> {
-    sessions.disconnect(request.session_id).await
+    let result = sessions.disconnect(request.session_id).await;
+    tunnels.stop_session(request.session_id).await;
+    result
 }

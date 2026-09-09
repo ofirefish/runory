@@ -28,4 +28,4 @@ chown -R runory:runory /home/runory/http-fixture
 chmod 0755 /home/runory/sftp-fixture /home/runory/sftp-fixture/subdirectory
 chmod 0644 /home/runory/sftp-fixture/example.txt
 httpd -p 8080 -h /home/runory/http-fixture
-exec /usr/sbin/sshd -D -e
+exec /usr/sbin/sshd -D -e -o "AllowTcpForwarding=${RUNORY_TEST_FORWARDING:-yes}" -o "MaxSessions=${RUNORY_TEST_MAX_SESSIONS:-10}"

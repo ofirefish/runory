@@ -13,12 +13,13 @@ use crate::domain::{
     AppError, AppResult, ConnectRequest, OsDistribution, SessionId, SessionState, SftpDirectory,
     SftpMetadata, TerminalEvent,
 };
-use crate::ssh::{ExecChannel, RemoteCommand, RemoteExecResult, SftpChannel, SshService};
+use crate::ssh::{
+    BackgroundConnection, ExecChannel, RemoteCommand, RemoteExecResult, SftpChannel, SshService,
+};
 use crate::transfers::TransferQueue;
 
 const TERMINAL_CONTEXT_LIMIT: usize = 32 * 1024;
 const AGENT_TERMINAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
-const AGENT_TERMINAL_IDLE_FALLBACK: Duration = Duration::from_secs(4);
 const AGENT_TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(75);
 
 #[derive(Default)]
@@ -85,6 +86,8 @@ struct SessionHandle {
     terminal_context: Arc<Mutex<TerminalContextBuffer>>,
     agent_command_lock: Arc<Mutex<()>>,
     output: Option<Channel<TerminalEvent>>,
+    // Keeps every outer SSH transport alive for the lifetime of a jump-host session.
+    _route_owner: Option<Arc<BackgroundConnection>>,
 }
 
 pub struct ServerSessionManager {
@@ -102,6 +105,44 @@ impl Default for ServerSessionManager {
 }
 
 impl ServerSessionManager {
+    pub(crate) async fn has_active_sessions(&self) -> bool {
+        !self.sessions.read().await.is_empty()
+    }
+
+    pub(crate) async fn disconnect_all(&self) -> AppResult<()> {
+        let session_ids = self
+            .sessions
+            .read()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for session_id in session_ids {
+            match self.disconnect(session_id).await {
+                Ok(()) | Err(AppError::SessionNotFound) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn forward_transport(
+        &self,
+        session_id: SessionId,
+        profile_id: uuid::Uuid,
+    ) -> AppResult<super::ForwardTransport> {
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(&session_id).ok_or(AppError::SessionNotFound)?;
+        if session.profile_id != profile_id {
+            return Err(AppError::TunnelSessionMismatch);
+        }
+        if session.client.is_closed() {
+            return Err(AppError::ConnectionLost);
+        }
+        Ok(super::ForwardTransport::new(&session.client))
+    }
+
     pub async fn connect(
         &self,
         profile_id: uuid::Uuid,
@@ -143,6 +184,69 @@ impl ServerSessionManager {
                 terminal_context: Arc::clone(&terminal_context),
                 agent_command_lock: Arc::new(Mutex::new(())),
                 output: Some(output.clone()),
+                _route_owner: None,
+            },
+        );
+        let _ = output.send(TerminalEvent::State {
+            state: SessionState::Connected,
+        });
+        tokio::spawn(stream_output(
+            opened.reader,
+            output,
+            Arc::clone(&self.sessions),
+            self.transfers.clone(),
+            terminal_context,
+            session_id,
+        ));
+        Ok(session_id)
+    }
+
+    pub(crate) async fn connect_via(
+        &self,
+        profile_id: uuid::Uuid,
+        route_owner: Arc<BackgroundConnection>,
+        request: ConnectRequest,
+        expected_fingerprint: String,
+        output: Channel<TerminalEvent>,
+    ) -> AppResult<SessionId> {
+        let _ = output.send(TerminalEvent::State {
+            state: SessionState::Connecting,
+        });
+        let _ = output.send(TerminalEvent::State {
+            state: SessionState::VerifyingHost,
+        });
+        let _ = output.send(TerminalEvent::State {
+            state: SessionState::Authenticating,
+        });
+        let opened =
+            match SshService::connect_via(&route_owner.transport(), request, expected_fingerprint)
+                .await
+            {
+                Ok(opened) => opened,
+                Err(error) => {
+                    let _ = output.send(TerminalEvent::State {
+                        state: SessionState::Error,
+                    });
+                    return Err(error);
+                }
+            };
+        let _ = output.send(TerminalEvent::State {
+            state: SessionState::OpeningShell,
+        });
+        let session_id = uuid::Uuid::new_v4();
+        let writer = Arc::new(opened.writer);
+        let terminal_context = Arc::new(Mutex::new(TerminalContextBuffer::default()));
+        self.sessions.write().await.insert(
+            session_id,
+            SessionHandle {
+                profile_id,
+                client: Arc::new(opened.client),
+                writer: Arc::clone(&writer),
+                sftp: Arc::new(Mutex::new(None)),
+                terminal_context: Arc::clone(&terminal_context),
+                agent_command_lock: Arc::new(Mutex::new(())),
+                output: Some(output.clone()),
+                _route_owner: Some(route_owner),
             },
         );
         let _ = output.send(TerminalEvent::State {
@@ -179,8 +283,9 @@ impl ServerSessionManager {
     }
 
     /// Enters an approved command into the existing interactive terminal and
-    /// sends Enter. Completion is detected from the returning shell prompt;
-    /// a bounded idle fallback supports shells with unusual prompts. No
+    /// sends Enter. Completion is detected from the returning shell prompt.
+    /// An idle period is not completion: silent installers can echo the
+    /// command, pause while downloading, and only then print an error. No
     /// frontend shell API or secondary SSH exec channel is involved.
     pub(crate) async fn execute_terminal_command(
         &self,
@@ -212,25 +317,10 @@ impl ServerSessionManager {
             .map_err(|_| AppError::ConnectionLost)?;
 
         let started = Instant::now();
-        let mut last_change = started;
-        let mut last_len = 0usize;
         loop {
             sleep(AGENT_TERMINAL_POLL_INTERVAL).await;
             let captured = context.lock().await.text_since(mark);
-            if captured.len() != last_len {
-                last_len = captured.len();
-                last_change = Instant::now();
-            }
             if !captured.is_empty() && terminal_prompt_returned(&captured, prompt_hint.as_deref()) {
-                return Ok(TerminalCommandResult {
-                    output: clean_terminal_capture(&captured, command, prompt_hint.as_deref()),
-                    timed_out: false,
-                });
-            }
-            if !captured.is_empty()
-                && (captured.contains('\r') || captured.contains('\n'))
-                && last_change.elapsed() >= AGENT_TERMINAL_IDLE_FALLBACK
-            {
                 return Ok(TerminalCommandResult {
                     output: clean_terminal_capture(&captured, command, prompt_hint.as_deref()),
                     timed_out: false,
@@ -728,6 +818,19 @@ mod terminal_context_tests {
         assert_eq!(
             clean_terminal_capture(captured, "df -h", Some("zzly@host:~$ ")),
             "/dev/sda2 100G 94G 6G 94% /"
+        );
+    }
+
+    #[test]
+    fn command_echo_without_a_returned_prompt_is_not_complete() {
+        let command = "curl -sL https://npmjs.org/install.sh | sh && npm install -g pm2";
+        let captured = format!("{command}\r\n");
+        assert!(!terminal_prompt_returned(
+            &captured,
+            Some("[root@localhost ~]# ")
+        ));
+        assert!(
+            clean_terminal_capture(&captured, command, Some("[root@localhost ~]# ")).is_empty()
         );
     }
 

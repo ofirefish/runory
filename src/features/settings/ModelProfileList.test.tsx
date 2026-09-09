@@ -6,8 +6,9 @@ import { ModelProfileForm } from "./ModelProfileForm";
 import { ModelProfileList } from "./ModelProfileList";
 
 const profiles: ModelProfile[] = [
-  { id: "a", active: true, kind: "chat-gpt", name: "My account", model: "gpt-5.4", baseUrl: "https://chatgpt.com", maxContextTokens: 128000, apiKeyConfigured: true, authMode: "oauth", oauthInProgress: false, connectedAccountLabel: null },
-  { id: "b", active: false, kind: "open-ai-compatible", name: "Work API", model: "work-model", baseUrl: "https://example.com/v1", maxContextTokens: 128000, apiKeyConfigured: true, authMode: "api-key", oauthInProgress: false, connectedAccountLabel: null },
+  { id: "a", active: true, kind: "chat-gpt", name: "My account", model: "gpt-5.4", baseUrl: "https://chatgpt.com", maxContextTokens: 128000, organizationId: null, apiKeyConfigured: true, authMode: "oauth", oauthInProgress: false, connectedAccountLabel: null },
+  { id: "b", active: false, kind: "open-ai-compatible", name: "Work API", model: "work-model", baseUrl: "https://example.com/v1", maxContextTokens: 128000, organizationId: null, apiKeyConfigured: true, authMode: "api-key", oauthInProgress: false, connectedAccountLabel: null },
+  { id: "c", active: false, kind: "runory-managed", name: "Managed", model: "runory-agent-fast", baseUrl: "https://fixture.supabase.co", maxContextTokens: 128000, organizationId: "10000000-0000-0000-0000-000000000001", apiKeyConfigured: true, authMode: "account", oauthInProgress: false, connectedAccountLabel: "Runory account" },
 ];
 
 describe("model settings", () => {
@@ -37,6 +38,13 @@ describe("model settings", () => {
     const html = renderToStaticMarkup(<ModelProfileForm profile={profiles[0]} busy={false} onSave={async () => {}} onCancel={() => {}} />);
     expect(html).not.toContain('type="password"');
     expect(html).toContain('value="gpt-5.4"');
+    expect(html).not.toContain('type="submit" disabled');
+  });
+
+  it("edits a managed profile without exposing an API key field", () => {
+    const html = renderToStaticMarkup(<ModelProfileForm profile={profiles[2]} busy={false} onSave={async () => {}} onCancel={() => {}} />);
+    expect(html).not.toContain('type="password"');
+    expect(html).toContain('value="runory-agent-fast"');
     expect(html).not.toContain('type="submit" disabled');
   });
 });

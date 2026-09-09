@@ -10,10 +10,13 @@ const linkedProjectPath = resolve(root, "supabase/.temp/project-ref");
 const readinessSqlPath = resolve(root, "scripts/sql/supabase-remote-readiness.sql");
 const authTemplatesDirectory = resolve(root, "supabase/templates");
 const policyFunctionPath = resolve(root, "supabase/functions/evaluate-access-policy/index.ts");
+const managedAiFunctionPath = resolve(root, "supabase/functions/agent-turn/index.ts");
 const databaseTestPath = resolve(root, "supabase/tests/cloud_security.test.sql");
 const requiredSecretNames = new Set([
   "RUNORY_POLICY_ACTIVE_SIGNING_KEY_ID",
   "RUNORY_POLICY_SIGNING_KEYS_JSON",
+  "RUNORY_DEEPSEEK_API_KEY",
+  "RUNORY_GLM_API_KEY",
 ]);
 
 function fail(message) {
@@ -102,6 +105,7 @@ function sourceDigests() {
     applicationSourceSha256: digestFiles(applicationFiles),
     migrationsSha256: digestFiles(migrations),
     policyFunctionSha256: digestFiles([policyFunctionPath]),
+    managedAiFunctionSha256: digestFiles([managedAiFunctionPath]),
     authTemplatesSha256: digestFiles(templates),
     readinessSqlSha256: digestFiles([readinessSqlPath]),
     databaseTestsSha256: digestFiles([databaseTestPath]),
@@ -170,6 +174,9 @@ function verifyLocalFiles() {
   if (!/\[functions\.evaluate-access-policy\][\s\S]*?verify_jwt\s*=\s*true/u.test(config)) {
     fail("evaluate-access-policy must keep verify_jwt = true");
   }
+  if (!/\[functions\.agent-turn\][\s\S]*?verify_jwt\s*=\s*true/u.test(config)) {
+    fail("agent-turn must keep verify_jwt = true");
+  }
   const example = readFileSync(resolve(root, ".env.cloud.example"), "utf8");
   for (const name of [
     "SUPABASE_ACCESS_TOKEN",
@@ -203,6 +210,11 @@ export function verifyFunctionRows(rows) {
   if ((policy.verify_jwt ?? policy.verifyJwt) !== true) {
     fail("evaluate-access-policy does not explicitly report JWT verification enabled");
   }
+  const managedAi = rows.find((value) => [value?.name, value?.slug].includes("agent-turn"));
+  if (!managedAi) fail("agent-turn is not deployed");
+  if ((managedAi.verify_jwt ?? managedAi.verifyJwt) !== true) {
+    fail("agent-turn does not explicitly report JWT verification enabled");
+  }
 }
 
 export function verifySecretRows(rows) {
@@ -223,6 +235,10 @@ export function verifyDatabaseRow(row, expectedMigrations) {
     "postgres_17_or_newer",
     "all_business_tables_have_rls",
     "policy_rpc_acl_valid",
+    "billing_service_rpc_acl_valid",
+    "billing_trial_rpc_acl_valid",
+    "billing_service_rpc_acl_valid",
+    "billing_trial_rpc_acl_valid",
     "retention_function_private",
     "retention_index_present",
     "audit_cron_unique",

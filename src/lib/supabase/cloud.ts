@@ -1,6 +1,14 @@
-import type { AuthChangeEvent, Session, User } from "@supabase/supabase-js";
-import type { AccessPolicy, AccessPolicyAction, AccessPolicyEffect, CloudAuditRecord, CloudEncryptedPayload, MyOrganizationInvite, Organization, OrganizationInvite, OrganizationMember, OrganizationMemberDetails, OrganizationRole, SyncObject } from "../../types/cloud";
-import { supabase } from "./client";
+import type { AuthChangeEvent, Session, SupabaseClient, User } from "@supabase/supabase-js";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import type { AccessPolicy, AccessPolicyAction, AccessPolicyEffect, BillingPlan, BillingPlanCode, CloudAuditRecord, CloudDatabase, CloudEncryptedPayload, CloudUserProfile, CreditAccount, CreditLedgerEntry, MyOrganizationInvite, Organization, OrganizationInvite, OrganizationMember, OrganizationMemberDetails, OrganizationRole, OrganizationSubscription, SyncObject } from "../../types/cloud";
+import { cloudEndpoint, createCloudOAuthClient, supabase } from "./client";
+import { clearPersistedCloudSession, persistCloudSession } from "./session-persistence";
+
+const authWebBaseUrl = "https://runory.app";
+const cloudOAuthRedirectUrl = "runory://auth/callback";
+export const cloudOAuthErrorEvent = "runory:cloud-oauth-error";
+export const cloudProfileUpdatedEvent = "runory:cloud-profile-updated";
+let pendingOAuthClient: SupabaseClient<CloudDatabase> | null = null;
 
 const client = () => {
   if (!supabase) throw new Error("CLOUD_NOT_CONFIGURED");
@@ -11,25 +19,240 @@ export const cloudSession = async (): Promise<Session | null> => (await client()
 export const onCloudAuthStateChange = (callback: (event: AuthChangeEvent, session: Session | null) => void) =>
   client().auth.onAuthStateChange(callback).data.subscription;
 export const cloudSignUp = async (email: string, password: string): Promise<User | null> => {
-  const { data, error } = await client().auth.signUp({ email, password });
+  const { data, error } = await client().auth.signUp({
+    email,
+    password,
+    options: { emailRedirectTo: `${authWebBaseUrl}/auth/confirm` },
+  });
   if (error) throw error;
   return data.user;
 };
 export const cloudSignIn = async (email: string, password: string): Promise<Session> => {
   const { data, error } = await client().auth.signInWithPassword({ email, password });
   if (error || !data.session) throw error ?? new Error("AUTH_FAILED");
+  await persistCloudSession(data.session);
   return data.session;
 };
-export const cloudSignOut = async () => { const { error } = await client().auth.signOut(); if (error) throw error; };
+type CloudOAuthProvider = "github" | "google";
+
+const cloudSignInWithProvider = async (provider: CloudOAuthProvider): Promise<void> => {
+  const oauth = createCloudOAuthClient();
+  pendingOAuthClient = oauth;
+  const { data, error } = await oauth.auth.signInWithOAuth({
+    provider,
+    options: { redirectTo: cloudOAuthRedirectUrl, skipBrowserRedirect: true },
+  });
+  if (error || !data.url || !cloudEndpoint) {
+    pendingOAuthClient = null;
+    throw error ?? new Error("OAUTH_URL_MISSING");
+  }
+  const authorizeUrl = new URL(data.url);
+  const configured = new URL(cloudEndpoint);
+  if (authorizeUrl.origin !== configured.origin
+    || authorizeUrl.pathname !== `${configured.pathname.replace(/\/$/, "")}/auth/v1/authorize`
+    || authorizeUrl.searchParams.get("provider") !== provider) {
+    pendingOAuthClient = null;
+    throw new Error("OAUTH_URL_INVALID");
+  }
+  await openUrl(authorizeUrl.toString());
+};
+
+export const cloudSignInWithGoogle = (): Promise<void> => cloudSignInWithProvider("google");
+export const cloudSignInWithGitHub = (): Promise<void> => cloudSignInWithProvider("github");
+
+export const isCloudOAuthRedirect = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "runory:" && url.hostname === "auth" && url.pathname === "/callback";
+  } catch {
+    return false;
+  }
+};
+
+export const completeCloudOAuthRedirect = async (value: string): Promise<Session> => {
+  if (!isCloudOAuthRedirect(value)) throw new Error("OAUTH_REDIRECT_INVALID");
+  const oauth = pendingOAuthClient;
+  if (!oauth) throw new Error("OAUTH_ATTEMPT_MISSING");
+  const url = new URL(value);
+  const fragment = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  if (url.searchParams.has("error") || fragment.has("error")) {
+    pendingOAuthClient = null;
+    throw new Error("OAUTH_PROVIDER_REJECTED");
+  }
+  const code = url.searchParams.get("code");
+  if (!code) {
+    pendingOAuthClient = null;
+    throw new Error("OAUTH_CODE_MISSING");
+  }
+  const { data, error } = await oauth.auth.exchangeCodeForSession(code);
+  if (error || !data.session) throw error ?? new Error("OAUTH_SESSION_MISSING");
+  const { data: applied, error: applyError } = await client().auth.setSession({
+    access_token: data.session.access_token,
+    refresh_token: data.session.refresh_token,
+  });
+  if (applyError || !applied.session) throw applyError ?? new Error("OAUTH_SESSION_MISSING");
+  await persistCloudSession(applied.session);
+  // Dropping the one-attempt client also drops its in-memory PKCE verifier and session.
+  pendingOAuthClient = null;
+  return applied.session;
+};
+export const cloudSignOut = async () => {
+  const { error } = await client().auth.signOut();
+  await clearPersistedCloudSession();
+  if (error) throw error;
+};
+export const requestCloudPasswordReset = async (email: string): Promise<void> => {
+  const { error } = await client().auth.resetPasswordForEmail(email, {
+    redirectTo: `${authWebBaseUrl}/auth/reset`,
+  });
+  if (error) throw error;
+};
+export const consumeCloudAuthRedirect = async (): Promise<Session> => {
+  const url = new URL(window.location.href);
+  const fragment = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  if (url.searchParams.has("error") || fragment.has("error")) throw new Error("AUTH_REDIRECT_FAILED");
+
+  const code = url.searchParams.get("code");
+  let session: Session | null = null;
+  if (code) {
+    const { data, error } = await client().auth.exchangeCodeForSession(code);
+    if (error) throw error;
+    session = data.session;
+  } else {
+    const accessToken = fragment.get("access_token");
+    const refreshToken = fragment.get("refresh_token");
+    if (accessToken && refreshToken) {
+      const { data, error } = await client().auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+      if (error) throw error;
+      session = data.session;
+    }
+  }
+
+  session ??= await cloudSession();
+  if (!session) throw new Error("AUTH_REDIRECT_SESSION_MISSING");
+  window.history.replaceState({}, document.title, url.pathname);
+  return session;
+};
+
+export const updateCloudPassword = async (password: string): Promise<void> => {
+  const { error } = await client().auth.updateUser({ password });
+  if (error) throw error;
+};
 export const listOrganizations = async (): Promise<Organization[]> => {
-  const { data, error } = await client().from("organizations").select("id,name,owner_id,created_at,updated_at").order("created_at");
+  const { data, error } = await client().from("organizations").select("id,name,kind,owner_id,created_at,updated_at").order("created_at");
   if (error) throw error;
   return data;
 };
 export const createOrganization = async (name: string, ownerId: string): Promise<Organization> => {
-  const { data, error } = await client().from("organizations").insert({ name, owner_id: ownerId }).select("id,name,owner_id,created_at,updated_at").single();
+  const id = crypto.randomUUID();
+  const { error: insertError } = await client().from("organizations")
+    .insert({ id, name, kind: "team", owner_id: ownerId });
+  if (insertError) throw insertError;
+
+  // The AFTER INSERT trigger establishes the owner's membership. Query only
+  // after that statement completes so the organization SELECT policy can see it.
+  const { data, error } = await client().from("organizations")
+    .select("id,name,kind,owner_id,created_at,updated_at").eq("id", id).single();
   if (error) throw error;
   return data;
+};
+
+export const listBillingPlans = async (): Promise<BillingPlan[]> => {
+  const { data, error } = await client().from("billing_plans")
+    .select("code,monthly_price_cents,annual_monthly_price_cents,currency,per_seat,trial_days,included_monthly_credits,feature_codes,sort_order,active,created_at,updated_at")
+    .eq("active", true).order("sort_order");
+  if (error) throw error;
+  return data;
+};
+
+export const getOrganizationSubscription = async (organizationId: string): Promise<OrganizationSubscription | null> => {
+  const { data, error } = await client().from("organization_subscriptions")
+    .select("organization_id,plan_code,status,seat_quantity,billing_cycle,current_period_start,current_period_end,trial_ends_at,trial_started_at,cancel_at_period_end,provider_customer_ref,provider_subscription_ref,created_at,updated_at")
+    .eq("organization_id", organizationId).maybeSingle();
+  if (error) throw error;
+  return data;
+};
+
+export const getCreditAccount = async (organizationId: string): Promise<CreditAccount | null> => {
+  const { data, error } = await client().from("credit_accounts")
+    .select("organization_id,balance_microcredits,held_microcredits,lifetime_granted_microcredits,lifetime_spent_microcredits,version,updated_at")
+    .eq("organization_id", organizationId).maybeSingle();
+  if (error) throw error;
+  return data;
+};
+
+export const listCreditLedger = async (organizationId: string, limit = 20): Promise<CreditLedgerEntry[]> => {
+  const { data, error } = await client().from("credit_ledger")
+    .select("id,organization_id,actor_id,request_id,entry_type,amount_microcredits,balance_after_microcredits,external_reference,description_code,created_at")
+    .eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return data;
+};
+
+export const startBillingTrial = async (organizationId: string, planCode: BillingPlanCode): Promise<OrganizationSubscription> => {
+  const { data, error } = await client().rpc("start_billing_trial", {
+    target_organization_id: organizationId,
+    target_plan_code: planCode,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const ensurePersonalWorkspace = async (): Promise<Organization> => {
+  const { data, error } = await client().rpc("ensure_personal_workspace");
+  if (error) throw error;
+  return data;
+};
+
+export const ensureMyCloudProfile = async (displayName: string): Promise<CloudUserProfile> => {
+  const { data, error } = await client().rpc("ensure_my_profile", { target_display_name: displayName });
+  if (error) throw error;
+  return data;
+};
+
+export const loadMyCloudProfile = async (userId: string): Promise<CloudUserProfile | null> => {
+  const { data, error } = await client().from("user_profiles")
+    .select("id,display_name,avatar_path,avatar_version,created_at,updated_at")
+    .eq("id", userId).maybeSingle();
+  if (error) throw error;
+  return data;
+};
+
+export const updateMyCloudDisplayName = async (displayName: string): Promise<CloudUserProfile> => {
+  const { data, error } = await client().rpc("update_my_display_name", { target_display_name: displayName });
+  if (error) throw error;
+  return data;
+};
+
+export const uploadCloudAvatar = async (userId: string, avatar: Blob): Promise<string> => {
+  const path = `${userId}/${crypto.randomUUID()}.webp`;
+  const { error } = await client().storage.from("avatars").upload(path, avatar, {
+    cacheControl: "3600",
+    contentType: "image/webp",
+    upsert: false,
+  });
+  if (error) throw error;
+  return path;
+};
+
+export const setMyCloudAvatar = async (avatarPath: string | null, expectedVersion: number): Promise<CloudUserProfile> => {
+  const { data, error } = await client().rpc("set_my_avatar", {
+    target_avatar_path: avatarPath,
+    expected_avatar_version: expectedVersion,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const deleteCloudAvatar = async (path: string): Promise<void> => {
+  const { error } = await client().storage.from("avatars").remove([path]);
+  if (error) throw error;
+};
+
+export const createCloudAvatarUrl = async (path: string): Promise<string> => {
+  const { data, error } = await client().storage.from("avatars").createSignedUrl(path, 3600);
+  if (error) throw error;
+  return data.signedUrl;
 };
 
 export const getMyMembership = async (organizationId: string, userId: string): Promise<OrganizationMember | null> => {
@@ -122,14 +345,17 @@ export const loadEncryptedInventory = async (organizationId: string): Promise<Sy
   return data;
 };
 
-export const writeEncryptedInventory = async (organizationId: string, encryptedPayload: CloudEncryptedPayload): Promise<SyncObject> => {
-  const current = await loadEncryptedInventory(organizationId);
+export const writeEncryptedInventory = async (
+  organizationId: string,
+  encryptedPayload: CloudEncryptedPayload,
+  expectedRevision: number,
+): Promise<SyncObject> => {
   const { data, error } = await client().rpc("write_sync_object", {
     target_organization_id: organizationId,
     target_kind: "inventory",
     target_logical_id: organizationId,
     target_encrypted_payload: encryptedPayload,
-    expected_revision: current?.revision ?? 0,
+    expected_revision: expectedRevision,
   });
   if (error) throw error;
   return data;

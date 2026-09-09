@@ -5,6 +5,38 @@ pub type AppResult<T> = Result<T, AppError>;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("jump host configuration is invalid")]
+    InvalidJumpHost,
+    #[error("profile is referenced as a jump host")]
+    ProfileInUseAsJumpHost,
+    #[error("jump host preparation was not found or expired")]
+    JumpPreparationExpired,
+    #[error("jump host denied TCP forwarding")]
+    JumpForwardingDenied,
+    #[error("target is unreachable from the jump host")]
+    JumpTargetUnreachable,
+    #[error("background SSH authentication is required")]
+    TunnelConnectionRequired,
+    #[error("invalid tunnel rule")]
+    TunnelInvalid,
+    #[error("tunnel not found")]
+    TunnelNotFound,
+    #[error("stop the tunnel before changing it")]
+    TunnelRunning,
+    #[error("tunnel is not running")]
+    TunnelStopped,
+    #[error("local port is already in use")]
+    TunnelPortInUse,
+    #[error("local listener could not be bound")]
+    TunnelBindFailed,
+    #[error("SSH forwarding is prohibited")]
+    TunnelDenied,
+    #[error("forwarding destination could not be reached")]
+    TunnelTargetFailed,
+    #[error("tunnel session does not match the saved profile")]
+    TunnelSessionMismatch,
+    #[error("tunnel resource limit reached")]
+    TunnelLimit,
     #[error("invalid request")]
     InvalidProfile,
     #[error("invalid group")]
@@ -99,6 +131,8 @@ pub enum AppError {
     CloudDecrypt,
     #[error("cloud sync import was not found")]
     CloudImportNotFound,
+    #[error("cloud sync recovery passphrase is required")]
+    CloudRecoveryRequired,
     #[error("cloud access policy denied the operation")]
     CloudPolicyDenied,
     #[error("cloud access policy could not be evaluated")]
@@ -107,16 +141,44 @@ pub enum AppError {
     ModelInvalid,
     #[error("model provider is unavailable")]
     ModelUnavailable,
+    #[error("model provider request timed out")]
+    ModelTimeout,
     #[error("model provider authentication failed")]
     ModelAuthFailed,
+    #[error("managed model credits are insufficient")]
+    ModelCreditInsufficient,
     #[error("model provider rate limit exceeded")]
     ModelRateLimited,
     #[error("model provider returned an invalid response")]
     ModelResponseInvalid,
+    #[error("model provider returned an empty response")]
+    ModelResponseEmpty,
+    #[error("model provider returned invalid or truncated JSON")]
+    ModelJsonInvalid,
+    #[error("model provider returned an invalid agent decision")]
+    ModelDecisionInvalid,
+    #[error("model provider returned an invalid command proposal")]
+    ModelCommandInvalid,
+    #[error("model provider omitted valid usage information")]
+    ModelUsageInvalid,
+    #[error("model provider returned an invalid response envelope")]
+    ModelProviderResponseInvalid,
     #[error("model provider OAuth is unsupported on this platform")]
     ModelOauthUnsupported,
     #[error("model provider OAuth was cancelled or timed out")]
     ModelOauthCancelled,
+    #[error("desktop updater is not configured")]
+    UpdateNotConfigured,
+    #[error("desktop update check failed")]
+    UpdateCheckFailed,
+    #[error("desktop update is not ready")]
+    UpdateNotReady,
+    #[error("desktop update download failed")]
+    UpdateDownloadFailed,
+    #[error("active sessions must be closed before installing an update")]
+    UpdateBusy,
+    #[error("desktop update installation failed")]
+    UpdateInstallFailed,
     #[error("storage operation failed")]
     Storage,
 }
@@ -130,6 +192,22 @@ struct ErrorPayload<'a> {
 impl AppError {
     pub const fn code(&self) -> &'static str {
         match self {
+            Self::InvalidJumpHost => "INVALID_JUMP_HOST",
+            Self::ProfileInUseAsJumpHost => "PROFILE_IN_USE_AS_JUMP_HOST",
+            Self::JumpPreparationExpired => "JUMP_PREPARATION_EXPIRED",
+            Self::JumpForwardingDenied => "JUMP_FORWARDING_DENIED",
+            Self::JumpTargetUnreachable => "JUMP_TARGET_UNREACHABLE",
+            Self::TunnelConnectionRequired => "TUNNEL_CONNECTION_REQUIRED",
+            Self::TunnelInvalid => "TUNNEL_INVALID",
+            Self::TunnelNotFound => "TUNNEL_NOT_FOUND",
+            Self::TunnelRunning => "TUNNEL_RUNNING",
+            Self::TunnelStopped => "TUNNEL_STOPPED",
+            Self::TunnelPortInUse => "TUNNEL_PORT_IN_USE",
+            Self::TunnelBindFailed => "TUNNEL_BIND_FAILED",
+            Self::TunnelDenied => "TUNNEL_DENIED",
+            Self::TunnelTargetFailed => "TUNNEL_TARGET_FAILED",
+            Self::TunnelSessionMismatch => "TUNNEL_SESSION_MISMATCH",
+            Self::TunnelLimit => "TUNNEL_LIMIT",
             Self::InvalidProfile => "INVALID_PROFILE",
             Self::InvalidGroup => "INVALID_GROUP",
             Self::ProfileNotFound => "PROFILE_NOT_FOUND",
@@ -177,15 +255,30 @@ impl AppError {
             Self::CloudCrypto => "CLOUD_CRYPTO_ERROR",
             Self::CloudDecrypt => "CLOUD_DECRYPT_FAILED",
             Self::CloudImportNotFound => "CLOUD_IMPORT_NOT_FOUND",
+            Self::CloudRecoveryRequired => "CLOUD_RECOVERY_REQUIRED",
             Self::CloudPolicyDenied => "CLOUD_POLICY_DENIED",
             Self::CloudPolicyUnavailable => "CLOUD_POLICY_UNAVAILABLE",
             Self::ModelInvalid => "MODEL_INVALID",
             Self::ModelUnavailable => "MODEL_UNAVAILABLE",
+            Self::ModelTimeout => "MODEL_TIMEOUT",
             Self::ModelAuthFailed => "MODEL_AUTH_FAILED",
+            Self::ModelCreditInsufficient => "MODEL_CREDIT_INSUFFICIENT",
             Self::ModelRateLimited => "MODEL_RATE_LIMITED",
             Self::ModelResponseInvalid => "MODEL_RESPONSE_INVALID",
+            Self::ModelResponseEmpty => "MODEL_RESPONSE_EMPTY",
+            Self::ModelJsonInvalid => "MODEL_JSON_INVALID",
+            Self::ModelDecisionInvalid => "MODEL_DECISION_INVALID",
+            Self::ModelCommandInvalid => "MODEL_COMMAND_INVALID",
+            Self::ModelUsageInvalid => "MODEL_USAGE_INVALID",
+            Self::ModelProviderResponseInvalid => "MODEL_PROVIDER_RESPONSE_INVALID",
             Self::ModelOauthUnsupported => "MODEL_OAUTH_UNSUPPORTED",
             Self::ModelOauthCancelled => "MODEL_OAUTH_CANCELLED",
+            Self::UpdateNotConfigured => "UPDATE_NOT_CONFIGURED",
+            Self::UpdateCheckFailed => "UPDATE_CHECK_FAILED",
+            Self::UpdateNotReady => "UPDATE_NOT_READY",
+            Self::UpdateDownloadFailed => "UPDATE_DOWNLOAD_FAILED",
+            Self::UpdateBusy => "UPDATE_BUSY",
+            Self::UpdateInstallFailed => "UPDATE_INSTALL_FAILED",
             Self::Storage => "STORAGE_ERROR",
         }
     }

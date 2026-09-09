@@ -1,6 +1,9 @@
 //! Agent Runtime V2 (AR2-A…AR2-E: domain, loop, interrupt/resume, SQLite, IPC).
 
 mod approval;
+// Bounded artifact retrieval is implemented and tested, but its model-facing
+// tool registration belongs to a later Runtime V2 integration step.
+#[allow(dead_code)]
 mod artifact;
 mod broadcast;
 mod changeset;
@@ -51,6 +54,7 @@ pub use gate::{
 pub use reasoner::{
     BudgetStatus, Observation, Reasoner, ReasonerError, ReasonerInput, AGENT_REASONER_FAILED,
 };
+pub(crate) use reasoner_planning::HostSessionContext;
 pub use repository::{
     AgentEventRepository, AgentRunStore, AgentStoreError, ApprovalStore, CheckpointStore,
     InMemoryAgentEventRepository, InMemoryAgentRunStore, InMemoryApprovalStore,

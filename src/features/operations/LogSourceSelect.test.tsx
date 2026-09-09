@@ -35,8 +35,12 @@ function button(key: string, scope: ParentNode = container): HTMLButtonElement {
   return element;
 }
 
+function sectionNav(): HTMLElement {
+  return getElement(`nav[aria-label="${i18n.t("operations.title")}"]`);
+}
+
 async function navigate(section: "docker" | "pm2" | "nginx" | "logs") {
-  await click(button(`operations.${section}`, getElement("nav")));
+  await click(button(`operations.${section}`, sectionNav()));
 }
 
 async function press(element: HTMLElement, key: string) {
@@ -49,9 +53,7 @@ async function press(element: HTMLElement, key: string) {
 
 async function mountLogs(active = false) {
   await act(async () => { root.render(<OperationsView sessionId="test-session" active={active} />); });
-  const tab = Array.from(container.querySelectorAll("nav button")).find((button) => button.textContent === i18n.t("operations.logs"));
-  if (!(tab instanceof HTMLElement)) throw new Error("Missing logs tab");
-  await click(tab);
+  await navigate("logs");
 }
 
 beforeEach(() => {
@@ -69,7 +71,7 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   vi.mocked(invoke).mockReset().mockImplementation(async (command) => {
-    if (command === "docker_list" || command === "pm2_list") return [];
+    if (command === "docker_list" || command === "docker_images_list" || command === "docker_networks_list" || command === "pm2_list") return [];
     return { output: "", success: true };
   });
 });
@@ -161,9 +163,7 @@ describe("log output layout", () => {
     expect(output.textContent).toBe("line\n".repeat(200));
     expect(output.classList.contains("flex-1")).toBe(true);
 
-    const nginxTab = Array.from(container.querySelectorAll<HTMLButtonElement>("nav button")).find((button) => button.textContent === i18n.t("operations.nginx"));
-    if (!nginxTab) throw new Error("Missing Nginx tab");
-    await click(nginxTab);
+    await navigate("nginx");
     expect(container.querySelector("pre")).toBeNull();
     await navigate("logs");
     expect(getElement("pre").textContent).toBe("line\n".repeat(200));

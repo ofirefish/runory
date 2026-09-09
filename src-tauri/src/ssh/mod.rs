@@ -1,4 +1,13 @@
+mod background;
 mod exec;
+pub(crate) use background::{BackgroundConnection, ConnectionIdentity};
+mod forward;
+mod host_context;
+pub(crate) use forward::ForwardTransport;
+pub(crate) use host_context::HostSystemInfo;
+mod jump;
+pub(crate) use jump::jump_route_scope;
+pub use jump::JumpConnectionManager;
 mod os_detection;
 mod service;
 mod session_manager;

@@ -99,6 +99,14 @@ pub(crate) fn validate_restart(target: &RestartTarget) -> AppResult<()> {
     }
 }
 
+pub(crate) fn validate_app_name(name: &str) -> AppResult<()> {
+    if !name.is_empty() && name.len() <= 128 && !name.contains(['\0', '\n', '\r']) {
+        Ok(())
+    } else {
+        Err(AppError::InvalidOperation)
+    }
+}
+
 pub(crate) fn validate_cron_task(task: &CronTask) -> AppResult<()> {
     match task {
         CronTask::Backup {

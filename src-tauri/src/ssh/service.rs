@@ -8,6 +8,7 @@ use russh::{ChannelReadHalf, ChannelWriteHalf, Disconnect};
 use crate::domain::{
     AppError, AppResult, ConnectRequest, HostKeyInfo, SshAuthentication, SshConnectionRequest,
 };
+use crate::ssh::ForwardTransport;
 
 #[derive(Clone)]
 pub(crate) struct HostKeyHandler {
@@ -99,6 +100,78 @@ impl SshService {
         })
     }
 
+    pub async fn scan_host_key_via(
+        transport: &ForwardTransport,
+        host: &str,
+        port: u16,
+    ) -> AppResult<HostKeyInfo> {
+        validate_endpoint(host, port)?;
+        let observed = Arc::new(Mutex::new(None));
+        let handler = HostKeyHandler {
+            expected_fingerprint: None,
+            observed: Arc::clone(&observed),
+        };
+        let channel = transport
+            .open(host, port, 0)
+            .await
+            .map_err(map_jump_transport_error)?;
+        let client = connect_channel(channel.into_stream(), handler).await?;
+        let _ = client
+            .disconnect(Disconnect::ByApplication, "host key probe complete", "en")
+            .await;
+        observed
+            .lock()
+            .ok()
+            .and_then(|mut value| value.take())
+            .ok_or(AppError::HostKeyUnknown)
+    }
+
+    pub async fn connect_via(
+        transport: &ForwardTransport,
+        request: ConnectRequest,
+        expected_fingerprint: String,
+    ) -> AppResult<OpenedSession> {
+        if request.cols == 0 || request.rows == 0 {
+            return Err(AppError::InvalidProfile);
+        }
+        let client = authenticate_via(transport, request.connection, expected_fingerprint).await?;
+        let channel = client
+            .channel_open_session()
+            .await
+            .map_err(map_russh_error)?;
+        channel
+            .request_pty(
+                false,
+                "xterm-256color",
+                request.cols,
+                request.rows,
+                0,
+                0,
+                &[],
+            )
+            .await
+            .map_err(map_russh_error)?;
+        channel.request_shell(true).await.map_err(map_russh_error)?;
+        let (reader, writer) = channel.split();
+        Ok(OpenedSession {
+            client,
+            reader,
+            writer,
+        })
+    }
+
+    pub async fn test_connection_via(
+        transport: &ForwardTransport,
+        request: SshConnectionRequest,
+        expected_fingerprint: String,
+    ) -> AppResult<()> {
+        let client = authenticate_via(transport, request, expected_fingerprint).await?;
+        let _ = client
+            .disconnect(Disconnect::ByApplication, "connection test complete", "en")
+            .await;
+        Ok(())
+    }
+
     pub async fn test_connection(
         request: SshConnectionRequest,
         expected_fingerprint: String,
@@ -111,7 +184,7 @@ impl SshService {
     }
 }
 
-async fn authenticate(
+pub(super) async fn authenticate(
     request: SshConnectionRequest,
     expected_fingerprint: String,
 ) -> AppResult<client::Handle<HostKeyHandler>> {
@@ -126,6 +199,73 @@ async fn authenticate(
         observed: Arc::clone(&observed),
     };
     let mut client = match connect_transport(&request.host, request.port, handler).await {
+        Ok(client) => client,
+        Err(error) => {
+            if let Some(actual) = observed
+                .lock()
+                .ok()
+                .and_then(|value| value.as_ref().map(|info| info.fingerprint.clone()))
+            {
+                verify_exact_fingerprint(&expected_fingerprint, &actual)?;
+            }
+            return Err(error);
+        }
+    };
+    let actual = observed
+        .lock()
+        .ok()
+        .and_then(|value| value.as_ref().map(|info| info.fingerprint.clone()))
+        .ok_or(AppError::HostKeyUnknown)?;
+    verify_exact_fingerprint(&expected_fingerprint, &actual)?;
+    let auth = match authentication {
+        PreparedAuthentication::Password(password) => client
+            .authenticate_password(&request.username, password.as_str())
+            .await
+            .map_err(map_russh_error)?,
+        PreparedAuthentication::PrivateKey(key) => {
+            let hash = client
+                .best_supported_rsa_hash()
+                .await
+                .map_err(map_russh_error)?
+                .flatten();
+            client
+                .authenticate_publickey(
+                    &request.username,
+                    PrivateKeyWithHashAlg::new(Arc::new(*key), hash),
+                )
+                .await
+                .map_err(map_russh_error)?
+        }
+    };
+    if !auth.success() {
+        let _ = client
+            .disconnect(Disconnect::ByApplication, "authentication failed", "en")
+            .await;
+        return Err(AppError::AuthFailed);
+    }
+    Ok(client)
+}
+
+async fn authenticate_via(
+    transport: &ForwardTransport,
+    request: SshConnectionRequest,
+    expected_fingerprint: String,
+) -> AppResult<client::Handle<HostKeyHandler>> {
+    validate_endpoint(&request.host, request.port)?;
+    if request.username.trim().is_empty() || expected_fingerprint.trim().is_empty() {
+        return Err(AppError::InvalidProfile);
+    }
+    let authentication = prepare_authentication(request.authentication).await?;
+    let observed = Arc::new(Mutex::new(None));
+    let handler = HostKeyHandler {
+        expected_fingerprint: Some(expected_fingerprint.clone()),
+        observed: Arc::clone(&observed),
+    };
+    let channel = transport
+        .open(&request.host, request.port, 0)
+        .await
+        .map_err(map_jump_transport_error)?;
+    let mut client = match connect_channel(channel.into_stream(), handler).await {
         Ok(client) => client,
         Err(error) => {
             if let Some(actual) = observed
@@ -257,6 +397,32 @@ async fn connect_transport(
     .await
     .map_err(|_| AppError::ConnectionTimeout)?
     .map_err(map_russh_error)
+}
+
+async fn connect_channel(
+    stream: russh::ChannelStream<client::Msg>,
+    handler: HostKeyHandler,
+) -> AppResult<client::Handle<HostKeyHandler>> {
+    let config = Arc::new(client::Config {
+        inactivity_timeout: Some(Duration::from_secs(30)),
+        keepalive_interval: Some(Duration::from_secs(15)),
+        ..Default::default()
+    });
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        client::connect_stream(config, stream, handler),
+    )
+    .await
+    .map_err(|_| AppError::ConnectionTimeout)?
+    .map_err(map_russh_error)
+}
+
+fn map_jump_transport_error(error: AppError) -> AppError {
+    match error {
+        AppError::TunnelDenied => AppError::JumpForwardingDenied,
+        AppError::TunnelTargetFailed => AppError::JumpTargetUnreachable,
+        other => other,
+    }
 }
 
 fn validate_endpoint(host: &str, port: u16) -> AppResult<()> {
@@ -394,6 +560,63 @@ mod integration_tests {
         )
         .await
         .expect("test connection");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires docker compose --profile jump OpenSSH fixtures"]
+    async fn jump_host_scans_authenticates_and_opens_target_pty_over_direct_tcpip() {
+        let _guard = integration_lock().lock().await;
+        let jump = Arc::new(
+            crate::ssh::BackgroundConnection::connect(
+                connection(SshAuthentication::Password {
+                    password: zeroize::Zeroizing::new("runory-spike".into()),
+                }),
+                current_fingerprint().await,
+            )
+            .await
+            .expect("authenticate jump host"),
+        );
+        let target_host = "openssh-jump-target";
+        let target_key = SshService::scan_host_key_via(&jump.transport(), target_host, 22)
+            .await
+            .expect("scan target through jump host");
+        SshService::test_connection_via(
+            &jump.transport(),
+            SshConnectionRequest {
+                host: target_host.into(),
+                port: 22,
+                username: "runory".into(),
+                authentication: SshAuthentication::Password {
+                    password: zeroize::Zeroizing::new("runory-spike".into()),
+                },
+            },
+            target_key.fingerprint.clone(),
+        )
+        .await
+        .expect("authenticate target through jump host");
+        let session = SshService::connect_via(
+            &jump.transport(),
+            ConnectRequest {
+                connection: SshConnectionRequest {
+                    host: target_host.into(),
+                    port: 22,
+                    username: "runory".into(),
+                    authentication: SshAuthentication::Password {
+                        password: zeroize::Zeroizing::new("runory-spike".into()),
+                    },
+                },
+                cols: 100,
+                rows: 30,
+            },
+            target_key.fingerprint,
+        )
+        .await
+        .expect("open target PTY through jump host");
+        session
+            .client
+            .disconnect(Disconnect::ByApplication, "test complete", "en")
+            .await
+            .expect("disconnect target");
     }
 
     #[tokio::test]

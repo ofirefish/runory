@@ -10,11 +10,11 @@ interface FieldProps<T extends string = string> {
   onChange: (value: T) => void;
 }
 
-export function DeploymentInputField({ label, value, onChange, type = "text" }: FieldProps & { type?: HTMLInputTypeAttribute }) {
+export function DeploymentInputField({ label, value, onChange, type = "text", placeholder }: FieldProps & { type?: HTMLInputTypeAttribute; placeholder?: string }) {
   const id = useId();
   return <div className="grid min-w-0 gap-1.5">
     <Label htmlFor={id}>{label}</Label>
-    <Input id={id} type={type} value={value} onChange={(event) => onChange(event.target.value)} className="text-foreground focus:ring-primary" />
+    <Input id={id} type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} className="text-foreground focus:ring-primary" />
   </div>;
 }
 

@@ -69,6 +69,7 @@ async fn model_requests_follow_ui_language_changes_without_recreating_the_gatewa
             base_url: format!("http://{address}/v1"),
             model: "test-model".into(),
             max_context_tokens: 64_000,
+            organization_id: None,
             api_key: Some("test-only-key".into()),
         })
         .await
