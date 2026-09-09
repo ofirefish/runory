@@ -63,6 +63,12 @@ const onClose = vi.fn();
 const onConnect = vi.fn().mockResolvedValue(true);
 const onTest = vi.fn().mockResolvedValue(true);
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 async function flush() {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
@@ -107,6 +113,52 @@ afterEach(async () => {
 });
 
 describe("jump connection dialog", () => {
+  it("presents the route and separates the two credential scopes", async () => {
+    await render();
+    const cards = container.querySelectorAll(".jump-credential-card");
+    expect(cards).toHaveLength(2);
+    expect(cards[0].getAttribute("data-leg")).toBe("jump");
+    expect(cards[1].getAttribute("data-leg")).toBe("target");
+    expect(container.querySelector(".jump-route-summary")?.textContent).toContain(jump.name);
+    expect(container.querySelector(".jump-route-summary")?.textContent).toContain(target.name);
+    expect(container.textContent).toContain(i18n.t("connection.jumpProgress.security"));
+  });
+
+  it("shows real jump, route and target-session stages without exposing the credential form", async () => {
+    vi.mocked(ssh.credentialStatus).mockResolvedValue({ ...vault, hasCredential: true });
+    const jumpCheck = deferred<ReturnType<typeof verification>>();
+    const route = deferred<{
+      preparationId: string;
+      targetVerification: ReturnType<typeof verification>;
+      jumpCredentialSaved: boolean;
+    }>();
+    const connection = deferred<boolean>();
+    vi.mocked(ssh.prepareHostVerification).mockReturnValue(jumpCheck.promise);
+    vi.mocked(ssh.prepareJumpConnection).mockReturnValue(route.promise);
+    onConnect.mockReturnValue(connection.promise);
+    await render();
+
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain(i18n.t("connection.jumpProgress.jump"));
+    expect(container.querySelector("form")?.closest("[hidden]")).toBeTruthy();
+    await act(async () => { jumpCheck.resolve(verification("jump-check", jump.host, "trusted")); });
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain(i18n.t("connection.jumpProgress.route"));
+    await act(async () => { route.resolve({ preparationId: "jump-ticket", targetVerification: verification("target-check", target.host, "trusted"), jumpCredentialSaved: false }); });
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain(i18n.t("connection.jumpProgress.connect"));
+    expect(container.querySelectorAll('[data-state="complete"]')).toHaveLength(2);
+    await act(async () => { connection.resolve(true); });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("blocks a changed jump-host key before opening the protected route", async () => {
+    vi.mocked(ssh.credentialStatus).mockResolvedValue({ ...vault, hasCredential: true });
+    vi.mocked(ssh.prepareHostVerification).mockRejectedValue({ code: "HOST_KEY_CHANGED" });
+    await render();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(i18n.t("connection.changedTitle"));
+    expect(ssh.prepareJumpConnection).not.toHaveBeenCalled();
+    expect(onConnect).not.toHaveBeenCalled();
+    expect(ssh.trustHost).not.toHaveBeenCalled();
+  });
+
   it("verifies A and B separately before submitting B with a one-use jump ticket", async () => {
     vi.mocked(ssh.prepareHostVerification).mockResolvedValue(verification("jump-check", jump.host, "unknown"));
     vi.mocked(ssh.prepareJumpConnection).mockResolvedValue({
