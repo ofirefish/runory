@@ -289,6 +289,10 @@ impl CredentialService {
             self.forget(profile_id, CredentialKind::Password).await?;
             self.forget(profile_id, CredentialKind::KeyPassphrase)
                 .await?;
+            self.forget(profile_id, CredentialKind::BastionToken)
+                .await?;
+            self.forget(profile_id, CredentialKind::BastionTargetPassword)
+                .await?;
         }
         Ok(())
     }

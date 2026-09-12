@@ -1,4 +1,4 @@
-import { Bot, Cloud, Palette, ShieldCheck, Trash2, UserCircle, type LucideIcon } from "lucide-react";
+import { Bot, Cloud, Palette, ShieldCheck, Terminal, Trash2, UserCircle, type LucideIcon } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "../../components/ui/button";
@@ -11,12 +11,13 @@ import type { KnownHost } from "../../types/session";
 import type { CredentialStatus } from "../../types/session";
 import { AgentModelSettings } from "./AgentModelSettings";
 import { AppUpdatePanel } from "./AppUpdatePanel";
+import { HelperCliSettings } from "./HelperCliSettings";
 import { SettingsSelectField } from "./SettingsSelectField";
 
 const AccountSettings = lazy(() => import("./AccountSettings").then((module) => ({ default: module.AccountSettings })));
 const CloudPanel = lazy(() => import("./CloudPanel").then((module) => ({ default: module.CloudPanel })));
 
-export type SettingsSection = "general" | "account" | "agent" | "security" | "cloud";
+export type SettingsSection = "general" | "helpers" | "account" | "agent" | "security" | "cloud";
 
 const sections: { id: SettingsSection; icon: LucideIcon; label: string }[] = [
   { id: "general", icon: Palette, label: "settings.section.general" },
@@ -24,6 +25,7 @@ const sections: { id: SettingsSection; icon: LucideIcon; label: string }[] = [
   { id: "agent", icon: Bot, label: "settings.section.agent" },
   { id: "security", icon: ShieldCheck, label: "settings.section.security" },
   { id: "cloud", icon: Cloud, label: "settings.section.cloud" },
+  { id: "helpers", icon: Terminal, label: "settings.section.helpers" },
 ];
 
 export function SettingsPanel({ onClose, initialSection = "general" }: { onClose: () => void; initialSection?: SettingsSection }) {
@@ -36,6 +38,7 @@ export function SettingsPanel({ onClose, initialSection = "general" }: { onClose
   const vaultPasswordConfirmation = useRef<HTMLInputElement>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
+  useEffect(() => { setActiveSection(initialSection); }, [initialSection]);
   useEffect(() => { void i18n.changeLanguage(language); document.documentElement.lang = language; }, [i18n, language]);
   useEffect(() => { void listKnownHosts().then(setKnownHosts).catch(() => setLoadFailed(true)); }, []);
   useEffect(() => { void credentialStatus().then(setVault).catch(() => setVaultFailure(true)); }, []);
@@ -59,6 +62,7 @@ export function SettingsPanel({ onClose, initialSection = "general" }: { onClose
         {persistenceError && <p role="alert" className="text-xs text-red-500">{t("settings.persistenceError")}</p>}
         <AppUpdatePanel />
       </div>}
+      {activeSection === "helpers" && <HelperCliSettings />}
       {activeSection === "account" && <div className="settings-section-reset"><Suspense fallback={<p className="text-xs text-[hsl(var(--muted))]">{t("common.loading")}</p>}><AccountSettings onOpenCloud={() => setActiveSection("cloud")} /></Suspense></div>}
       {activeSection === "agent" && <div className="settings-section-reset"><AgentModelSettings /></div>}
       {activeSection === "security" && <div className="settings-stack">

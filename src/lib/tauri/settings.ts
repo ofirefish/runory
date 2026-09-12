@@ -6,6 +6,8 @@ export type AppLanguage = "en-US" | "zh-CN";
 export type AppSettings = {
   theme: AppTheme;
   language: AppLanguage;
+  boundaryCliPath?: string | null;
+  teleportCliPath?: string | null;
 };
 
 export async function getSettings(): Promise<AppSettings> {

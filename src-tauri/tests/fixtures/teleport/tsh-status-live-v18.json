@@ -1,0 +1,14 @@
+{
+  "active": {
+    "profile_url": "https://teleport.local:3080",
+    "username": "runory-test",
+    "cluster": "teleport.local",
+    "roles": ["access", "auditor", "editor"],
+    "traits": {
+      "logins": ["root"]
+    },
+    "logins": ["root"],
+    "valid_until": "2026-09-12T21:35:57+08:00"
+  },
+  "profiles": []
+}

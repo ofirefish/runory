@@ -39,7 +39,11 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
   useEffect(() => {
-    const onOpenSettings = () => { setSettingsSection("general"); setSettingsOpen(true); };
+    const onOpenSettings = (event: Event) => {
+      const detail = (event as CustomEvent<{ section?: SettingsSection }>).detail;
+      setSettingsSection(detail?.section ?? "general");
+      setSettingsOpen(true);
+    };
     window.addEventListener("runory:open-settings", onOpenSettings);
     return () => window.removeEventListener("runory:open-settings", onOpenSettings);
   }, []);

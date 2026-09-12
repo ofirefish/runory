@@ -41,6 +41,8 @@ impl StrongholdCredentialVault {
             CredentialKind::KeyPassphrase => "key-passphrase",
             CredentialKind::McpToken => "mcp-token",
             CredentialKind::LlmApiKey => "llm-api-key",
+            CredentialKind::BastionToken => "bastion-token",
+            CredentialKind::BastionTargetPassword => "bastion-target-password",
         };
         format!("{prefix}:{profile_id}").into_bytes()
     }

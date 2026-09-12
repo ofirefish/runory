@@ -87,6 +87,7 @@ async fn model_requests_follow_ui_language_changes_without_recreating_the_gatewa
         .update(AppSettingsPatch {
             language: Some(Language::ZhCn),
             theme: None,
+            ..Default::default()
         })
         .await
         .expect("change UI language");

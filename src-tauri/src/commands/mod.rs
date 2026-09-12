@@ -2,6 +2,7 @@ pub mod agent_v2;
 pub mod agentic;
 #[cfg(not(mobile))]
 pub mod app_update;
+pub mod bastion;
 pub mod catalog;
 pub mod cloud;
 pub mod cloud_auth;

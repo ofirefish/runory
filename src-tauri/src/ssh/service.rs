@@ -16,6 +16,18 @@ pub(crate) struct HostKeyHandler {
     observed: Arc<Mutex<Option<HostKeyInfo>>>,
 }
 
+impl HostKeyHandler {
+    pub(crate) fn new(
+        expected_fingerprint: Option<String>,
+        observed: Arc<Mutex<Option<HostKeyInfo>>>,
+    ) -> Self {
+        Self {
+            expected_fingerprint,
+            observed,
+        }
+    }
+}
+
 impl client::Handler for HostKeyHandler {
     type Error = russh::Error;
 
@@ -50,13 +62,76 @@ pub struct SshService;
 
 impl SshService {
     pub async fn scan_host_key(host: &str, port: u16) -> AppResult<HostKeyInfo> {
+        Self::scan_host_key_with_config(host, port, direct_client_config()).await
+    }
+
+    /// Host-key probe for JumpServer KoKo / bastion gateways.
+    ///
+    /// Uses the same OpenSSH-like client identity as session connect — default russh
+    /// identifiers are often reset by KoKo during KEX (Windows 10054).
+    pub async fn scan_bastion_gateway_host_key(host: &str, port: u16) -> AppResult<HostKeyInfo> {
+        Self::assert_ssh_banner(host, port).await?;
+        Self::scan_host_key_with_config(host, port, bastion_gateway_client_config()).await
+    }
+
+    /// Fail fast when the port accepts TCP but does not speak SSH (common misconfigured KoKo port).
+    pub async fn assert_ssh_banner(host: &str, port: u16) -> AppResult<()> {
         validate_endpoint(host, port)?;
+        eprintln!("[runory ssh] probing SSH banner host={host} port={port}");
+        match tokio::time::timeout(Duration::from_secs(5), read_ssh_banner(host, port)).await {
+            Ok(Ok(banner)) => {
+                eprintln!("[runory ssh] ssh banner ok host={host} port={port} banner={banner}");
+                tracing::info!(host = %host, port, banner = %banner, "ssh banner ok");
+                Ok(())
+            }
+            Ok(Err(error)) => {
+                eprintln!(
+                    "[runory ssh] ssh banner probe failed host={host} port={port} code={}",
+                    error.code()
+                );
+                Err(error)
+            }
+            Err(_) => {
+                eprintln!(
+                    "[runory ssh] ssh banner timeout host={host} port={port} (TCP open but no SSH- greeting)"
+                );
+                Err(AppError::BastionKokoUnreachable)
+            }
+        }
+    }
+
+    async fn scan_host_key_with_config(
+        host: &str,
+        port: u16,
+        config: client::Config,
+    ) -> AppResult<HostKeyInfo> {
+        validate_endpoint(host, port)?;
+        eprintln!(
+            "[runory ssh] scanning host key host={host} port={port} client_id={:?}",
+            config.client_id
+        );
+        tracing::info!(host = %host, port, "ssh scanning host key");
         let observed = Arc::new(Mutex::new(None));
         let handler = HostKeyHandler {
             expected_fingerprint: None,
             observed: Arc::clone(&observed),
         };
-        let client = connect_transport(host, port, handler).await?;
+        let client = match connect_transport_with_config(host, port, handler, config).await {
+            Ok(client) => client,
+            Err(error) => {
+                eprintln!(
+                    "[runory ssh] host key scan failed host={host} port={port} code={}",
+                    error.code()
+                );
+                tracing::warn!(
+                    host = %host,
+                    port,
+                    code = error.code(),
+                    "ssh host key scan failed"
+                );
+                return Err(error);
+            }
+        };
         let _ = client
             .disconnect(Disconnect::ByApplication, "host key probe complete", "en")
             .await;
@@ -71,10 +146,63 @@ impl SshService {
         request: ConnectRequest,
         expected_fingerprint: String,
     ) -> AppResult<OpenedSession> {
+        Self::connect_with_client_config(
+            request,
+            expected_fingerprint,
+            direct_client_config(),
+            false,
+        )
+        .await
+    }
+
+    /// Bastion gateways such as JumpServer KoKo: no russh keepalive (incompatible) and no
+    /// short inactivity timeout while the gateway attaches the target session.
+    pub async fn connect_bastion_gateway(
+        request: ConnectRequest,
+        expected_fingerprint: String,
+    ) -> AppResult<OpenedSession> {
+        Self::connect_with_client_config(
+            request,
+            expected_fingerprint,
+            bastion_gateway_client_config(),
+            false,
+        )
+        .await
+    }
+
+    /// Like [`connect_bastion_gateway`], but never falls back to keyboard-interactive.
+    ///
+    /// JumpServer one-time connection tokens are consumed when KoKo fetches the secret during
+    /// the first password attempt; a kbd-int retry would burn a used token.
+    pub async fn connect_bastion_gateway_password_only(
+        request: ConnectRequest,
+        expected_fingerprint: String,
+    ) -> AppResult<OpenedSession> {
+        Self::connect_with_client_config(
+            request,
+            expected_fingerprint,
+            bastion_gateway_client_config(),
+            true,
+        )
+        .await
+    }
+
+    async fn connect_with_client_config(
+        request: ConnectRequest,
+        expected_fingerprint: String,
+        config: client::Config,
+        password_only: bool,
+    ) -> AppResult<OpenedSession> {
         if request.cols == 0 || request.rows == 0 {
             return Err(AppError::InvalidProfile);
         }
-        let client = authenticate(request.connection, expected_fingerprint).await?;
+        let client = authenticate_with_config(
+            request.connection,
+            expected_fingerprint,
+            config,
+            password_only,
+        )
+        .await?;
         let channel = client
             .channel_open_session()
             .await
@@ -91,7 +219,8 @@ impl SshService {
             )
             .await
             .map_err(map_russh_error)?;
-        channel.request_shell(true).await.map_err(map_russh_error)?;
+        // KoKo may attach the target slowly; do not block on a shell success reply.
+        channel.request_shell(false).await.map_err(map_russh_error)?;
         let (reader, writer) = channel.split();
         Ok(OpenedSession {
             client,
@@ -188,6 +317,15 @@ pub(super) async fn authenticate(
     request: SshConnectionRequest,
     expected_fingerprint: String,
 ) -> AppResult<client::Handle<HostKeyHandler>> {
+    authenticate_with_config(request, expected_fingerprint, direct_client_config(), false).await
+}
+
+async fn authenticate_with_config(
+    request: SshConnectionRequest,
+    expected_fingerprint: String,
+    config: client::Config,
+    password_only: bool,
+) -> AppResult<client::Handle<HostKeyHandler>> {
     validate_endpoint(&request.host, request.port)?;
     if request.username.trim().is_empty() || expected_fingerprint.trim().is_empty() {
         return Err(AppError::InvalidProfile);
@@ -198,7 +336,14 @@ pub(super) async fn authenticate(
         expected_fingerprint: Some(expected_fingerprint.clone()),
         observed: Arc::clone(&observed),
     };
-    let mut client = match connect_transport(&request.host, request.port, handler).await {
+    let mut client = match connect_transport_with_config(
+        &request.host,
+        request.port,
+        handler,
+        config,
+    )
+    .await
+    {
         Ok(client) => client,
         Err(error) => {
             if let Some(actual) = observed
@@ -217,11 +362,19 @@ pub(super) async fn authenticate(
         .and_then(|value| value.as_ref().map(|info| info.fingerprint.clone()))
         .ok_or(AppError::HostKeyUnknown)?;
     verify_exact_fingerprint(&expected_fingerprint, &actual)?;
-    let auth = match authentication {
-        PreparedAuthentication::Password(password) => client
-            .authenticate_password(&request.username, password.as_str())
-            .await
-            .map_err(map_russh_error)?,
+    let auth_ok = match authentication {
+        PreparedAuthentication::Password(password) => {
+            if password_only {
+                client
+                    .authenticate_password(&request.username, password.as_str())
+                    .await
+                    .map_err(map_russh_error)?
+                    .success()
+            } else {
+                authenticate_password_or_keyboard(&mut client, &request.username, password.as_str())
+                    .await?
+            }
+        }
         PreparedAuthentication::PrivateKey(key) => {
             let hash = client
                 .best_supported_rsa_hash()
@@ -235,15 +388,59 @@ pub(super) async fn authenticate(
                 )
                 .await
                 .map_err(map_russh_error)?
+                .success()
         }
     };
-    if !auth.success() {
+    if !auth_ok {
+        eprintln!(
+            "[runory ssh] auth failed user={} host={} port={} password_only={}",
+            request.username, request.host, request.port, password_only
+        );
+        tracing::warn!(
+            username = %request.username,
+            host = %request.host,
+            port = request.port,
+            password_only,
+            "ssh authentication rejected"
+        );
         let _ = client
             .disconnect(Disconnect::ByApplication, "authentication failed", "en")
             .await;
         return Err(AppError::AuthFailed);
     }
     Ok(client)
+}
+
+async fn authenticate_password_or_keyboard(
+    client: &mut client::Handle<HostKeyHandler>,
+    username: &str,
+    password: &str,
+) -> AppResult<bool> {
+    let password_auth = client
+        .authenticate_password(username, password)
+        .await
+        .map_err(map_russh_error)?;
+    if password_auth.success() {
+        return Ok(true);
+    }
+    let mut response = client
+        .authenticate_keyboard_interactive_start(username, None)
+        .await
+        .map_err(map_russh_error)?;
+    for _ in 0..8 {
+        match response {
+            client::KeyboardInteractiveAuthResponse::Success => return Ok(true),
+            client::KeyboardInteractiveAuthResponse::Failure { .. } => return Ok(false),
+            client::KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
+                let answers = prompts.iter().map(|_| password.to_string()).collect();
+                response = client
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await
+                    .map_err(map_russh_error)?;
+            }
+        }
+    }
+    Ok(false)
 }
 
 async fn authenticate_via(
@@ -385,18 +582,93 @@ async fn connect_transport(
     port: u16,
     handler: HostKeyHandler,
 ) -> AppResult<client::Handle<HostKeyHandler>> {
-    let config = Arc::new(client::Config {
+    connect_transport_with_config(host, port, handler, direct_client_config()).await
+}
+
+async fn read_ssh_banner(host: &str, port: u16) -> AppResult<String> {
+    use tokio::io::AsyncReadExt;
+    let mut stream = tokio::net::TcpStream::connect((host, port))
+        .await
+        .map_err(|error| {
+            eprintln!("[runory ssh] banner tcp connect failed: {error}");
+            AppError::ConnectionRefused
+        })?;
+    let _ = stream.set_nodelay(true);
+    let mut buf = vec![0_u8; 256];
+    let mut collected = Vec::new();
+    loop {
+        let n = stream.read(&mut buf).await.map_err(|error| {
+            eprintln!("[runory ssh] banner read failed: {error}");
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            ) {
+                AppError::BastionKokoUnreachable
+            } else {
+                AppError::ConnectionRefused
+            }
+        })?;
+        if n == 0 {
+            break;
+        }
+        collected.extend_from_slice(&buf[..n]);
+        if collected.windows(2).any(|w| w == b"\r\n") || collected.len() >= 255 {
+            break;
+        }
+    }
+    let banner = String::from_utf8_lossy(&collected).trim().to_string();
+    if banner.starts_with("SSH-") {
+        Ok(banner.lines().next().unwrap_or(&banner).to_string())
+    } else {
+        eprintln!(
+            "[runory ssh] non-ssh greeting host={host} port={port} bytes={} preview={:?}",
+            collected.len(),
+            banner.chars().take(80).collect::<String>()
+        );
+        Err(AppError::BastionKokoUnreachable)
+    }
+}
+
+async fn connect_transport_with_config(
+    host: &str,
+    port: u16,
+    handler: HostKeyHandler,
+    config: client::Config,
+) -> AppResult<client::Handle<HostKeyHandler>> {
+    let config = Arc::new(config);
+    let timeout = if config.keepalive_interval.is_none() {
+        Duration::from_secs(45)
+    } else {
+        Duration::from_secs(15)
+    };
+    tokio::time::timeout(timeout, client::connect(config, (host, port), handler))
+        .await
+        .map_err(|_| AppError::ConnectionTimeout)?
+        .map_err(map_russh_error)
+}
+
+fn direct_client_config() -> client::Config {
+    client::Config {
         inactivity_timeout: Some(Duration::from_secs(30)),
         keepalive_interval: Some(Duration::from_secs(15)),
         ..Default::default()
-    });
-    tokio::time::timeout(
-        Duration::from_secs(15),
-        client::connect(config, (host, port), handler),
-    )
-    .await
-    .map_err(|_| AppError::ConnectionTimeout)?
-    .map_err(map_russh_error)
+    }
+}
+
+fn bastion_gateway_client_config() -> client::Config {
+    use std::borrow::Cow;
+    use russh::SshId;
+    client::Config {
+        client_id: SshId::Standard(Cow::Borrowed("SSH-2.0-OpenSSH_9.6")),
+        // JumpServer KoKo keepalive replies are incompatible with russh (Eugeny/russh#567).
+        keepalive_interval: None,
+        keepalive_max: 0,
+        inactivity_timeout: None,
+        nodelay: true,
+        ..Default::default()
+    }
 }
 
 async fn connect_channel(
@@ -433,10 +705,23 @@ fn validate_endpoint(host: &str, port: u16) -> AppResult<()> {
     }
 }
 
-fn map_russh_error(error: russh::Error) -> AppError {
+pub(crate) fn map_russh_error(error: russh::Error) -> AppError {
+    // Always print — bastion debugging must be visible even if tracing filter is tight.
+    eprintln!("[runory ssh] russh error: {error:?} ({error})");
+    tracing::warn!(error = %error, debug = ?error, "ssh russh error mapped");
     match error {
         russh::Error::ConnectionTimeout => AppError::ConnectionTimeout,
         russh::Error::Disconnect => AppError::ConnectionLost,
+        russh::Error::IO(ref io)
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            ) =>
+        {
+            AppError::ConnectionLost
+        }
         _ => AppError::ConnectionRefused,
     }
 }

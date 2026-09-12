@@ -1,0 +1,20 @@
+[
+  {
+    "kind": "node",
+    "version": "v2",
+    "metadata": {
+      "name": "933afa7c-f803-4c42-a540-d4cf3660d5c8",
+      "labels": {
+        "app": "runory",
+        "env": "development",
+        "node": "node01"
+      }
+    },
+    "spec": {
+      "addr": "",
+      "hostname": "teleport-node01",
+      "use_tunnel": true,
+      "version": "18.11.0"
+    }
+  }
+]

@@ -2,9 +2,11 @@ import { CirclePlus, SquareTerminal } from "lucide-react";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import { BastionConnectionDialog } from "../../features/sessions/BastionConnectionDialog";
 import { ConnectionDialog } from "../../features/sessions/ConnectionDialog";
 import { JumpConnectionDialog } from "../../features/sessions/JumpConnectionDialog";
 import { TerminalView, type TerminalHandle } from "../../features/terminal/TerminalView";
+import { bastionConnectFlow } from "../../lib/tauri/bastion";
 import { connectSsh, disconnectSsh, reconnectSsh, testSsh } from "../../lib/tauri/ssh";
 import { useCatalogStore } from "../../stores/catalog-store";
 import { useSessionStore } from "../../stores/session-store";
@@ -125,7 +127,44 @@ export function Workspace({ visible = true, onSelectServer, titlebarTabsHost, on
     <footer className="terminal-status-bar" aria-label={t("a11y.connectionStatus")}><span><i className={statusColor(activeTab?.state ?? "idle")} />{t(`status.${activeTab?.state ?? "idle"}`)}</span><span>SSH</span><span>UTF-8</span><span className="status-spacer" /><span>{activeProfile?.name ?? t("terminal.noActiveSession")}</span><span className="font-mono">xterm-256color</span></footer>
     {tabMenu && <WorkspaceTabMenu menu={tabMenu} onClose={() => setTabMenu(null)} onCopy={() => { const tab = tabs.find((candidate) => candidate.id === tabMenu.tabId); setTabMenu(null); if (tab) setDialog({ mode: "connect", profileId: tab.profileId, title: tab.title }); }} onRename={() => { setRenamingTabId(tabMenu.tabId); setTabMenu(null); }} onCloseTab={() => { const tabId = tabMenu.tabId; setTabMenu(null); void closeTab(tabId); }} />}
     {renamingTabId && (() => { const tab = tabs.find((candidate) => candidate.id === renamingTabId); if (!tab) return null; const profile = profiles.find((candidate) => candidate.id === tab.profileId); return <RenameWorkspaceTabDialog initialTitle={tab.title ?? profile?.name ?? t("terminal.unknownProfile")} onClose={() => setRenamingTabId(null)} onSave={(title) => { renameTab(tab.id, title); setRenamingTabId(null); }} />; })()}
-    {dialog && dialogProfile && (dialogProfile.connectionRoute.type === "jumpHost" && dialogJumpProfile
+    {dialog && dialogProfile && (dialogProfile.connectionRoute.type === "bastion"
+      ? <BastionConnectionDialog
+          key={dialogProfile.id}
+          profile={dialogProfile}
+          mode={dialog.mode}
+          onClose={() => setDialog(null)}
+          onOpenSession={async (flowId, _provider, verificationAttemptId, sshPasswordCredential) => {
+            const tabId = dialog.tabId ?? crypto.randomUUID();
+            if (!dialog.tabId) setDialog({ ...dialog, tabId });
+            const connectionAttemptId = crypto.randomUUID();
+            const tabExists = useSessionStore.getState().tabs.some((tab) => tab.id === tabId);
+            if (tabExists) beginReconnect(tabId, connectionAttemptId);
+            else addTab({ id: tabId, profileId: dialogProfile.id, title: dialog.title, sessionId: null, connectionAttemptId, state: "connecting", view: "terminal" });
+            const size = terminalRefs.current.get(tabId)?.dimensions() ?? { cols: 120, rows: 34 };
+            try {
+              const response = await bastionConnectFlow(
+                flowId,
+                dialogProfile.id,
+                size.cols,
+                size.rows,
+                (event) => {
+                  if (event.event === "output") terminalRefs.current.get(tabId)?.write(event.data.bytes);
+                  else if (event.event === "state") setState(tabId, connectionAttemptId, event.data.state);
+                  else if (event.data.reason !== "terminal-closed") markClosed(tabId, connectionAttemptId);
+                },
+                verificationAttemptId,
+                sshPasswordCredential,
+              );
+              attachSession(tabId, connectionAttemptId, response.sessionId);
+              void load();
+              return true;
+            } catch (error) {
+              setState(tabId, connectionAttemptId, "error");
+              throw error;
+            }
+          }}
+        />
+      : dialogProfile.connectionRoute.type === "jumpHost" && dialogJumpProfile
       ? <JumpConnectionDialog key={`${dialogProfile.id}:${dialogJumpProfile.id}`} profile={dialogProfile} jumpProfile={dialogJumpProfile} mode={dialog.mode} onClose={() => setDialog(null)} onConnect={(values) => { const tabId = dialog.tabId ?? crypto.randomUUID(); if (!dialog.tabId) setDialog({ ...dialog, tabId }); return openSession(values, tabId, dialog.mode === "reconnect", dialog.title); }} onTest={test} />
       : <ConnectionDialog key={dialogProfile.id} profile={dialogProfile} mode={dialog.mode} onClose={() => setDialog(null)} onConnect={(values) => { const tabId = dialog.tabId ?? crypto.randomUUID(); if (!dialog.tabId) setDialog({ ...dialog, tabId }); return openSession(values, tabId, dialog.mode === "reconnect", dialog.title); }} onTest={test} />)}
     {editProfile && (activeProfile ?? selectedProfile) && <ProfileDialog profile={activeProfile ?? selectedProfile ?? undefined} onClose={() => setEditProfile(false)} />}

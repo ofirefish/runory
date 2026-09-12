@@ -212,20 +212,32 @@ fn validate_route(
     current_id: Option<uuid::Uuid>,
     profiles: &[ServerProfile],
 ) -> AppResult<()> {
-    let ConnectionRoute::JumpHost { profile_id } = route else {
-        return Ok(());
-    };
-    if Some(*profile_id) == current_id {
-        return Err(AppError::InvalidJumpHost);
+    match route {
+        ConnectionRoute::Direct => Ok(()),
+        ConnectionRoute::Bastion {
+            provider,
+            asset_id: _,
+            ..
+        } => {
+            if provider.trim().is_empty() {
+                return Err(AppError::InvalidProfile);
+            }
+            Ok(())
+        }
+        ConnectionRoute::JumpHost { profile_id } => {
+            if Some(*profile_id) == current_id {
+                return Err(AppError::InvalidJumpHost);
+            }
+            let jump = profiles
+                .iter()
+                .find(|profile| profile.id == *profile_id)
+                .ok_or(AppError::InvalidJumpHost)?;
+            if jump.connection_route != ConnectionRoute::Direct {
+                return Err(AppError::InvalidJumpHost);
+            }
+            Ok(())
+        }
     }
-    let jump = profiles
-        .iter()
-        .find(|profile| profile.id == *profile_id)
-        .ok_or(AppError::InvalidJumpHost)?;
-    if jump.connection_route != ConnectionRoute::Direct {
-        return Err(AppError::InvalidJumpHost);
-    }
-    Ok(())
 }
 
 fn validate_fields(

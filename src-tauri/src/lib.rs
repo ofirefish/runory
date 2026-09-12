@@ -9,11 +9,14 @@ mod agentic;
 mod app_update;
 mod cloud;
 mod commands;
+// BastionProvider Phase A/B: route resolution, Mock provider, flow + terminal bridge.
+mod connection;
 mod credentials;
 mod dashboard;
 mod deployment;
 mod domain;
 mod groups;
+mod helper;
 mod known_hosts;
 // MCP stays behind the typed gateway and is currently consumed only by the
 // retained legacy Agent runtime; keep the guarded implementation compiled.
@@ -98,8 +101,13 @@ fn credential_service(data_directory: &Path) -> CredentialService {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        // Default: surface bastion/SSH diagnostics in `pnpm tauri dev` without requiring RUST_LOG.
+        tracing_subscriber::EnvFilter::new("runory_lib=info,runory=info,warn")
+    });
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(filter)
+        .with_target(true)
         .init();
     let mut builder = tauri::Builder::default();
     #[cfg(not(mobile))]
@@ -120,6 +128,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(ServerSessionManager::default())
         .manage(JumpConnectionManager::default())
+        .manage({
+            use connection::{default_bastion_registry, BastionFlowService};
+            BastionFlowService::new(std::sync::Arc::new(default_bastion_registry()))
+        })
+        .manage(connection::BastionSessionBridge::new())
         .manage(CloudAuthSessionStore)
         // The assistant panel is LLM-backed: the provider talks to the
         // configured model through ModelGateway and only classifies its
@@ -382,6 +395,16 @@ pub fn run() {
             commands::ssh::ssh_write,
             commands::ssh::ssh_resize,
             commands::ssh::ssh_disconnect,
+            commands::bastion::bastion_prepare_host,
+            commands::bastion::bastion_start,
+            commands::bastion::bastion_continue_auth,
+            commands::bastion::bastion_open_external_browser,
+            commands::bastion::bastion_list_assets,
+            commands::bastion::bastion_select_asset,
+            commands::bastion::bastion_list_accounts,
+            commands::bastion::bastion_select_account,
+            commands::bastion::bastion_connect_flow,
+            commands::bastion::bastion_cancel_flow,
             commands::sftp::sftp_open,
             commands::sftp::list_directory,
             commands::sftp::stat,

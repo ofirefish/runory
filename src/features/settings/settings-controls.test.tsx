@@ -14,6 +14,7 @@ import { advancedPresets, providerLabelKeys } from "./model-provider-presets";
 import type { AdvancedProviderKind } from "../../types/agentic";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("../../lib/supabase/client", () => ({ cloudConfigured: false, cloudEndpoint: null, cloudPublishableKey: null }));
 vi.mock("../../lib/supabase/cloud", () => ({
   cloudOAuthErrorEvent: "runory:cloud-oauth-error",
@@ -74,11 +75,22 @@ beforeEach(() => {
     if (command === "credential_status") return { vaultInitialized: true, vaultUnlocked: false, platformUnlockConfigured: false, platformUnlockAvailable: false };
     if (command === "settings_get") {
       const state = useSettingsStore.getState();
-      return { theme: state.theme, language: state.language };
+      return {
+        theme: state.theme,
+        language: state.language,
+        boundaryCliPath: state.boundaryCliPath || null,
+        teleportCliPath: state.teleportCliPath || null,
+      };
     }
     if (command === "settings_update") {
       const state = useSettingsStore.getState();
-      return { theme: state.theme, language: state.language, ...(args as { request: object }).request };
+      return {
+        theme: state.theme,
+        language: state.language,
+        boundaryCliPath: state.boundaryCliPath || null,
+        teleportCliPath: state.teleportCliPath || null,
+        ...(args as { request: object }).request,
+      };
     }
     return { enabled: false, authenticated: false };
   });
@@ -106,7 +118,14 @@ afterEach(async () => {
 
 describe.each(["en-US", "zh-CN"])("settings controls (%s)", (language) => {
   beforeEach(async () => {
-    useSettingsStore.setState({ theme: "system", language: language as "en-US" | "zh-CN", saving: false, persistenceError: false });
+    useSettingsStore.setState({
+      theme: "system",
+      language: language as "en-US" | "zh-CN",
+      boundaryCliPath: "",
+      teleportCliPath: "",
+      saving: false,
+      persistenceError: false,
+    });
     await i18n.changeLanguage(language);
   });
   it("persists theme/language choices through the existing settings command", async () => {
@@ -133,8 +152,12 @@ describe.each(["en-US", "zh-CN"])("settings controls (%s)", (language) => {
   });
   it("keeps account management separate from cloud workspace settings", async () => {
     await render(<SettingsPanel onClose={() => {}} />);
+    expect(button("settings.section.helpers")).toBeTruthy();
     expect(button("settings.section.account")).toBeTruthy();
     expect(button("settings.section.cloud")).toBeTruthy();
+    await click(button("settings.section.helpers"));
+    expect(document.querySelector(".settings-content-header h3")?.textContent).toBe(i18n.t("settings.section.helpers"));
+    expect(document.body.textContent).toContain(i18n.t("settings.helpers.browse"));
     await click(button("settings.section.account"));
     await act(async () => { await import("./AccountSettings"); });
     expect(document.querySelector(".settings-content-header h3")?.textContent).toBe(i18n.t("settings.section.account"));

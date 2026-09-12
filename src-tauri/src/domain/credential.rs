@@ -16,6 +16,10 @@ pub enum CredentialKind {
     KeyPassphrase,
     McpToken,
     LlmApiKey,
+    /// Boundary / bastion control-plane auth token (keyed by ServerProfile id).
+    BastionToken,
+    /// Optional target SSH password when overriding Boundary-brokered credentials.
+    BastionTargetPassword,
 }
 
 #[derive(Deserialize)]

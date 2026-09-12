@@ -15,6 +15,25 @@ pub enum AppError {
     JumpForwardingDenied,
     #[error("target is unreachable from the jump host")]
     JumpTargetUnreachable,
+    #[error("bastion connection route is not available yet")]
+    BastionUnavailable,
+    /// TCP reached the configured KoKo port, but it did not speak SSH (wrong port / not exposed).
+    #[error("bastion KoKo SSH gateway is not reachable as SSH")]
+    BastionKokoUnreachable,
+    #[error("bastion provider was not found")]
+    BastionProviderNotFound,
+    #[error("bastion authentication failed")]
+    BastionAuthFailed,
+    #[error("bastion authentication requires user input")]
+    BastionAwaitingUser,
+    #[error("bastion permission denied")]
+    BastionPermissionDenied,
+    #[error("external helper binary is missing")]
+    HelperMissing,
+    #[error("external helper version is incompatible")]
+    HelperVersionMismatch,
+    #[error("external helper proxy failed")]
+    HelperProxyFailed,
     #[error("background SSH authentication is required")]
     TunnelConnectionRequired,
     #[error("invalid tunnel rule")]
@@ -209,6 +228,15 @@ impl AppError {
             Self::JumpPreparationExpired => "JUMP_PREPARATION_EXPIRED",
             Self::JumpForwardingDenied => "JUMP_FORWARDING_DENIED",
             Self::JumpTargetUnreachable => "JUMP_TARGET_UNREACHABLE",
+            Self::BastionUnavailable => "BASTION_UNAVAILABLE",
+            Self::BastionKokoUnreachable => "BASTION_KOKO_UNREACHABLE",
+            Self::BastionProviderNotFound => "BASTION_PROVIDER_NOT_FOUND",
+            Self::BastionAuthFailed => "BASTION_AUTH_FAILED",
+            Self::BastionAwaitingUser => "BASTION_AWAITING_USER",
+            Self::BastionPermissionDenied => "BASTION_PERMISSION_DENIED",
+            Self::HelperMissing => "HELPER_MISSING",
+            Self::HelperVersionMismatch => "HELPER_VERSION_MISMATCH",
+            Self::HelperProxyFailed => "HELPER_PROXY_FAILED",
             Self::TunnelConnectionRequired => "TUNNEL_CONNECTION_REQUIRED",
             Self::TunnelInvalid => "TUNNEL_INVALID",
             Self::TunnelNotFound => "TUNNEL_NOT_FOUND",

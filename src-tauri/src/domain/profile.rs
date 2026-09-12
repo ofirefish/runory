@@ -99,6 +99,58 @@ pub enum ConnectionRoute {
         #[serde(rename = "profileId", alias = "profile_id")]
         profile_id: Uuid,
     },
+    /// Enterprise bastion path. Target host/port credentials are resolved by the
+    /// BastionProvider; this route stores stable remote identifiers only.
+    Bastion {
+        #[serde(rename = "bastionId", alias = "bastion_id")]
+        bastion_id: Uuid,
+        provider: String,
+        #[serde(rename = "assetId", alias = "asset_id")]
+        asset_id: String,
+        #[serde(
+            default,
+            rename = "accountId",
+            alias = "account_id",
+            skip_serializing_if = "Option::is_none"
+        )]
+        account_id: Option<String>,
+        /// JumpServer Web/API base URL, e.g. `http://jump.example:61080`.
+        /// Host key verification still uses profile.host + profile.port (KoKo SSH).
+        #[serde(
+            default,
+            rename = "apiBaseUrl",
+            alias = "api_base_url",
+            skip_serializing_if = "Option::is_none"
+        )]
+        api_base_url: Option<String>,
+        /// JumpServer organization id (`X-JMS-ORG`). Defaults to the Default org when unset.
+        #[serde(
+            default,
+            rename = "orgId",
+            alias = "org_id",
+            skip_serializing_if = "Option::is_none"
+        )]
+        org_id: Option<String>,
+        /// Absolute path to vendor CLI (`tsh` / `boundary`). Empty = PATH lookup.
+        #[serde(
+            default,
+            rename = "cliPath",
+            alias = "cli_path",
+            skip_serializing_if = "Option::is_none"
+        )]
+        cli_path: Option<String>,
+        /// Teleport cluster name (optional; defaults to the logged-in cluster).
+        #[serde(
+            default,
+            rename = "clusterName",
+            alias = "cluster_name",
+            skip_serializing_if = "Option::is_none"
+        )]
+        cluster_name: Option<String>,
+        /// Allow insecure TLS for Teleport proxy (development only; default false).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        insecure: bool,
+    },
 }
 
 #[derive(Deserialize)]
@@ -231,5 +283,77 @@ mod tests {
         .expect("deserialize stored jump-host route");
 
         assert_eq!(route, ConnectionRoute::JumpHost { profile_id });
+    }
+
+    #[test]
+    fn bastion_route_round_trips_camel_case_and_snake_case() {
+        let bastion_id = Uuid::new_v4();
+        let camel = serde_json::from_value::<ConnectionRoute>(serde_json::json!({
+            "type": "bastion",
+            "bastionId": bastion_id,
+            "provider": "mock",
+            "assetId": "asset-1",
+            "accountId": "root",
+        }))
+        .expect("deserialize bastion route");
+        assert_eq!(
+            camel,
+            ConnectionRoute::Bastion {
+                bastion_id,
+                provider: "mock".into(),
+                asset_id: "asset-1".into(),
+                account_id: Some("root".into()),
+                api_base_url: None,
+                org_id: None,
+                cli_path: None,
+                cluster_name: None,
+                insecure: false,
+            }
+        );
+
+        let snake = serde_json::from_value::<ConnectionRoute>(serde_json::json!({
+            "type": "bastion",
+            "bastion_id": bastion_id,
+            "provider": "mock",
+            "asset_id": "asset-1",
+        }))
+        .expect("deserialize snake_case bastion route");
+        assert_eq!(
+            snake,
+            ConnectionRoute::Bastion {
+                bastion_id,
+                provider: "mock".into(),
+                asset_id: "asset-1".into(),
+                account_id: None,
+                api_base_url: None,
+                org_id: None,
+                cli_path: None,
+                cluster_name: None,
+                insecure: false,
+            }
+        );
+
+        let with_api = serde_json::from_value::<ConnectionRoute>(serde_json::json!({
+            "type": "bastion",
+            "bastionId": bastion_id,
+            "provider": "jumpserver",
+            "assetId": "",
+            "apiBaseUrl": "http://122.114.1.1:61080",
+        }))
+        .expect("deserialize bastion api base url");
+        assert_eq!(
+            with_api,
+            ConnectionRoute::Bastion {
+                bastion_id,
+                provider: "jumpserver".into(),
+                asset_id: "".into(),
+                account_id: None,
+                api_base_url: Some("http://122.114.1.1:61080".into()),
+                org_id: None,
+                cli_path: None,
+                cluster_name: None,
+                insecure: false,
+            }
+        );
     }
 }

@@ -23,7 +23,11 @@ export function ServerProfileDetails({ profile, groupName, onConnect, onEdit, on
   ];
   rows.push([
     t("profile.connectionRoute"),
-    profile.connectionRoute.type === "jumpHost" ? t("profile.routeJumpHost") : t("profile.routeDirect"),
+    profile.connectionRoute.type === "jumpHost"
+      ? t("profile.routeJumpHost")
+      : profile.connectionRoute.type === "bastion"
+        ? t("profile.routeBastion")
+        : t("profile.routeDirect"),
   ]);
   if (profile.keySource) rows.push([t("profile.keyStorage"), t(profile.keySource.type === "file" ? "profile.keyFile" : "profile.keyVault")]);
   return <section className="server-profile-details" aria-label={t("serverManagement.details")}>

@@ -83,6 +83,10 @@ async fn open_profile_session(
             .await?;
             (prepared, auth_method, Some(owner))
         }
+        ConnectionRoute::Bastion { .. } => {
+            // Phase A: BastionProvider framework exists; SessionManager wiring is Phase B+.
+            return Err(AppError::BastionUnavailable);
+        }
     };
     tracing::info!(profile_id = %prepared.profile_id, auth_method, reconnecting, "starting SSH connection");
     let connect_request = ConnectRequest {
@@ -316,6 +320,7 @@ pub async fn ssh_test(
             .await?;
             (prepared, auth_method, Some(owner))
         }
+        ConnectionRoute::Bastion { .. } => return Err(AppError::BastionUnavailable),
     };
     tracing::info!(profile_id = %prepared.profile_id, auth_method, "testing SSH connection");
     let expected_fingerprint = std::mem::take(&mut prepared.expected_fingerprint);
@@ -335,7 +340,11 @@ pub async fn ssh_test(
 pub async fn ssh_write(
     request: WriteRequest,
     sessions: State<'_, ServerSessionManager>,
+    bastion: State<'_, crate::connection::BastionSessionBridge>,
 ) -> AppResult<()> {
+    if bastion.has(request.session_id).await {
+        return bastion.write(request.session_id, request.data).await;
+    }
     sessions.write(request.session_id, request.data).await
 }
 
@@ -343,7 +352,13 @@ pub async fn ssh_write(
 pub async fn ssh_resize(
     request: ResizeRequest,
     sessions: State<'_, ServerSessionManager>,
+    bastion: State<'_, crate::connection::BastionSessionBridge>,
 ) -> AppResult<()> {
+    if bastion.has(request.session_id).await {
+        return bastion
+            .resize(request.session_id, request.cols, request.rows)
+            .await;
+    }
     sessions
         .resize(request.session_id, request.cols, request.rows)
         .await
@@ -353,9 +368,17 @@ pub async fn ssh_resize(
 pub async fn ssh_disconnect(
     request: SessionRequest,
     sessions: State<'_, ServerSessionManager>,
+    bastion: State<'_, crate::connection::BastionSessionBridge>,
+    flows: State<'_, crate::connection::BastionFlowService>,
     tunnels: State<'_, crate::tunnels::TunnelService>,
 ) -> AppResult<()> {
-    let result = sessions.disconnect(request.session_id).await;
+    let result = if bastion.has(request.session_id).await {
+        bastion
+            .disconnect(request.session_id, flows.registry())
+            .await
+    } else {
+        sessions.disconnect(request.session_id).await
+    };
     tunnels.stop_session(request.session_id).await;
     result
 }

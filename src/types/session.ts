@@ -47,7 +47,13 @@ export type CredentialInput =
   | { mode: "remember-securely"; secret: string }
   | { mode: "stored" };
 
-export type CredentialKind = "password" | "key-passphrase";
+export type CredentialKind =
+  | "password"
+  | "key-passphrase"
+  | "mcp-token"
+  | "llm-api-key"
+  | "bastion-token"
+  | "bastion-target-password";
 
 export type CredentialStatus = {
   vaultInitialized: boolean;
