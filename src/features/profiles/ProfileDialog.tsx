@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Check, FolderOpen, KeyRound, Loader2, Server, ShieldCheck } from "lucide-react";
+import { AlertCircle, Check, FolderOpen, KeyRound, Loader2 } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
@@ -10,7 +10,6 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -19,6 +18,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { SearchableCombobox } from "../../components/ui/searchable-combobox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { forgetPrivateKey, importPrivateKey } from "../../lib/tauri/ssh";
 import { useCatalogStore } from "../../stores/catalog-store";
 import { useSettingsStore } from "../../stores/settings-store";
@@ -36,6 +36,7 @@ const schema = z.object({
   jumpProfileId: z.string(),
   bastionProvider: z.string(),
   bastionApiBaseUrl: z.string(),
+  bastionOrgId: z.string(),
   bastionAssetId: z.string(),
   bastionAccountId: z.string(),
   teleportClusterName: z.string(),
@@ -47,10 +48,10 @@ const schema = z.object({
   const isJumpServer = values.routeType === "bastion" && values.bastionProvider === "jumpserver";
   const isBoundary = values.routeType === "bastion" && values.bastionProvider === "boundary";
   const isTeleport = values.routeType === "bastion" && values.bastionProvider === "teleport";
-  if (!isJumpServer && !values.host.trim() && !isBoundary) {
+  if (!isJumpServer && !isBoundary && !values.host.trim()) {
     context.addIssue({ code: "custom", path: ["host"], message: "required" });
   }
-  if (!isJumpServer && !values.username.trim()) {
+  if (!isJumpServer && !isBoundary && !values.username.trim()) {
     context.addIssue({ code: "custom", path: ["username"], message: "required" });
   }
   if (values.routeType === "jumpHost" && !values.jumpProfileId) context.addIssue({ code: "custom", path: ["jumpProfileId"], message: "required" });
@@ -69,29 +70,28 @@ const schema = z.object({
 });
 
 type Values = z.infer<typeof schema>;
+type RouteType = Values["routeType"];
 type FieldProps = { id: string; label: string; error?: string; children: ReactNode; hint?: string };
 
 function FormField({ id, label, error, children, hint }: FieldProps) {
-  return <div className="space-y-1.5">
-    <Label htmlFor={id}>{label}</Label>
-    {children}
-    {error
-      ? <p id={`${id}-error`} role="alert" className="flex items-center gap-1.5 text-xs text-red-500"><AlertCircle size={12} aria-hidden="true" />{error}</p>
-      : hint && <p id={`${id}-hint`} className="text-xs leading-relaxed text-[hsl(var(--muted))]">{hint}</p>}
-  </div>;
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      {children}
+      {error
+        ? <p id={`${id}-error`} role="alert" className="flex items-center gap-1.5 text-xs text-red-500"><AlertCircle size={12} aria-hidden="true" />{error}</p>
+        : hint && <p id={`${id}-hint`} className="text-xs leading-relaxed text-[hsl(var(--muted))]">{hint}</p>}
+    </div>
+  );
 }
 
-function FormSection({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children: ReactNode }) {
-  return <section className="space-y-4" aria-label={title}>
-    <div className="flex items-start gap-3">
-      <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[hsl(var(--primary)/.1)] text-[hsl(var(--primary))]" aria-hidden="true">{icon}</div>
-      <div className="min-w-0">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="mt-0.5 text-xs leading-relaxed text-[hsl(var(--muted))]">{description}</p>
-      </div>
-    </div>
-    {children}
-  </section>;
+function FieldGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-3" aria-label={title}>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-[hsl(var(--muted))]">{title}</h3>
+      <div className="space-y-4">{children}</div>
+    </section>
+  );
 }
 
 export function ProfileDialog({ profile, initialGroupId = null, onClose }: { profile?: ServerProfile; initialGroupId?: string | null; onClose: () => void }) {
@@ -118,8 +118,9 @@ export function ProfileDialog({ profile, initialGroupId = null, onClose }: { pro
       authMethod: profile?.authMethod ?? "password",
       routeType: profile?.connectionRoute.type === "jumpHost" ? "jumpHost" : profile?.connectionRoute.type === "bastion" ? "bastion" : "direct",
       jumpProfileId: profile?.connectionRoute.type === "jumpHost" ? profile.connectionRoute.profileId : "",
-      bastionProvider: profile?.connectionRoute.type === "bastion" ? profile.connectionRoute.provider : "mock",
+      bastionProvider: profile?.connectionRoute.type === "bastion" ? profile.connectionRoute.provider : "jumpserver",
       bastionApiBaseUrl: profile?.connectionRoute.type === "bastion" ? (profile.connectionRoute.apiBaseUrl ?? "") : "",
+      bastionOrgId: profile?.connectionRoute.type === "bastion" ? (profile.connectionRoute.orgId ?? "") : "",
       bastionAssetId: profile?.connectionRoute.type === "bastion" ? profile.connectionRoute.assetId : "",
       bastionAccountId: profile?.connectionRoute.type === "bastion" ? (profile.connectionRoute.accountId ?? "") : "",
       teleportClusterName: profile?.connectionRoute.type === "bastion" ? (profile.connectionRoute.clusterName ?? "") : "",
@@ -154,6 +155,18 @@ export function ProfileDialog({ profile, initialGroupId = null, onClose }: { pro
     keywords: `${candidate.name} ${candidate.host} ${candidate.port} ${candidate.username}`,
   }));
   const busy = isSubmitting || importing;
+
+  const applyRouteDefaults = (next: RouteType) => {
+    setValue("routeType", next, { shouldDirty: true });
+    if (next === "direct" || next === "jumpHost") {
+      setValue("port", 22, { shouldDirty: true });
+      return;
+    }
+    setValue("authMethod", "password", { shouldDirty: true });
+    if (bastionProvider === "jumpserver") setValue("port", 2222, { shouldDirty: true });
+    if (bastionProvider === "boundary") setValue("port", 9200, { shouldDirty: true });
+    if (bastionProvider === "teleport") setValue("port", 3080, { shouldDirty: true });
+  };
 
   const discardImported = async () => {
     const keyId = importedKeyId.current;
@@ -205,13 +218,15 @@ export function ProfileDialog({ profile, initialGroupId = null, onClose }: { pro
         ? {
             type: "bastion" as const,
             bastionId: profile?.connectionRoute.type === "bastion" ? profile.connectionRoute.bastionId : crypto.randomUUID(),
-            provider: values.bastionProvider.trim() || "mock",
+            provider: values.bastionProvider.trim() || "jumpserver",
             assetId: values.bastionAssetId.trim(),
             accountId: values.bastionAccountId.trim() || undefined,
             apiBaseUrl: (values.bastionProvider === "jumpserver" || values.bastionProvider === "boundary")
               ? values.bastionApiBaseUrl.trim().replace(/\/+$/, "") || undefined
               : undefined,
-            orgId: undefined,
+            orgId: values.bastionProvider === "jumpserver"
+              ? values.bastionOrgId.trim() || undefined
+              : undefined,
             // CLI path is configured globally in Settings → Helper CLI.
             cliPath: undefined,
             clusterName: values.bastionProvider === "teleport"
@@ -235,10 +250,10 @@ export function ProfileDialog({ profile, initialGroupId = null, onClose }: { pro
         host = parsed.hostname;
         port = 2222;
       } catch {
-        host = host || "jumpserver";
         port = 2222;
       }
-      if (!username) username = "jumpserver";
+      // Profile.username is required by catalog validation but unused for JumpServer auth.
+      if (!username) username = values.name.trim();
     }
     if (values.routeType === "bastion" && values.bastionProvider === "boundary") {
       const api = values.bastionApiBaseUrl.trim();
@@ -251,9 +266,9 @@ export function ProfileDialog({ profile, initialGroupId = null, onClose }: { pro
             ? 443
             : 9200;
       } catch {
-        host = host || "boundary";
         port = 9200;
       }
+      if (!username) username = values.name.trim();
     }
     if (values.routeType === "bastion" && values.bastionProvider === "teleport") {
       // Host = Teleport Proxy host; Port = proxy port (e.g. 3080); Username = Teleport user.
@@ -279,6 +294,107 @@ export function ProfileDialog({ profile, initialGroupId = null, onClose }: { pro
     }
   });
 
+  const renderIdentityFields = () => (
+    <FieldGroup title={t("profile.identitySection")}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField id="profile-name" label={t("profile.name")} error={errors.name ? t("validation.profileName") : undefined}>
+          <Input id="profile-name" autoFocus={!profile} autoComplete="off" placeholder={t("profile.namePlaceholder")} aria-invalid={Boolean(errors.name)} aria-describedby={errors.name ? "profile-name-error" : undefined} disabled={busy} {...register("name")} />
+        </FormField>
+        <FormField id="profile-group" label={t("profile.group")}>
+          <Controller control={control} name="groupId" render={({ field }) => (
+            <SearchableCombobox
+              id="profile-group"
+              label={t("profile.group")}
+              value={field.value}
+              options={groupOptions}
+              placeholder={t("sidebar.ungrouped")}
+              searchPlaceholder={t("profile.groupSearchPlaceholder")}
+              emptyMessage={t("profile.noMatchingGroups")}
+              disabled={busy}
+              onValueChange={field.onChange}
+            />
+          )} />
+        </FormField>
+      </div>
+    </FieldGroup>
+  );
+
+  const renderSshEndpointFields = () => (
+    <>
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_112px]">
+        <FormField id="profile-host" label={t("profile.host")} error={errors.host ? t("validation.profileHost") : undefined}>
+          <Input id="profile-host" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder={t("profile.hostPlaceholder")} aria-invalid={Boolean(errors.host)} aria-describedby={errors.host ? "profile-host-error" : undefined} disabled={busy} {...register("host")} />
+        </FormField>
+        <FormField id="profile-port" label={t("profile.port")} error={errors.port ? t("validation.profilePort") : undefined}>
+          <Input id="profile-port" type="number" inputMode="numeric" min={1} max={65535} aria-invalid={Boolean(errors.port)} aria-describedby={errors.port ? "profile-port-error" : undefined} disabled={busy} {...register("port", { valueAsNumber: true })} />
+        </FormField>
+      </div>
+      <FormField id="profile-username" label={t("profile.username")} error={errors.username ? t("validation.profileUsername") : undefined}>
+        <Input id="profile-username" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="username" placeholder={t("profile.usernamePlaceholder")} aria-invalid={Boolean(errors.username)} aria-describedby={errors.username ? "profile-username-error" : undefined} disabled={busy} {...register("username")} />
+      </FormField>
+    </>
+  );
+
+  const renderAuthFields = () => (
+    <div className="space-y-4">
+      <FormField id="profile-auth" label={t("profile.authMethod")}>
+        <Controller control={control} name="authMethod" render={({ field }) => (
+          <Select value={field.value} disabled={busy} onValueChange={field.onChange}>
+            <SelectTrigger id="profile-auth"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="password">{t("profile.password")}</SelectItem>
+              <SelectItem value="privateKey">{t("profile.privateKey")}</SelectItem>
+            </SelectContent>
+          </Select>
+        )} />
+      </FormField>
+      {authMethod === "privateKey" && (
+        <div className="space-y-4 rounded-lg border border-[hsl(var(--border-soft))] bg-[hsl(var(--elevated)/.35)] p-3">
+          <FormField id="profile-key-storage" label={t("profile.keyStorage")}>
+            <Controller control={control} name="keySourceType" render={({ field }) => (
+              <Select value={field.value} disabled={busy} onValueChange={field.onChange}>
+                <SelectTrigger id="profile-key-storage"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="file">{t("profile.keyFile")}</SelectItem>
+                  <SelectItem value="vault">{t("profile.keyVault")}</SelectItem>
+                </SelectContent>
+              </Select>
+            )} />
+          </FormField>
+          {keySourceType === "file" ? (
+            <FormField id="profile-key-path" label={t("profile.privateKey")} error={errors.keyPath ? t("validation.profilePrivateKey") : undefined} hint={t("profile.privateKeyHint")}>
+              <div className="flex gap-2">
+                <Input id="profile-key-path" className="min-w-0 font-mono" readOnly placeholder={t("profile.keyPathPlaceholder")} aria-invalid={Boolean(errors.keyPath)} aria-describedby={errors.keyPath ? "profile-key-path-error" : "profile-key-path-hint"} disabled={busy} {...register("keyPath")} />
+                <Button type="button" variant="secondary" disabled={busy} onClick={() => void browse()}><FolderOpen size={16} aria-hidden="true" /><span className="hidden sm:inline">{t("profile.browse")}</span></Button>
+              </div>
+            </FormField>
+          ) : (
+            <FormField id="profile-key-vault" label={t("profile.privateKey")} error={errors.keyId ? t("validation.profilePrivateKey") : undefined} hint={t("profile.vaultKeyHint")}>
+              <input type="hidden" {...register("keyId")} />
+              <Button id="profile-key-vault" type="button" className="max-w-full justify-start" variant="secondary" disabled={busy} aria-describedby={errors.keyId ? "profile-key-vault-error" : "profile-key-vault-hint"} onClick={() => void importKey()}>
+                {importing ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : keyLabel ? <Check size={16} className="text-emerald-500" aria-hidden="true" /> : <KeyRound size={16} aria-hidden="true" />}
+                <span className="truncate">{keyLabel || t("profile.importToVault")}</span>
+              </Button>
+            </FormField>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderHelperCliWarning = () => (
+    needsHelperCli && !helperCliConfigured ? (
+      <div className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+        <p className="text-sm leading-relaxed text-[hsl(var(--muted))]">
+          {t(isBoundary ? "bastion.helperCliMissingBoundary" : "bastion.helperCliMissingTeleport")}
+        </p>
+        <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={openHelperCliSettings}>
+          {t("bastion.openHelperCliSettings")}
+        </Button>
+      </div>
+    ) : null
+  );
+
   return (
     <Dialog
       open
@@ -298,293 +414,167 @@ export function ProfileDialog({ profile, initialGroupId = null, onClose }: { pro
       >
         <DialogHeader>
           <DialogTitle>{t(profile ? "profile.editTitle" : "profile.createTitle")}</DialogTitle>
-          <DialogDescription>{t("profile.localOnlyHint")}</DialogDescription>
         </DialogHeader>
         <form className="flex min-h-0 flex-1 flex-col" noValidate onSubmit={submit}>
-          <div className="-mx-4 max-h-[50vh] space-y-6 overflow-y-auto px-4 py-[5px]">
-            <FormSection
-              icon={<Server size={17} />}
-              title={t(isJumpServer || isBoundary ? "bastion.profileDetailsSection" : "profile.detailsSection")}
-              description={t(isJumpServer || isBoundary ? "bastion.profileDetailsHint" : "profile.detailsSectionHint")}
-            >
-              <div className="space-y-4">
-                <FormField id="profile-name" label={t("profile.name")} error={errors.name ? t("validation.profileName") : undefined}>
-                  <Input id="profile-name" autoFocus={!profile} autoComplete="off" placeholder={t("profile.namePlaceholder")} aria-invalid={Boolean(errors.name)} aria-describedby={errors.name ? "profile-name-error" : undefined} disabled={busy} {...register("name")} />
-                </FormField>
-                {!isJumpServer && !isBoundary && (
-                  <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_112px]">
-                    <FormField
-                      id="profile-host"
-                      label={t("profile.host")}
-                      error={errors.host ? t("validation.profileHost") : undefined}
-                    >
-                      <Input id="profile-host" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder={t("profile.hostPlaceholder")} aria-invalid={Boolean(errors.host)} aria-describedby={errors.host ? "profile-host-error" : undefined} disabled={busy} {...register("host")} />
-                    </FormField>
-                    <FormField
-                      id="profile-port"
-                      label={t("profile.port")}
-                      error={errors.port ? t("validation.profilePort") : undefined}
-                    >
-                      <Input id="profile-port" type="number" inputMode="numeric" min={1} max={65535} aria-invalid={Boolean(errors.port)} aria-describedby={errors.port ? "profile-port-error" : undefined} disabled={busy} {...register("port", { valueAsNumber: true })} />
-                    </FormField>
-                  </div>
-                )}
-                <div className={`grid gap-4 ${isJumpServer ? "" : "sm:grid-cols-2"}`}>
-                  {!isJumpServer && (
-                    <FormField id="profile-username" label={t("profile.username")} error={errors.username ? t("validation.profileUsername") : undefined}>
-                      <Input id="profile-username" autoCapitalize="none" autoCorrect="off" spellCheck={false} autoComplete="username" placeholder={t("profile.usernamePlaceholder")} aria-invalid={Boolean(errors.username)} aria-describedby={errors.username ? "profile-username-error" : undefined} disabled={busy} {...register("username")} />
-                    </FormField>
-                  )}
-                  <FormField id="profile-group" label={t("profile.group")}>
-                    <Controller control={control} name="groupId" render={({ field }) => <SearchableCombobox
-                      id="profile-group"
-                      label={t("profile.group")}
-                      value={field.value}
-                      options={groupOptions}
-                      placeholder={t("sidebar.ungrouped")}
-                      searchPlaceholder={t("profile.groupSearchPlaceholder")}
-                      emptyMessage={t("profile.noMatchingGroups")}
-                      disabled={busy}
-                      onValueChange={field.onChange}
-                    />} />
-                  </FormField>
+          <div className="-mx-4 max-h-[55vh] space-y-5 overflow-y-auto px-4 py-1">
+            <div className="space-y-2">
+              <Tabs
+                value={routeType}
+                onValueChange={(value) => applyRouteDefaults(value as RouteType)}
+              >
+                <TabsList aria-label={t("profile.connectionRoute")} id="profile-route">
+                  <TabsTrigger value="direct" disabled={busy}>{t("profile.routeTabDirect")}</TabsTrigger>
+                  <TabsTrigger value="jumpHost" disabled={busy}>{t("profile.routeTabJumpHost")}</TabsTrigger>
+                  <TabsTrigger value="bastion" disabled={busy}>{t("profile.routeTabBastion")}</TabsTrigger>
+                </TabsList>
+
+                <div className="mt-4 space-y-5">
+                  {renderIdentityFields()}
                 </div>
-              </div>
-            </FormSection>
 
-            <div className="border-t border-[hsl(var(--border-soft))]" />
+                <TabsContent value="direct" className="mt-5 space-y-5">
+                  <FieldGroup title={t("profile.endpointSection")}>{renderSshEndpointFields()}</FieldGroup>
+                  {renderAuthFields()}
+                </TabsContent>
 
-            <FormSection
-              icon={<ShieldCheck size={17} />}
-              title={t(isJumpServer ? "bastion.profileAccessSection" : "profile.accessSection")}
-              description={t(isJumpServer ? "bastion.profileAccessHint" : "profile.accessSectionHint")}
-            >
-              <div className={`grid gap-4 ${isJumpServer || isBoundary ? "" : "sm:grid-cols-2"}`}>
-                <FormField id="profile-route" label={t("profile.connectionRoute")}>
-                  <Controller control={control} name="routeType" render={({ field }) => <Select value={field.value} disabled={busy} onValueChange={(value) => {
-                    field.onChange(value);
-                    if (value === "bastion") {
-                      setValue("authMethod", "password", { shouldDirty: true });
-                      if (bastionProvider === "jumpserver") {
-                        setValue("port", 2222, { shouldDirty: true });
-                        if (!watch("username").trim()) setValue("username", "jumpserver", { shouldDirty: true });
-                      }
-                    }
-                  }}>
-                    <SelectTrigger id="profile-route"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="direct">{t("profile.routeDirect")}</SelectItem>
-                      <SelectItem value="jumpHost">{t("profile.routeJumpHost")}</SelectItem>
-                      <SelectItem value="bastion">{t("profile.routeBastion")}</SelectItem>
-                    </SelectContent>
-                  </Select>} />
-                </FormField>
-                {routeType !== "bastion" && (
-                  <FormField id="profile-auth" label={t("profile.authMethod")}>
-                    <Controller control={control} name="authMethod" render={({ field }) => <Select value={field.value} disabled={busy} onValueChange={field.onChange}>
-                      <SelectTrigger id="profile-auth"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="password">{t("profile.password")}</SelectItem>
-                        <SelectItem value="privateKey">{t("profile.privateKey")}</SelectItem>
-                      </SelectContent>
-                    </Select>} />
-                  </FormField>
-                )}
-              </div>
-
-              {routeType === "jumpHost" && <div className="rounded-lg border bg-[hsl(var(--elevated)/.45)] p-4">
-                <FormField id="profile-jump-host" label={t("profile.jumpHost")} error={errors.jumpProfileId ? t("validation.profileJumpHost") : undefined} hint={t(jumpCandidates.length ? "profile.jumpHostHint" : "profile.noJumpHosts")}>
-                  <Controller control={control} name="jumpProfileId" render={({ field }) => <SearchableCombobox
+                <TabsContent value="jumpHost" className="mt-5 space-y-5">
+                  <FormField
                     id="profile-jump-host"
                     label={t("profile.jumpHost")}
-                    value={field.value}
-                    options={jumpHostOptions}
-                    placeholder={t("profile.selectJumpHost")}
-                    searchPlaceholder={t("profile.jumpHostSearchPlaceholder")}
-                    emptyMessage={t("profile.noMatchingJumpHosts")}
-                    disabled={busy || jumpCandidates.length === 0}
-                    invalid={Boolean(errors.jumpProfileId)}
-                    describedBy={errors.jumpProfileId ? "profile-jump-host-error" : "profile-jump-host-hint"}
-                    onValueChange={field.onChange}
-                  />} />
-                </FormField>
-              </div>}
-
-              {routeType === "bastion" && <div className="space-y-4 rounded-lg border bg-[hsl(var(--elevated)/.45)] p-4">
-                <FormField id="profile-bastion-provider" label={t("bastion.provider")} error={errors.bastionProvider ? t("validation.bastionProvider") : undefined}>
-                  <Controller control={control} name="bastionProvider" render={({ field }) => <Select value={field.value} disabled={busy} onValueChange={(value) => {
-                    field.onChange(value);
-                    setValue("authMethod", "password", { shouldDirty: true });
-                    if (value === "jumpserver") {
-                      setValue("port", 2222, { shouldDirty: true });
-                      if (!watch("username").trim()) setValue("username", "jumpserver", { shouldDirty: true });
-                    }
-                    if (value === "teleport") {
-                      setValue("port", 3080, { shouldDirty: true });
-                    }
-                  }}>
-                    <SelectTrigger id="profile-bastion-provider"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="mock">{t("bastion.providerMock")}</SelectItem>
-                      <SelectItem value="jumpserver">{t("bastion.providerJumpServer")}</SelectItem>
-                      <SelectItem value="teleport">{t("bastion.providerTeleport")}</SelectItem>
-                      <SelectItem value="boundary">{t("bastion.providerBoundary")}</SelectItem>
-                    </SelectContent>
-                  </Select>} />
-                </FormField>
-                {bastionProvider === "jumpserver" ? (
-                  <>
-                    <FormField
-                      id="profile-bastion-api"
-                      label={t("bastion.apiBaseUrl")}
-                      error={errors.bastionApiBaseUrl ? t(errors.bastionApiBaseUrl.message === "invalid" ? "validation.bastionApiBaseUrlInvalid" : "validation.bastionApiBaseUrl") : undefined}
-                      hint={t("bastion.apiBaseUrlHint")}
-                    >
-                      <Input
-                        id="profile-bastion-api"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                        disabled={busy}
-                        placeholder="https://jms.example.com"
-                        {...register("bastionApiBaseUrl")}
+                    error={errors.jumpProfileId ? t("validation.profileJumpHost") : undefined}
+                    hint={t(jumpCandidates.length ? "profile.jumpHostHint" : "profile.noJumpHosts")}
+                  >
+                    <Controller control={control} name="jumpProfileId" render={({ field }) => (
+                      <SearchableCombobox
+                        id="profile-jump-host"
+                        label={t("profile.jumpHost")}
+                        value={field.value}
+                        options={jumpHostOptions}
+                        placeholder={t("profile.selectJumpHost")}
+                        searchPlaceholder={t("profile.jumpHostSearchPlaceholder")}
+                        emptyMessage={t("profile.noMatchingJumpHosts")}
+                        disabled={busy || jumpCandidates.length === 0}
+                        invalid={Boolean(errors.jumpProfileId)}
+                        describedBy={errors.jumpProfileId ? "profile-jump-host-error" : "profile-jump-host-hint"}
+                        onValueChange={field.onChange}
                       />
-                    </FormField>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <FormField id="profile-bastion-asset" label={t("bastion.assetId")} hint={t("bastion.assetIdHint")}>
-                        <Input id="profile-bastion-asset" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder={t("bastion.optionalPlaceholder")} {...register("bastionAssetId")} />
-                      </FormField>
-                      <FormField id="profile-bastion-account" label={t("bastion.accountId")} hint={t("bastion.accountIdHint")}>
-                        <Input id="profile-bastion-account" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder={t("bastion.optionalPlaceholder")} {...register("bastionAccountId")} />
-                      </FormField>
-                    </div>
-                    <p className="text-xs leading-relaxed text-[hsl(var(--muted))]">{t("bastion.profileConnectHint")}</p>
-                  </>
-                ) : bastionProvider === "boundary" ? (
-                  <>
-                    <FormField
-                      id="profile-bastion-api"
-                      label={t("bastion.boundaryControllerUrl")}
-                      error={errors.bastionApiBaseUrl ? t(errors.bastionApiBaseUrl.message === "invalid" ? "validation.bastionApiBaseUrlInvalid" : "validation.bastionBoundaryControllerUrl") : undefined}
-                      hint={t("bastion.boundaryControllerUrlHint")}
-                    >
-                      <Input
-                        id="profile-bastion-api"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                        disabled={busy}
-                        placeholder="http://192.168.1.10:9200"
-                        {...register("bastionApiBaseUrl")}
-                      />
-                    </FormField>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <FormField id="profile-bastion-asset" label={t("bastion.boundaryTargetId")} hint={t("bastion.boundaryBoundAssetHint")}>
-                        <Input id="profile-bastion-asset" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="ttcp_..." {...register("bastionAssetId")} />
-                      </FormField>
-                      <FormField id="profile-bastion-account" label={t("bastion.boundTargetAccount")} hint={t("bastion.boundaryBoundAccountHint")}>
-                        <Input id="profile-bastion-account" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder={t("bastion.optionalPlaceholder")} {...register("bastionAccountId")} />
-                      </FormField>
-                    </div>
-                    {!helperCliConfigured && (
-                      <div className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-                        <p className="text-sm leading-relaxed text-[hsl(var(--muted))]">
-                          {t("bastion.helperCliMissingBoundary")}
-                        </p>
-                        <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={openHelperCliSettings}>
-                          {t("bastion.openHelperCliSettings")}
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                ) : isTeleport ? (
-                  <>
-                    <p className="text-xs text-[hsl(var(--muted))]">{t("bastion.teleportProfileHint")}</p>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <FormField id="profile-bastion-asset" label={t("bastion.assetId")} hint={t("bastion.helperAssetIdHint")}>
-                        <Input id="profile-bastion-asset" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="teleport-node01" {...register("bastionAssetId")} />
-                      </FormField>
-                      <FormField id="profile-bastion-account" label={t("bastion.osLogin")} hint={t("bastion.osLoginHint")}>
-                        <Input id="profile-bastion-account" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="root" {...register("bastionAccountId")} />
-                      </FormField>
-                    </div>
-                    <FormField id="profile-teleport-cluster" label={t("bastion.teleportCluster")} hint={t("bastion.teleportClusterHint")}>
-                      <Input id="profile-teleport-cluster" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="teleport.local" {...register("teleportClusterName")} />
-                    </FormField>
-                    <label className="flex items-start gap-2 text-sm">
-                      <input className="mt-1" type="checkbox" disabled={busy} {...register("teleportInsecure")} />
-                      <span>
-                        <span className="font-medium">{t("bastion.teleportInsecure")}</span>
-                        <span className="mt-0.5 block text-xs text-[hsl(var(--muted))]">{t("bastion.teleportInsecureHint")}</span>
-                      </span>
-                    </label>
-                    {!helperCliConfigured && (
-                      <div className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-                        <p className="text-sm leading-relaxed text-[hsl(var(--muted))]">
-                          {t("bastion.helperCliMissingTeleport")}
-                        </p>
-                        <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={openHelperCliSettings}>
-                          {t("bastion.openHelperCliSettings")}
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <p className="text-xs text-[hsl(var(--muted))]">{t("bastion.providerHint")}</p>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <FormField id="profile-bastion-asset" label={t("bastion.assetId")} hint={t(needsHelperCli ? "bastion.helperAssetIdHint" : "bastion.assetIdHint")}>
-                        <Input id="profile-bastion-asset" autoCapitalize="none" spellCheck={false} disabled={busy} {...register("bastionAssetId")} />
-                      </FormField>
-                      <FormField id="profile-bastion-account" label={t("bastion.accountId")} hint={t("bastion.accountIdHint")}>
-                        <Input id="profile-bastion-account" autoCapitalize="none" spellCheck={false} disabled={busy} {...register("bastionAccountId")} />
-                      </FormField>
-                    </div>
-                    {needsHelperCli && !helperCliConfigured && (
-                      <div className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-                        <p className="text-sm leading-relaxed text-[hsl(var(--muted))]">
-                          {t("bastion.helperCliMissingTeleport")}
-                        </p>
-                        <Button type="button" variant="secondary" size="sm" disabled={busy} onClick={openHelperCliSettings}>
-                          {t("bastion.openHelperCliSettings")}
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>}
-
-              {routeType !== "bastion" && authMethod === "privateKey" && <div className="space-y-4 rounded-lg border bg-[hsl(var(--elevated)/.45)] p-4">
-                <FormField id="profile-key-storage" label={t("profile.keyStorage")}>
-                  <Controller control={control} name="keySourceType" render={({ field }) => <Select value={field.value} disabled={busy} onValueChange={field.onChange}>
-                    <SelectTrigger id="profile-key-storage"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="file">{t("profile.keyFile")}</SelectItem>
-                      <SelectItem value="vault">{t("profile.keyVault")}</SelectItem>
-                    </SelectContent>
-                  </Select>} />
-                </FormField>
-                {keySourceType === "file"
-                  ? <FormField id="profile-key-path" label={t("profile.privateKey")} error={errors.keyPath ? t("validation.profilePrivateKey") : undefined} hint={t("profile.privateKeyHint")}>
-                    <div className="flex gap-2">
-                      <Input id="profile-key-path" className="min-w-0 font-mono" readOnly placeholder={t("profile.keyPathPlaceholder")} aria-invalid={Boolean(errors.keyPath)} aria-describedby={errors.keyPath ? "profile-key-path-error" : "profile-key-path-hint"} disabled={busy} {...register("keyPath")} />
-                      <Button type="button" variant="secondary" disabled={busy} onClick={() => void browse()}><FolderOpen size={16} aria-hidden="true" /><span className="hidden sm:inline">{t("profile.browse")}</span></Button>
-                    </div>
+                    )} />
                   </FormField>
-                  : <FormField id="profile-key-vault" label={t("profile.privateKey")} error={errors.keyId ? t("validation.profilePrivateKey") : undefined} hint={t("profile.vaultKeyHint")}>
-                    <input type="hidden" {...register("keyId")} />
-                    <Button id="profile-key-vault" type="button" className="max-w-full justify-start" variant="secondary" disabled={busy} aria-describedby={errors.keyId ? "profile-key-vault-error" : "profile-key-vault-hint"} onClick={() => void importKey()}>
-                      {importing ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : keyLabel ? <Check size={16} className="text-emerald-500" aria-hidden="true" /> : <KeyRound size={16} aria-hidden="true" />}
-                      <span className="truncate">{keyLabel || t("profile.importToVault")}</span>
-                    </Button>
-                  </FormField>}
-              </div>}
-            </FormSection>
+                  <FieldGroup title={t("profile.endpointSection")}>{renderSshEndpointFields()}</FieldGroup>
+                  {renderAuthFields()}
+                </TabsContent>
 
-            {failure && <div role="alert" className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500"><AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" /><span>{t("errors.saveFailed")}</span></div>}
+                <TabsContent value="bastion" className="mt-5 space-y-5">
+                  <FieldGroup title={t("profile.bastionSection")}>
+                    <FormField id="profile-bastion-provider" label={t("bastion.provider")} error={errors.bastionProvider ? t("validation.bastionProvider") : undefined}>
+                      <Controller control={control} name="bastionProvider" render={({ field }) => (
+                        <Select
+                          value={field.value}
+                          disabled={busy}
+                          onValueChange={(value) => {
+                            field.onChange(value);
+                            setValue("authMethod", "password", { shouldDirty: true });
+                            if (value === "jumpserver") setValue("port", 2222, { shouldDirty: true });
+                            if (value === "teleport") setValue("port", 3080, { shouldDirty: true });
+                            if (value === "boundary") setValue("port", 9200, { shouldDirty: true });
+                          }}
+                        >
+                          <SelectTrigger id="profile-bastion-provider"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="jumpserver">{t("bastion.providerJumpServer")}</SelectItem>
+                            <SelectItem value="teleport">{t("bastion.providerTeleport")}</SelectItem>
+                            <SelectItem value="boundary">{t("bastion.providerBoundary")}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )} />
+                    </FormField>
+
+                    {isJumpServer && (
+                      <>
+                        <FormField
+                          id="profile-bastion-api"
+                          label={t("bastion.apiBaseUrl")}
+                          error={errors.bastionApiBaseUrl ? t(errors.bastionApiBaseUrl.message === "invalid" ? "validation.bastionApiBaseUrlInvalid" : "validation.bastionApiBaseUrl") : undefined}
+                        >
+                          <Input id="profile-bastion-api" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="https://jms.example.com" {...register("bastionApiBaseUrl")} />
+                        </FormField>
+                        <FormField id="profile-bastion-org" label={t("bastion.orgId")} hint={t("bastion.orgIdHint")}>
+                          <Input id="profile-bastion-org" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder={t("bastion.optionalPlaceholder")} {...register("bastionOrgId")} />
+                        </FormField>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <FormField id="profile-bastion-asset" label={t("bastion.assetId")} hint={t("bastion.assetIdHint")}>
+                            <Input id="profile-bastion-asset" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder={t("bastion.optionalPlaceholder")} {...register("bastionAssetId")} />
+                          </FormField>
+                          <FormField id="profile-bastion-account" label={t("bastion.accountId")} hint={t("bastion.accountIdHint")}>
+                            <Input id="profile-bastion-account" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder={t("bastion.optionalPlaceholder")} {...register("bastionAccountId")} />
+                          </FormField>
+                        </div>
+                      </>
+                    )}
+
+                    {isBoundary && (
+                      <>
+                        <FormField
+                          id="profile-bastion-api"
+                          label={t("bastion.boundaryControllerUrl")}
+                          error={errors.bastionApiBaseUrl ? t(errors.bastionApiBaseUrl.message === "invalid" ? "validation.bastionApiBaseUrlInvalid" : "validation.bastionBoundaryControllerUrl") : undefined}
+                          hint={t("bastion.boundaryControllerUrlHint")}
+                        >
+                          <Input id="profile-bastion-api" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="http://192.168.1.10:9200" {...register("bastionApiBaseUrl")} />
+                        </FormField>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <FormField id="profile-bastion-asset" label={t("bastion.boundaryTargetId")} hint={t("bastion.boundaryBoundAssetHint")}>
+                            <Input id="profile-bastion-asset" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="ttcp_..." {...register("bastionAssetId")} />
+                          </FormField>
+                          <FormField id="profile-bastion-account" label={t("bastion.boundTargetAccount")} hint={t("bastion.boundaryBoundAccountHint")}>
+                            <Input id="profile-bastion-account" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder={t("bastion.optionalPlaceholder")} {...register("bastionAccountId")} />
+                          </FormField>
+                        </div>
+                        {renderHelperCliWarning()}
+                      </>
+                    )}
+
+                    {isTeleport && (
+                      <>
+                        <p className="text-xs text-[hsl(var(--muted))]">{t("bastion.teleportProfileHint")}</p>
+                        {renderSshEndpointFields()}
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <FormField id="profile-bastion-asset" label={t("bastion.assetId")} hint={t("bastion.helperAssetIdHint")}>
+                            <Input id="profile-bastion-asset" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="teleport-node01" {...register("bastionAssetId")} />
+                          </FormField>
+                          <FormField id="profile-bastion-account" label={t("bastion.osLogin")} hint={t("bastion.osLoginHint")}>
+                            <Input id="profile-bastion-account" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="root" {...register("bastionAccountId")} />
+                          </FormField>
+                        </div>
+                        <FormField id="profile-teleport-cluster" label={t("bastion.teleportCluster")} hint={t("bastion.teleportClusterHint")}>
+                          <Input id="profile-teleport-cluster" autoCapitalize="none" spellCheck={false} disabled={busy} placeholder="teleport.local" {...register("teleportClusterName")} />
+                        </FormField>
+                        <label className="flex items-start gap-2 text-sm">
+                          <input className="mt-1" type="checkbox" disabled={busy} {...register("teleportInsecure")} />
+                          <span>
+                            <span className="font-medium">{t("bastion.teleportInsecure")}</span>
+                            <span className="mt-0.5 block text-xs text-[hsl(var(--muted))]">{t("bastion.teleportInsecureHint")}</span>
+                          </span>
+                        </label>
+                        {renderHelperCliWarning()}
+                      </>
+                    )}
+                  </FieldGroup>
+                </TabsContent>
+              </Tabs>
+            </div>
+
+            {failure && (
+              <div role="alert" className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-500">
+                <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <span>{t("errors.saveFailed")}</span>
+              </div>
+            )}
           </div>
 
           <DialogFooter>
             <DialogClose asChild>
-              <Button type="button" variant="outline" disabled={busy}>{t("common.cancel")}</Button>
+              <Button type="button" variant="secondary" disabled={busy}>{t("common.cancel")}</Button>
             </DialogClose>
             <Button type="submit" disabled={busy}>
               {isSubmitting && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}

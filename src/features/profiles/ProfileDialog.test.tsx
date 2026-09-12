@@ -76,11 +76,19 @@ afterEach(async () => {
 });
 
 describe("profile dialog", () => {
-  it("uses shadcn select triggers and reports validation beside each invalid field", async () => {
+  it("uses route tabs first and reports validation beside each invalid field", async () => {
     await renderDialog();
 
+    const routeTabs = document.body.querySelector<HTMLElement>("#profile-route");
+    expect(routeTabs?.getAttribute("role")).toBe("tablist");
+    const triggers = [...routeTabs!.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    expect(triggers.map((tab) => tab.textContent)).toEqual([
+      i18n.t("profile.routeTabDirect"),
+      i18n.t("profile.routeTabJumpHost"),
+      i18n.t("profile.routeTabBastion"),
+    ]);
+    expect(triggers[0].getAttribute("data-state")).toBe("active");
     expect(document.body.querySelector<HTMLButtonElement>("#profile-group")?.getAttribute("role")).toBe("combobox");
-    expect(document.body.querySelector<HTMLButtonElement>("#profile-route")?.getAttribute("role")).toBe("combobox");
     expect(document.body.querySelector<HTMLButtonElement>("#profile-auth")?.getAttribute("role")).toBe("combobox");
     expect([...document.body.querySelectorAll("select")].every((select) => select.getAttribute("aria-hidden") === "true")).toBe(true);
     expect(document.body.querySelector('[role="dialog"]')).toBeTruthy();
