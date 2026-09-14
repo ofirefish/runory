@@ -63,14 +63,75 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      # "Missing comment in secret key" almost always means the Repository secret is
+      # empty/truncated, or was stored as an Environment secret instead of Actions repo secret.
+      - name: Prepare updater signing key
+        shell: bash
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const key = process.env.RAW_KEY ?? '';
+          const password = process.env.RAW_PASSWORD ?? '';
+          const looksLikeMinisign = (text) =>
+            text.includes('untrusted comment:') && /secret key/i.test(text);
+
+          if (!key.trim()) {
+            console.error(
+              '::error::TAURI_SIGNING_PRIVATE_KEY is empty. Add it under Settings → Secrets and variables → Actions → Repository secrets (not Environment secrets). Paste the full .key file contents.',
+            );
+            process.exit(1);
+          }
+
+          let material = key;
+          let ok = looksLikeMinisign(key);
+          if (!ok) {
+            try {
+              const decoded = Buffer.from(key.trim(), 'base64').toString('utf8');
+              if (looksLikeMinisign(decoded)) {
+                material = decoded;
+                ok = true;
+                console.log('Updater private key: accepted base64-encoded minisign format');
+              }
+            } catch {
+              ok = false;
+            }
+          } else {
+            console.log('Updater private key: accepted minisign text format');
+          }
+
+          if (!ok) {
+            console.error(
+              '::error::TAURI_SIGNING_PRIVATE_KEY does not look like a Tauri updater private key. Expected raw .key contents starting with "untrusted comment:" (or base64 of that file). Do not paste the .pub file or a filesystem path.',
+            );
+            process.exit(1);
+          }
+
+          const keyPath = path.join(process.env.RUNNER_TEMP, 'runory-updater.key');
+          fs.writeFileSync(keyPath, material.endsWith('\n') ? material : `${material}\n`, 'utf8');
+          fs.appendFileSync(process.env.GITHUB_ENV, `TAURI_SIGNING_PRIVATE_KEY=${keyPath}\n`);
+          if (password.length > 0) {
+            fs.appendFileSync(
+              process.env.GITHUB_ENV,
+              `TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<EOF\n${password}\nEOF\n`,
+            );
+            console.log('Updater password secret: set');
+          } else {
+            console.log('Updater password secret: unset (OK when the key has no password)');
+          }
+          console.log(`Updater private key file ready (${material.length} chars)`);
+          NODE
+
       - name: Build and upload draft release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUNORY_UPDATER_ENDPOINT: ${{ vars.RUNORY_UPDATER_ENDPOINT }}
           RUNORY_UPDATER_PUBKEY: ${{ vars.RUNORY_UPDATER_PUBKEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Signing key/password come from GITHUB_ENV (prepared above).
         with:
           tagName: v__VERSION__
           releaseName: Runory v__VERSION__

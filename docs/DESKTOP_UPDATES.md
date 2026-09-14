@@ -36,14 +36,25 @@ The updater signing key does not replace Windows Authenticode signing or macOS D
 
 The workflow [`.github/workflows/publish.yml`](../.github/workflows/publish.yml) builds Windows, macOS (arm64 + x64), and Linux installers with updater artifacts, then uploads them to a **draft** GitHub Release.
 
-Configure these repository settings before the first run:
+Configure these repository settings before the first run.
+
+Use **Settings → Secrets and variables → Actions → Repository secrets / variables**.
+Do **not** put signing keys in Environment secrets — the publish workflow cannot read them, which surfaces as `Missing comment in secret key`.
 
 | Kind | Name | Purpose |
 |------|------|---------|
 | Variable | `RUNORY_UPDATER_ENDPOINT` | Compile-time update endpoint URL |
-| Variable | `RUNORY_UPDATER_PUBKEY` | Compile-time updater public key |
-| Secret | `TAURI_SIGNING_PRIVATE_KEY` | Updater signing private key |
-| Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Private key password |
+| Variable | `RUNORY_UPDATER_PUBKEY` | Full `.pub` file contents |
+| Secret | `TAURI_SIGNING_PRIVATE_KEY` | Full `.key` file contents (must include `untrusted comment:`) |
+| Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Only if the key was generated with a password; otherwise delete this secret |
+
+Recommended first-time generation without a password:
+
+```powershell
+pnpm tauri signer generate -w runory-updater.key --ci -p ""
+```
+
+Then paste the entire `runory-updater.key` into `TAURI_SIGNING_PRIVATE_KEY`, and the entire `runory-updater.key.pub` into `RUNORY_UPDATER_PUBKEY`. Keep an offline backup of the private key; losing it means existing installs cannot verify future updates.
 
 Bump `version` in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, then either:
 
