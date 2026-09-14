@@ -45,7 +45,7 @@ Do **not** put signing keys in Environment secrets — the publish workflow cann
 |------|------|---------|
 | Variable | `RUNORY_UPDATER_ENDPOINT` | Compile-time update endpoint URL |
 | Variable | `RUNORY_UPDATER_PUBKEY` | Full `.pub` file contents |
-| Secret | `TAURI_SIGNING_PRIVATE_KEY` | Full `.key` file contents (must include `untrusted comment:`) |
+| Secret | `TAURI_SIGNING_PRIVATE_KEY` | Exact `.key` file contents from `signer generate` (usually one base64 line) |
 | Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Only if the key was generated with a password; otherwise delete this secret |
 
 Recommended first-time generation without a password:

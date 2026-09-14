@@ -86,32 +86,31 @@ jobs:
             process.exit(1);
           }
 
-          let material = key;
-          let ok = looksLikeMinisign(key);
-          if (!ok) {
+          // tauri signer generate -w writes a single-line base64 blob. Keep that
+          // exact form — decoding to "untrusted comment:..." and re-feeding it
+          // makes the CLI fail with "Invalid symbol 32, offset 9".
+          let format = 'unknown';
+          if (looksLikeMinisign(key)) {
+            format = 'minisign-text';
+          } else {
             try {
               const decoded = Buffer.from(key.trim(), 'base64').toString('utf8');
-              if (looksLikeMinisign(decoded)) {
-                material = decoded;
-                ok = true;
-                console.log('Updater private key: accepted base64-encoded minisign format');
-              }
+              if (looksLikeMinisign(decoded)) format = 'base64-minisign';
             } catch {
-              ok = false;
+              format = 'unknown';
             }
-          } else {
-            console.log('Updater private key: accepted minisign text format');
           }
 
-          if (!ok) {
+          if (format === 'unknown') {
             console.error(
-              '::error::TAURI_SIGNING_PRIVATE_KEY does not look like a Tauri updater private key. Expected raw .key contents starting with "untrusted comment:" (or base64 of that file). Do not paste the .pub file or a filesystem path.',
+              '::error::TAURI_SIGNING_PRIVATE_KEY does not look like a Tauri updater private key. Paste the exact contents of the .key file from `pnpm tauri signer generate -w` (usually one base64 line). Do not paste the .pub file or a filesystem path.',
             );
             process.exit(1);
           }
 
           const keyPath = path.join(process.env.RUNNER_TEMP, 'runory-updater.key');
-          fs.writeFileSync(keyPath, material.endsWith('\n') ? material : `${material}\n`, 'utf8');
+          const material = key.trim();
+          fs.writeFileSync(keyPath, `${material}\n`, 'utf8');
           fs.appendFileSync(process.env.GITHUB_ENV, `TAURI_SIGNING_PRIVATE_KEY=${keyPath}\n`);
           if (password.length > 0) {
             fs.appendFileSync(
@@ -122,7 +121,7 @@ jobs:
           } else {
             console.log('Updater password secret: unset (OK when the key has no password)');
           }
-          console.log(`Updater private key file ready (${material.length} chars)`);
+          console.log(`Updater private key ready (${format}, ${material.length} chars)`);
           NODE
 
       - name: Build and upload draft release
