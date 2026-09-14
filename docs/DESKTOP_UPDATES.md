@@ -32,6 +32,30 @@ pnpm tauri build --config src-tauri/tauri.release.conf.json
 
 The updater signing key does not replace Windows Authenticode signing or macOS Developer ID signing and notarization.
 
+## GitHub Actions release
+
+The workflow [`.github/workflows/publish.yml`](../.github/workflows/publish.yml) builds Windows, macOS (arm64 + x64), and Linux installers with updater artifacts, then uploads them to a **draft** GitHub Release.
+
+Configure these repository settings before the first run:
+
+| Kind | Name | Purpose |
+|------|------|---------|
+| Variable | `RUNORY_UPDATER_ENDPOINT` | Compile-time update endpoint URL |
+| Variable | `RUNORY_UPDATER_PUBKEY` | Compile-time updater public key |
+| Secret | `TAURI_SIGNING_PRIVATE_KEY` | Updater signing private key |
+| Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Private key password |
+
+Bump `version` in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`, then either:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+or run **Actions → publish → Run workflow**.
+
+After all platform jobs finish, open the draft release, confirm installers / updater archives / `.sig` files (and `latest.json` when present), edit release notes, then publish.
+
 ## Publishing
 
 Publish the installers, updater archives, and generated `.sig` files before publishing `latest.json`. A static manifest must contain every platform distributed by that release and the literal contents of each matching `.sig` file.
