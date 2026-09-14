@@ -113,14 +113,24 @@ pub fn run() {
     #[cfg(not(mobile))]
     {
         // Desktop deep links launch a second process; forward them to the existing window.
-        builder = builder
-            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_focus();
-                }
-            }))
-            .plugin(tauri_plugin_updater::Builder::new().build())
-            .manage(AppUpdateService::default());
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+        }));
+        // Empty plugins.updater.pubkey panics packaged apps at PluginInitialization.
+        // Only register the plugin when a release pubkey was baked in at compile time.
+        let updater_pubkey = option_env!("RUNORY_UPDATER_PUBKEY")
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if updater_pubkey.is_some() {
+            builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        } else {
+            tracing::warn!(
+                "desktop updater plugin skipped: RUNORY_UPDATER_PUBKEY was not set at compile time"
+            );
+        }
+        builder = builder.manage(AppUpdateService::default());
     }
     builder
         .plugin(tauri_plugin_deep_link::init())
@@ -154,7 +164,11 @@ pub fn run() {
         })
         .setup(|app| {
             #[cfg(any(target_os = "linux", windows))]
-            app.deep_link().register_all()?;
+            {
+                if let Err(error) = app.deep_link().register_all() {
+                    tracing::warn!(error = %error, "desktop deep-link registration failed");
+                }
+            }
             #[cfg(mobile)]
             app.handle().plugin(tauri_plugin_biometric::init())?;
             let data_directory = app.path().app_data_dir()?;
@@ -195,7 +209,7 @@ pub fn run() {
                 data_directory.join("agent-policy-audit.json"),
             );
             tauri::async_runtime::block_on(agent_policy.load())?;
-            // Rust-only Policy 鈫?Risk 鈫?Approval 鈫?Audit 鈫?Registry service; no generic IPC.
+            // Rust-only Policy → Risk → Approval → Audit → Registry service; no generic IPC.
             app.manage(
                 NativeToolExecutionService::approved_repair_with_agent_policy(
                     ToolAuditRepository::new(JsonRepository::new(
@@ -205,10 +219,7 @@ pub fn run() {
                 ),
             );
             app.manage(AgentRuntimeService::default());
-            app.manage(
-                AgentRuntimeV2Service::open(&data_directory)
-                    .expect("agent runtime v2 database must open"),
-            );
+            app.manage(AgentRuntimeV2Service::open(&data_directory)?);
             app.manage(ObservationCache::default());
             app.manage(agent_policy);
             let incidents = IncidentService::at_path(data_directory.join("agentic-incidents.json"));
@@ -335,8 +346,23 @@ pub fn run() {
             commands::agent_v2::agent_v2_bind_resumable_run,
             commands::agent_v2::agent_v2_fleet_validate_targets,
             commands::agent_v2::agent_v2_fleet_plan_draft,
+            commands::agent_v2::agent_v2_fleet_prompt_draft,
             commands::agent_v2::agent_v2_fleet_plan_get,
+            commands::agent_v2::agent_v2_fleet_investigation_get,
+            commands::agent_v2::agent_v2_fleet_changeset_draft,
+            commands::agent_v2::agent_v2_fleet_changeset_latest,
+            commands::agent_v2::agent_v2_fleet_changeset_approve,
+            commands::agent_v2::agent_v2_fleet_changeset_execute,
+            commands::agent_v2::agent_v2_fleet_changeset_rollback,
             commands::agent_v2::agent_v2_fleet_plan_list,
+            commands::agent_v2::agent_v2_fleet_plan_request_approval,
+            commands::agent_v2::agent_v2_fleet_plan_approve,
+            commands::agent_v2::agent_v2_fleet_plan_reject,
+            commands::agent_v2::agent_v2_fleet_events_after,
+            commands::agent_v2::agent_v2_fleet_plan_start,
+            commands::agent_v2::agent_v2_fleet_plan_pause,
+            commands::agent_v2::agent_v2_fleet_plan_continue,
+            commands::agent_v2::agent_v2_fleet_plan_cancel,
             commands::agentic::agent_policy_effective,
             commands::agentic::agent_skills_list,
             commands::agentic::agent_skills_refresh,

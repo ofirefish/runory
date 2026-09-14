@@ -2,5 +2,13 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg3REZGNTlCQjlGNDFCMzkKUldRNUcvUzVtL1hmaHhZaEtoTWVSZUhqQjdkSWE2V1RYY1R0QWVVLzFOOGdrODIvR0p4OWVEQkgK",
+      "endpoints": [
+        "https://github.com/ofirefish/runory/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

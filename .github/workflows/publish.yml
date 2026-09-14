@@ -72,6 +72,7 @@ jobs:
           RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           RAW_PUBKEY: ${{ vars.RUNORY_UPDATER_PUBKEY }}
+          RAW_ENDPOINT: ${{ vars.RUNORY_UPDATER_ENDPOINT }}
         run: |
           node <<'NODE'
           const fs = require('fs');
@@ -157,17 +158,32 @@ jobs:
           const envKeyPath = keyPath.replace(/\\/g, '/');
           fs.appendFileSync(process.env.GITHUB_ENV, `TAURI_SIGNING_PRIVATE_KEY=${envKeyPath}\n`);
 
-          // Signing reads plugins.updater.pubkey from config — not RUNORY_UPDATER_PUBKEY.
+          // Signing and the packaged app both need plugins.updater.{pubkey,endpoints}.
+          const endpoint =
+            (process.env.RAW_ENDPOINT ?? '').trim() ||
+            'https://github.com/ofirefish/runory/releases/latest/download/latest.json';
           const confPath = path.join(process.env.RUNNER_TEMP, 'tauri.ci-updater.conf.json');
           fs.writeFileSync(
             confPath,
-            `${JSON.stringify({ plugins: { updater: { pubkey: publicKey.material } } }, null, 2)}\n`,
+            `${JSON.stringify(
+              {
+                plugins: {
+                  updater: {
+                    pubkey: publicKey.material,
+                    endpoints: [endpoint],
+                  },
+                },
+              },
+              null,
+              2,
+            )}\n`,
             'utf8',
           );
           const envConfPath = confPath.replace(/\\/g, '/');
           fs.appendFileSync(process.env.GITHUB_ENV, `RUNORY_UPDATER_PUBKEY_CONFIG=${envConfPath}\n`);
-          // Keep compile-time option_env! in sync with the signing pubkey.
+          // Keep compile-time option_env! in sync with the signing pubkey / endpoint.
           fs.appendFileSync(process.env.GITHUB_ENV, `RUNORY_UPDATER_PUBKEY=${publicKey.material}\n`);
+          fs.appendFileSync(process.env.GITHUB_ENV, `RUNORY_UPDATER_ENDPOINT=${endpoint}\n`);
 
           if (password.length > 0) {
             fs.appendFileSync(
@@ -190,8 +206,7 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUNORY_UPDATER_ENDPOINT: ${{ vars.RUNORY_UPDATER_ENDPOINT }}
-          # Signing key + pubkey config come from GITHUB_ENV (prepared above).
+          # Signing key, pubkey config, RUNORY_UPDATER_* come from GITHUB_ENV (prepared above).
         with:
           tagName: v__VERSION__
           releaseName: Runory v__VERSION__

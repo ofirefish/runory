@@ -6,7 +6,7 @@
   "build": { "beforeDevCommand": "pnpm dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "pnpm build", "frontendDist": "../dist" },
   "app": {
     "windows": [{ "title": "Runory", "width": 1440, "height": 900, "minWidth": 1024, "minHeight": 680, "decorations": false, "shadow": true }],
-    "security": { "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost" }
+    "security": { "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost https://*.supabase.co" }
   },
   "bundle": {
     "active": true,
@@ -23,10 +23,6 @@
     "deep-link": {
       "desktop": { "schemes": ["runory"] },
       "mobile": [{ "scheme": ["runory"], "appLink": false }]
-    },
-    "updater": {
-      "pubkey": "",
-      "endpoints": []
     }
   }
 }

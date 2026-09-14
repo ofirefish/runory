@@ -24,9 +24,11 @@ Generate the updater key pair once and keep an encrypted offline backup of the p
 pnpm tauri signer generate -w runory-updater.key
 ```
 
-Build release artifacts with the dedicated configuration so ordinary local builds do not require signing credentials:
+Build release artifacts with the dedicated configuration so ordinary local builds do not enable the updater plugin (an empty `plugins.updater.pubkey` makes packaged apps exit immediately on launch):
 
 ```powershell
+$env:RUNORY_UPDATER_ENDPOINT = "https://github.com/OWNER/REPOSITORY/releases/latest/download/latest.json"
+$env:RUNORY_UPDATER_PUBKEY = Get-Content -Raw .\runory-updater.key.pub
 pnpm tauri build --config src-tauri/tauri.release.conf.json
 ```
 
