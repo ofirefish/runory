@@ -25,6 +25,16 @@ import { DockerVolumesPanel } from "./DockerVolumesPanel";
 
 export type DockerTab = "containers" | "images" | "onlineImages" | "networks" | "volumes" | "registry" | "settings";
 
+const dockerTabLabelKeys = {
+  containers: "operations.dockerTab.containers",
+  images: "operations.dockerTab.images",
+  onlineImages: "operations.dockerTab.onlineImages",
+  networks: "operations.dockerTab.networks",
+  volumes: "operations.dockerTab.volumes",
+  registry: "operations.dockerTab.registry",
+  settings: "operations.dockerTab.settings",
+} as const satisfies Record<DockerTab, string>;
+
 const dockerTabs: { id: DockerTab; icon: typeof Box }[] = [
   { id: "containers", icon: Box },
   { id: "images", icon: Layers },
@@ -146,7 +156,7 @@ export function DockerPanel({
             onClick={() => selectTab(item.id)}
           >
             <item.icon size={15} />
-            {t(`operations.dockerTab.${item.id}`)}
+            {t(dockerTabLabelKeys[item.id])}
           </Button>
         ))}
       </nav>
@@ -238,7 +248,7 @@ export function DockerPanel({
         ) : (
           <div className="grid h-full min-h-40 place-items-center rounded-lg border border-dashed p-8 text-center">
             <div className="max-w-sm">
-              <p className="text-sm font-medium">{t(`operations.dockerTab.${tab}`)}</p>
+              <p className="text-sm font-medium">{t(dockerTabLabelKeys[tab])}</p>
               <p className="mt-2 text-xs text-[hsl(var(--muted))]">{t("operations.dockerTabUnavailable")}</p>
             </div>
           </div>

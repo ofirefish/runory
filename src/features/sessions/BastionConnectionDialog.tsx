@@ -1066,7 +1066,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
           ) : stage === "login" ? (
             <>
               <DialogClose asChild>
-                <Button type="button" variant="outline" disabled={busy}>
+                <Button type="button" variant="ghost" disabled={busy}>
                   {t("connection.cancel")}
                 </Button>
               </DialogClose>
@@ -1092,7 +1092,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
           ) : stage === "sso" ? (
             <>
               <DialogClose asChild>
-                <Button type="button" variant="outline" disabled={busy}>
+                <Button type="button" variant="ghost" disabled={busy}>
                   {t("connection.cancel")}
                 </Button>
               </DialogClose>
@@ -1104,7 +1104,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
           ) : stage === "mfa" && challenge ? (
             <>
               <DialogClose asChild>
-                <Button type="button" variant="outline" disabled={busy}>
+                <Button type="button" variant="ghost" disabled={busy}>
                   {t("connection.cancel")}
                 </Button>
               </DialogClose>
@@ -1124,7 +1124,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
             </>
           ) : (
             <DialogClose asChild>
-              <Button type="button" variant="outline" disabled={busy || stage === "opening"}>
+              <Button type="button" variant="ghost" disabled={busy || stage === "opening"}>
                 {t("connection.cancel")}
               </Button>
             </DialogClose>

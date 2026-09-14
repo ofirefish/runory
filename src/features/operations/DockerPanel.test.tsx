@@ -386,7 +386,7 @@ describe("DockerPanel", () => {
       namespaceInput!.dispatchEvent(new Event("input", { bubbles: true }));
     });
 
-    const submitButton = Array.from(document.body.querySelectorAll('[role="dialog"] button')).find((button) =>
+    const submitButton = Array.from(document.body.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find((button) =>
       button.textContent?.includes(i18n.t("operations.dockerRegistries.create")),
     );
     expect(submitButton).toBeTruthy();
@@ -495,7 +495,7 @@ describe("DockerPanel", () => {
     await act(async () => { saveButton!.click(); });
 
     expect(document.body.textContent).toContain(i18n.t("operations.dockerSettings.confirmRestart"));
-    const confirmButton = Array.from(document.body.querySelectorAll('[role="dialog"] button')).find((button) =>
+    const confirmButton = Array.from(document.body.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find((button) =>
       button.textContent?.includes(i18n.t("operations.dockerSettings.saveAndRestart")),
     );
     expect(confirmButton).toBeTruthy();
