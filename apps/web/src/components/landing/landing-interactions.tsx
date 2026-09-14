@@ -2,14 +2,19 @@
 
 import Link from "next/link";
 import { useRef, useState, type KeyboardEvent } from "react";
-import { ArrowRight, Check, ChevronRight, Download, Globe2, Menu, Monitor, ShieldCheck, Sparkles, X } from "lucide-react";
+import { ArrowRight, Check, ChevronRight, Download, Globe2, Menu, ShieldCheck, Sparkles, X } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
+import { OsIcon } from "@/components/landing/os-icon";
 import { Button } from "@/components/ui/button";
 import type { LandingCopy } from "@/lib/landing-copy";
+import type { DownloadOs, LatestReleaseDownloads } from "@/lib/github-releases";
+import { primaryDownloadHref, releaseUrl as defaultReleaseUrl } from "@/lib/github-releases";
 import type { Locale } from "@/lib/i18n";
 
-export const releaseUrl = "https://github.com/ofirefish/runory/releases";
+export const releaseUrl = defaultReleaseUrl;
 export const sourceUrl = "https://github.com/ofirefish/runory";
+
+const platformOs = ["windows", "macos", "linux"] as const satisfies readonly DownloadOs[];
 
 export function LandingHeader({ locale, copy: t, page }: { locale: Locale; copy: LandingCopy["nav"]; page?: string }) {
   const [open, setOpen] = useState(false);
@@ -37,9 +42,19 @@ export function AgentWalkthrough({ copy: t }: { copy: LandingCopy["agent"] }) {
   </div>;
 }
 
-export function DownloadPicker({ copy: t }: { copy: LandingCopy["downloads"] }) {
+export function DownloadPicker({
+  copy: t,
+  downloads,
+}: {
+  copy: LandingCopy["downloads"];
+  downloads?: LatestReleaseDownloads;
+}) {
   const [platform, setPlatform] = useState(0);
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  const resolved = downloads ?? { version: null, assets: [], releasePageUrl: releaseUrl };
+  const os = platformOs[platform];
+  const href = primaryDownloadHref(resolved, os);
+  const intelHref = resolved.assets.find(asset => asset.id === "macos-intel")?.href ?? releaseUrl;
   function navigate(event: KeyboardEvent<HTMLButtonElement>) {
     let next = platform;
     if (event.key === "ArrowRight") next = (platform + 1) % 3;
@@ -49,5 +64,5 @@ export function DownloadPicker({ copy: t }: { copy: LandingCopy["downloads"] }) 
     else return;
     event.preventDefault(); setPlatform(next); buttons.current[next]?.focus();
   }
-  return <div className="download-picker"><div className="platform-tabs" role="tablist" aria-label={t.start}>{t.platforms.map((label, index) => <button key={label} ref={el => { buttons.current[index] = el; }} role="tab" id={`platform-${index}`} aria-controls={`package-${index}`} aria-selected={platform === index} tabIndex={platform === index ? 0 : -1} onKeyDown={navigate} onClick={() => setPlatform(index)}><Monitor size={17} />{label}</button>)}</div><div role="tabpanel" id={`package-${platform}`} aria-labelledby={`platform-${platform}`} tabIndex={0} className="download-package"><p>{t.packages[platform]}</p><Button asChild className="landing-primary"><a href={releaseUrl} target="_blank" rel="noopener noreferrer"><Download size={17} />{t.cta}<ArrowRight size={16} /></a></Button></div><p className="download-availability">{t.availability}</p></div>;
+  return <div className="download-picker"><div className="platform-tabs" role="tablist" aria-label={t.start}>{t.platforms.map((label, index) => <button key={label} ref={el => { buttons.current[index] = el; }} role="tab" id={`platform-${index}`} aria-controls={`package-${index}`} aria-selected={platform === index} tabIndex={platform === index ? 0 : -1} onKeyDown={navigate} onClick={() => setPlatform(index)}><OsIcon os={platformOs[index]} width={16} height={16} />{label}</button>)}</div><div role="tabpanel" id={`package-${platform}`} aria-labelledby={`platform-${platform}`} tabIndex={0} className="download-package"><p>{t.packages[platform]}</p><div className="download-package-actions"><Button asChild className="landing-primary"><a href={href} target="_blank" rel="noopener noreferrer"><Download size={17} />{t.cta}<ArrowRight size={16} /></a></Button>{os === "macos" && <a className="download-secondary-link" href={intelHref} target="_blank" rel="noopener noreferrer">{t.ctaSecondary}<ArrowRight size={14} /></a>}</div></div><p className="download-availability">{t.availability}</p></div>;
 }

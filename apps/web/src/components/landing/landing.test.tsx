@@ -55,14 +55,31 @@ describe.each(["zh-CN", "en-US"] as const)("landing interactions: %s", locale =>
     expect(container.textContent).toContain(t.agent.note);
     expect(steps).toHaveLength(3);
   });
-  it("changes platform guidance and keeps the release destination honest", async () => {
-    await render(<DownloadPicker copy={t.downloads} />);
+  it("changes platform guidance and keeps download destinations honest", async () => {
+    const downloads = {
+      version: "v0.1.0",
+      releasePageUrl: "https://github.com/ofirefish/runory/releases",
+      assets: [
+        { id: "windows", os: "windows" as const, arch: "x64" as const, labelKey: "windows" as const, format: ".msi", href: "https://example.com/win.msi", direct: true },
+        { id: "macos-apple", os: "macos" as const, arch: "arm64" as const, labelKey: "macosApple" as const, format: ".dmg", href: "https://example.com/mac-arm.dmg", direct: true },
+        { id: "macos-intel", os: "macos" as const, arch: "x64" as const, labelKey: "macosIntel" as const, format: ".dmg", href: "https://example.com/mac-x64.dmg", direct: true },
+        { id: "linux", os: "linux" as const, arch: "x64" as const, labelKey: "linux" as const, format: ".AppImage", href: "https://example.com/linux.AppImage", direct: true },
+      ],
+    };
+    await render(<DownloadPicker copy={t.downloads} downloads={downloads} />);
     const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
     await act(async () => tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(tabs[2].getAttribute("aria-selected")).toBe("true");
     expect(container.textContent).toContain(t.downloads.packages[2]);
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com/linux.AppImage");
+    await click(tabs[1]);
+    const links = [...container.querySelectorAll("a")].map(anchor => anchor.getAttribute("href"));
+    expect(links).toContain("https://example.com/mac-arm.dmg");
+    expect(links).toContain("https://example.com/mac-x64.dmg");
+  });
+  it("falls back to the releases page when assets are unavailable", async () => {
+    await render(<DownloadPicker copy={t.downloads} />);
     expect(container.querySelector("a")?.getAttribute("href")).toBe("https://github.com/ofirefish/runory/releases");
-    expect(container.querySelector("a")?.hasAttribute("download")).toBe(false);
   });
   it("closes the mobile menu on Escape and returns focus to its trigger", async () => {
     await render(<LandingHeader locale={locale} copy={t.nav} />);
