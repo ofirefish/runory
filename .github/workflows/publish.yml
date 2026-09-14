@@ -63,61 +63,112 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      # "Missing comment in secret key" almost always means the Repository secret is
-      # empty/truncated, or was stored as an Environment secret instead of Actions repo secret.
-      - name: Prepare updater signing key
+      # Private key → TAURI_SIGNING_PRIVATE_KEY file.
+      # Public key → plugins.updater.pubkey config overlay (env alone is not enough;
+      # empty tauri.conf pubkey surfaces as "Missing comment in public key").
+      - name: Prepare updater signing material
         shell: bash
         env:
           RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RAW_PUBKEY: ${{ vars.RUNORY_UPDATER_PUBKEY }}
         run: |
           node <<'NODE'
           const fs = require('fs');
           const path = require('path');
-          const raw = process.env.RAW_KEY ?? '';
-          const password = process.env.RAW_PASSWORD ?? '';
-          const looksLikeMinisign = (text) =>
-            text.includes('untrusted comment:') && /secret key/i.test(text);
 
-          if (!raw.trim()) {
+          const looksLikeSecret = (text) =>
+            text.includes('untrusted comment:') && /secret key/i.test(text);
+          const looksLikePubkey = (text) =>
+            text.includes('untrusted comment:') && /public key/i.test(text);
+
+          // Tauri STANDARD-base64-decodes and rejects whitespace (LF → symbol 10,
+          // space in "untrusted comment:" → symbol 32). Always emit one base64 line.
+          const normalizeKey = (raw, kind) => {
+            const stripped = String(raw ?? '').replace(/^\uFEFF/, '').trim();
+            if (!stripped) return { format: 'empty', material: '' };
+
+            const isText =
+              kind === 'secret' ? looksLikeSecret(stripped) : looksLikePubkey(stripped);
+            let material;
+            let format;
+            if (isText) {
+              const minisign = stripped.endsWith('\n') ? stripped : `${stripped}\n`;
+              material = Buffer.from(minisign, 'utf8').toString('base64');
+              format = 'minisign-text';
+            } else {
+              material = stripped.replace(/\s+/g, '');
+              format = 'base64';
+              try {
+                const decoded = Buffer.from(material, 'base64').toString('utf8');
+                const ok = kind === 'secret' ? looksLikeSecret(decoded) : looksLikePubkey(decoded);
+                if (!ok) format = 'unknown';
+              } catch {
+                format = 'unknown';
+              }
+            }
+
+            if (format === 'unknown' || !/^[A-Za-z0-9+/]+=*$/.test(material)) {
+              return { format: 'unknown', material: '' };
+            }
+            return { format, material };
+          };
+
+          const password = process.env.RAW_PASSWORD ?? '';
+          const privateKey = normalizeKey(process.env.RAW_KEY, 'secret');
+          if (privateKey.format === 'empty') {
             console.error(
               '::error::TAURI_SIGNING_PRIVATE_KEY is empty. Add it under Settings → Secrets and variables → Actions → Repository secrets (not Environment secrets). Paste the full .key file contents.',
             );
             process.exit(1);
           }
-
-          // Tauri STANDARD-base64-decodes the env/file bytes and rejects whitespace.
-          // A trailing LF is "Invalid symbol 10"; a space in "untrusted comment:" is
-          // "Invalid symbol 32, offset 9". Always feed a single-line base64 blob.
-          const stripped = raw.replace(/^\uFEFF/, '').trim();
-          let material;
-          let format;
-          if (looksLikeMinisign(stripped)) {
-            const minisign = stripped.endsWith('\n') ? stripped : `${stripped}\n`;
-            material = Buffer.from(minisign, 'utf8').toString('base64');
-            format = 'minisign-text';
-          } else {
-            material = stripped.replace(/\s+/g, '');
-            format = 'base64';
-            try {
-              const decoded = Buffer.from(material, 'base64').toString('utf8');
-              if (!looksLikeMinisign(decoded)) format = 'unknown';
-            } catch {
-              format = 'unknown';
-            }
+          if (privateKey.format === 'unknown') {
+            console.error(
+              '::error::TAURI_SIGNING_PRIVATE_KEY does not look like a Tauri updater private key. Paste the exact contents of the .key file from `pnpm tauri signer generate -w` (usually one base64 line).',
+            );
+            process.exit(1);
           }
 
-          if (format === 'unknown' || !/^[A-Za-z0-9+/]+=*$/.test(material)) {
+          let pubkeySource = 'variable';
+          let pubkeyRaw = process.env.RAW_PUBKEY ?? '';
+          if (!pubkeyRaw.trim()) {
+            const pubPath = path.join(process.cwd(), 'runory-updater.key.pub');
+            if (fs.existsSync(pubPath)) {
+              pubkeyRaw = fs.readFileSync(pubPath, 'utf8');
+              pubkeySource = 'runory-updater.key.pub';
+            }
+          }
+          const publicKey = normalizeKey(pubkeyRaw, 'public');
+          if (publicKey.format === 'empty') {
             console.error(
-              '::error::TAURI_SIGNING_PRIVATE_KEY does not look like a Tauri updater private key. Paste the exact contents of the .key file from `pnpm tauri signer generate -w` (usually one base64 line). Do not paste the .pub file or a filesystem path.',
+              '::error::RUNORY_UPDATER_PUBKEY is empty and runory-updater.key.pub was not found. Set the Repository variable to the full .pub file contents.',
+            );
+            process.exit(1);
+          }
+          if (publicKey.format === 'unknown') {
+            console.error(
+              '::error::RUNORY_UPDATER_PUBKEY does not look like a Tauri updater public key. Paste the exact contents of runory-updater.key.pub (usually one base64 line).',
             );
             process.exit(1);
           }
 
           const keyPath = path.join(process.env.RUNNER_TEMP, 'runory-updater.key');
-          fs.writeFileSync(keyPath, material, 'utf8');
-          const envPath = keyPath.replace(/\\/g, '/');
-          fs.appendFileSync(process.env.GITHUB_ENV, `TAURI_SIGNING_PRIVATE_KEY=${envPath}\n`);
+          fs.writeFileSync(keyPath, privateKey.material, 'utf8');
+          const envKeyPath = keyPath.replace(/\\/g, '/');
+          fs.appendFileSync(process.env.GITHUB_ENV, `TAURI_SIGNING_PRIVATE_KEY=${envKeyPath}\n`);
+
+          // Signing reads plugins.updater.pubkey from config — not RUNORY_UPDATER_PUBKEY.
+          const confPath = path.join(process.env.RUNNER_TEMP, 'tauri.ci-updater.conf.json');
+          fs.writeFileSync(
+            confPath,
+            `${JSON.stringify({ plugins: { updater: { pubkey: publicKey.material } } }, null, 2)}\n`,
+            'utf8',
+          );
+          const envConfPath = confPath.replace(/\\/g, '/');
+          fs.appendFileSync(process.env.GITHUB_ENV, `RUNORY_UPDATER_PUBKEY_CONFIG=${envConfPath}\n`);
+          // Keep compile-time option_env! in sync with the signing pubkey.
+          fs.appendFileSync(process.env.GITHUB_ENV, `RUNORY_UPDATER_PUBKEY=${publicKey.material}\n`);
+
           if (password.length > 0) {
             fs.appendFileSync(
               process.env.GITHUB_ENV,
@@ -128,7 +179,10 @@ jobs:
             console.log('Updater password secret: unset (OK when the key has no password)');
           }
           console.log(
-            `Updater private key ready (${format}, ${material.length} chars, ${fs.statSync(keyPath).size} file bytes)`,
+            `Updater private key ready (${privateKey.format}, ${privateKey.material.length} chars)`,
+          );
+          console.log(
+            `Updater public key ready (${publicKey.format}, source=${pubkeySource}, ${publicKey.material.length} chars)`,
           );
           NODE
 
@@ -137,12 +191,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUNORY_UPDATER_ENDPOINT: ${{ vars.RUNORY_UPDATER_ENDPOINT }}
-          RUNORY_UPDATER_PUBKEY: ${{ vars.RUNORY_UPDATER_PUBKEY }}
-          # Signing key/password come from GITHUB_ENV (prepared above).
+          # Signing key + pubkey config come from GITHUB_ENV (prepared above).
         with:
           tagName: v__VERSION__
           releaseName: Runory v__VERSION__
           releaseBody: See the release notes for details.
           releaseDraft: true
           prerelease: false
-          args: --config src-tauri/tauri.release.conf.json ${{ matrix.args }}
+          args: --config src-tauri/tauri.release.conf.json --config ${{ env.RUNORY_UPDATER_PUBKEY_CONFIG }} ${{ matrix.args }}
