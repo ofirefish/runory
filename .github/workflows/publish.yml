@@ -74,34 +74,40 @@ jobs:
           node <<'NODE'
           const fs = require('fs');
           const path = require('path');
-          const key = process.env.RAW_KEY ?? '';
+          const raw = process.env.RAW_KEY ?? '';
           const password = process.env.RAW_PASSWORD ?? '';
           const looksLikeMinisign = (text) =>
             text.includes('untrusted comment:') && /secret key/i.test(text);
 
-          if (!key.trim()) {
+          if (!raw.trim()) {
             console.error(
               '::error::TAURI_SIGNING_PRIVATE_KEY is empty. Add it under Settings → Secrets and variables → Actions → Repository secrets (not Environment secrets). Paste the full .key file contents.',
             );
             process.exit(1);
           }
 
-          // tauri signer generate -w writes a single-line base64 blob. Keep that
-          // exact form — decoding to "untrusted comment:..." and re-feeding it
-          // makes the CLI fail with "Invalid symbol 32, offset 9".
-          let format = 'unknown';
-          if (looksLikeMinisign(key)) {
+          // Tauri STANDARD-base64-decodes the env/file bytes and rejects whitespace.
+          // A trailing LF is "Invalid symbol 10"; a space in "untrusted comment:" is
+          // "Invalid symbol 32, offset 9". Always feed a single-line base64 blob.
+          const stripped = raw.replace(/^\uFEFF/, '').trim();
+          let material;
+          let format;
+          if (looksLikeMinisign(stripped)) {
+            const minisign = stripped.endsWith('\n') ? stripped : `${stripped}\n`;
+            material = Buffer.from(minisign, 'utf8').toString('base64');
             format = 'minisign-text';
           } else {
+            material = stripped.replace(/\s+/g, '');
+            format = 'base64';
             try {
-              const decoded = Buffer.from(key.trim(), 'base64').toString('utf8');
-              if (looksLikeMinisign(decoded)) format = 'base64-minisign';
+              const decoded = Buffer.from(material, 'base64').toString('utf8');
+              if (!looksLikeMinisign(decoded)) format = 'unknown';
             } catch {
               format = 'unknown';
             }
           }
 
-          if (format === 'unknown') {
+          if (format === 'unknown' || !/^[A-Za-z0-9+/]+=*$/.test(material)) {
             console.error(
               '::error::TAURI_SIGNING_PRIVATE_KEY does not look like a Tauri updater private key. Paste the exact contents of the .key file from `pnpm tauri signer generate -w` (usually one base64 line). Do not paste the .pub file or a filesystem path.',
             );
@@ -109,9 +115,9 @@ jobs:
           }
 
           const keyPath = path.join(process.env.RUNNER_TEMP, 'runory-updater.key');
-          const material = key.trim();
-          fs.writeFileSync(keyPath, `${material}\n`, 'utf8');
-          fs.appendFileSync(process.env.GITHUB_ENV, `TAURI_SIGNING_PRIVATE_KEY=${keyPath}\n`);
+          fs.writeFileSync(keyPath, material, 'utf8');
+          const envPath = keyPath.replace(/\\/g, '/');
+          fs.appendFileSync(process.env.GITHUB_ENV, `TAURI_SIGNING_PRIVATE_KEY=${envPath}\n`);
           if (password.length > 0) {
             fs.appendFileSync(
               process.env.GITHUB_ENV,
@@ -121,7 +127,9 @@ jobs:
           } else {
             console.log('Updater password secret: unset (OK when the key has no password)');
           }
-          console.log(`Updater private key ready (${format}, ${material.length} chars)`);
+          console.log(
+            `Updater private key ready (${format}, ${material.length} chars, ${fs.statSync(keyPath).size} file bytes)`,
+          );
           NODE
 
       - name: Build and upload draft release
