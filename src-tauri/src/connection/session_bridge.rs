@@ -169,12 +169,11 @@ impl BastionSessionBridge {
             provider = %session.provider,
             "disconnecting bastion session"
         );
-        if let BastionConnection::SshInteractive { session: ssh } = &session.connection {
-            let _ = ssh
-                .client
-                .disconnect(Disconnect::ByApplication, "user disconnect", "en")
-                .await;
-        }
+        let BastionConnection::SshInteractive { session: ssh } = &session.connection;
+        let _ = ssh
+            .client
+            .disconnect(Disconnect::ByApplication, "user disconnect", "en")
+            .await;
         if let Some(provider) = registry.get(&session.provider) {
             let _ = provider.disconnect(&session.connection).await;
         }

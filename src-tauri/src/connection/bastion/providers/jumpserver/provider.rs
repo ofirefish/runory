@@ -661,16 +661,15 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
     }
 
     async fn disconnect(&self, connection: &BastionConnection) -> Result<(), BastionError> {
-        if let BastionConnection::SshInteractive { session } = connection {
-            let _ = session
-                .client
-                .disconnect(
-                    russh::Disconnect::ByApplication,
-                    "bastion disconnect",
-                    "en",
-                )
-                .await;
-        }
+        let BastionConnection::SshInteractive { session } = connection;
+        let _ = session
+            .client
+            .disconnect(
+                russh::Disconnect::ByApplication,
+                "bastion disconnect",
+                "en",
+            )
+            .await;
         Ok(())
     }
 }

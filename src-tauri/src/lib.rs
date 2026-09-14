@@ -9,13 +9,17 @@ mod agentic;
 mod app_update;
 mod cloud;
 mod commands;
-// BastionProvider Phase A/B: route resolution, Mock provider, flow + terminal bridge.
+// BastionProvider Phase A/B: route resolution, providers, flow + terminal bridge.
+// Public surface is wired incrementally; keep the framework compiled without dead-code noise.
+#[allow(dead_code)]
 mod connection;
 mod credentials;
 mod dashboard;
 mod deployment;
 mod domain;
 mod groups;
+// External helper process framework (tsh / boundary); callers land with provider wiring.
+#[allow(dead_code)]
 mod helper;
 mod known_hosts;
 // MCP stays behind the typed gateway and is currently consumed only by the

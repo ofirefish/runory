@@ -577,14 +577,6 @@ fn verify_exact_fingerprint(expected: &str, actual: &str) -> AppResult<()> {
     }
 }
 
-async fn connect_transport(
-    host: &str,
-    port: u16,
-    handler: HostKeyHandler,
-) -> AppResult<client::Handle<HostKeyHandler>> {
-    connect_transport_with_config(host, port, handler, direct_client_config()).await
-}
-
 async fn read_ssh_banner(host: &str, port: u16) -> AppResult<String> {
     use tokio::io::AsyncReadExt;
     let mut stream = tokio::net::TcpStream::connect((host, port))
