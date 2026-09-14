@@ -18,8 +18,11 @@ pub enum AppError {
     #[error("bastion connection route is not available yet")]
     BastionUnavailable,
     /// TCP reached the configured KoKo port, but it did not speak SSH (wrong port / not exposed).
-    #[error("bastion KoKo SSH gateway is not reachable as SSH")]
-    BastionKokoUnreachable,
+    #[error("bastion KoKo SSH gateway at {endpoint} is not reachable as SSH")]
+    BastionKokoUnreachable { endpoint: String },
+    /// TCP could not reach the bastion SSH gateway (refused, unreachable, or timed out).
+    #[error("bastion SSH gateway at {endpoint} is unreachable")]
+    BastionGatewayUnreachable { endpoint: String },
     #[error("bastion provider was not found")]
     BastionProviderNotFound,
     #[error("bastion authentication failed")]
@@ -218,10 +221,13 @@ pub enum AppError {
 #[serde(rename_all = "camelCase")]
 struct ErrorPayload<'a> {
     code: &'a str,
+    /// Safe bastion/SSH gateway endpoint (`host:port`) for UI interpolation. Never secrets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<&'a str>,
 }
 
 impl AppError {
-    pub const fn code(&self) -> &'static str {
+    pub fn code(&self) -> &'static str {
         match self {
             Self::InvalidJumpHost => "INVALID_JUMP_HOST",
             Self::ProfileInUseAsJumpHost => "PROFILE_IN_USE_AS_JUMP_HOST",
@@ -229,7 +235,8 @@ impl AppError {
             Self::JumpForwardingDenied => "JUMP_FORWARDING_DENIED",
             Self::JumpTargetUnreachable => "JUMP_TARGET_UNREACHABLE",
             Self::BastionUnavailable => "BASTION_UNAVAILABLE",
-            Self::BastionKokoUnreachable => "BASTION_KOKO_UNREACHABLE",
+            Self::BastionKokoUnreachable { .. } => "BASTION_KOKO_UNREACHABLE",
+            Self::BastionGatewayUnreachable { .. } => "BASTION_GATEWAY_UNREACHABLE",
             Self::BastionProviderNotFound => "BASTION_PROVIDER_NOT_FOUND",
             Self::BastionAuthFailed => "BASTION_AUTH_FAILED",
             Self::BastionAwaitingUser => "BASTION_AWAITING_USER",
@@ -328,6 +335,24 @@ impl AppError {
             Self::Storage => "STORAGE_ERROR",
         }
     }
+
+    /// Content-free gateway endpoint for bastion SSH diagnostics (`host:port`).
+    pub fn endpoint(&self) -> Option<&str> {
+        match self {
+            Self::BastionKokoUnreachable { endpoint }
+            | Self::BastionGatewayUnreachable { endpoint } => Some(endpoint.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// Format `host:port`, wrapping IPv6 hosts in brackets.
+pub fn format_ssh_endpoint(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 impl Serialize for AppError {
@@ -335,6 +360,39 @@ impl Serialize for AppError {
     where
         S: serde::Serializer,
     {
-        ErrorPayload { code: self.code() }.serialize(serializer)
+        ErrorPayload {
+            code: self.code(),
+            endpoint: self.endpoint(),
+        }
+        .serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_ssh_endpoint_wraps_ipv6() {
+        assert_eq!(format_ssh_endpoint("127.0.0.1", 2222), "127.0.0.1:2222");
+        assert_eq!(format_ssh_endpoint("::1", 2222), "[::1]:2222");
+        assert_eq!(format_ssh_endpoint("[::1]", 2222), "[::1]:2222");
+    }
+
+    #[test]
+    fn bastion_gateway_errors_serialize_endpoint() {
+        let error = AppError::BastionGatewayUnreachable {
+            endpoint: "localhost:2222".into(),
+        };
+        let value = serde_json::to_value(&error).expect("serialize");
+        assert_eq!(value["code"], "BASTION_GATEWAY_UNREACHABLE");
+        assert_eq!(value["endpoint"], "localhost:2222");
+    }
+
+    #[test]
+    fn ordinary_errors_omit_endpoint_field() {
+        let value = serde_json::to_value(&AppError::ConnectionRefused).expect("serialize");
+        assert_eq!(value["code"], "CONNECTION_REFUSED");
+        assert!(value.get("endpoint").is_none());
     }
 }

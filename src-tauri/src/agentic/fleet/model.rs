@@ -122,6 +122,28 @@ pub(crate) struct TargetApprovalBinding {
     pub target_id: Uuid,
     pub change_set_id: Uuid,
     pub change_set_version: u64,
+    #[serde(default)]
+    pub precondition_digest: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FleetOrchestrationTargetBinding {
+    pub profile_id: Uuid,
+    pub session_id: Uuid,
+    pub role: Option<String>,
+    pub ordinal: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FleetOrchestrationBinding {
+    pub fleet_run_id: Uuid,
+    pub fleet_run_version: u64,
+    pub graph_digest: String,
+    pub targets: Vec<FleetOrchestrationTargetBinding>,
+    pub verification_contract_digest: String,
+    pub binding_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -130,6 +152,8 @@ pub(crate) struct FleetApprovalBinding {
     pub fleet_version: u64,
     pub target_ids: Vec<Uuid>,
     pub targets: Vec<TargetApprovalBinding>,
+    #[serde(default)]
+    pub orchestration_binding_digest: Option<String>,
     pub approved_at_epoch_ms: u64,
 }
 
@@ -179,6 +203,9 @@ pub(crate) struct MultiChangeSet {
     pub production: bool,
     pub service_verification: Option<String>,
     pub cross_target_verification: bool,
+    /// Rust-generated binding over the Runtime V2 graph, exact profile/session/
+    /// role bindings and verification contract. No change content is stored.
+    pub orchestration_binding: Option<FleetOrchestrationBinding>,
     pub targets: Vec<FleetTargetExecution>,
     pub approval_state: ApprovalState,
     pub approval: Option<FleetApprovalBinding>,

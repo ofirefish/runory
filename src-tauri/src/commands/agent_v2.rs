@@ -5,14 +5,18 @@ use tauri::{ipc::Channel, AppHandle, State};
 use uuid::Uuid;
 
 use crate::agent::{
-    validate_fleet_target_shape, AgentEvent, AgentEventEnvelope, AgentRun, AgentRuntimeV2Service,
-    FleetFailurePolicyV2, FleetRunV2, FleetStageDraft, FleetTargetBinding, FleetTargetRequest,
+    validate_fleet_target_sessions, validate_fleet_target_shape, AgentEvent, AgentEventEnvelope,
+    AgentRun, AgentRuntimeV2Service, FleetApprovalV2, FleetChangeSetDraftRequest,
+    FleetChangeSetReview, FleetEventEnvelopeV2, FleetExecutionStrategyV2, FleetFailurePolicyV2,
+    FleetInvestigationView, FleetRunV2, FleetStageDraft, FleetTargetBinding, FleetTargetRequest,
     HostSessionContext,
 };
-use crate::agentic::ModelGateway;
+use crate::agentic::{ChangeSetService, FleetExecutionService, ModelGateway, MultiChangeSet};
 use crate::domain::{AppResult, SessionId};
+use crate::policy::AgentPolicyService;
 use crate::profiles::ProfileService;
 use crate::ssh::ServerSessionManager;
+use crate::tools::NativeToolExecutionService;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,6 +83,61 @@ pub struct AgentV2FleetPlanDraftRequest {
     pub failure_policy: FleetFailurePolicyV2,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2FleetPromptDraftRequest {
+    pub targets: Vec<FleetTargetRequest>,
+    pub goal: String,
+    pub production: bool,
+    pub execution_strategy: FleetExecutionStrategyV2,
+    pub failure_policy: FleetFailurePolicyV2,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2FleetApprovalRequest {
+    pub fleet_run_id: Uuid,
+    pub version: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2FleetApprovalActionRequest {
+    pub fleet_run_id: Uuid,
+    pub approval_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2FleetStartRequest {
+    pub fleet_run_id: Uuid,
+    pub approval_id: Uuid,
+    pub capacity: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2FleetContinueRequest {
+    pub fleet_run_id: Uuid,
+    pub approval_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentV2FleetChangeActionRequest {
+    pub fleet_run_id: Uuid,
+    pub fleet_run_version: u64,
+    pub execution_id: Uuid,
+    pub execution_version: u64,
+}
+
+async fn revalidate_fleet_run_sessions(
+    run: &FleetRunV2,
+    sessions: &ServerSessionManager,
+) -> AppResult<()> {
+    validate_fleet_target_sessions(&run.targets, sessions).await
+}
+
 async fn exact_fleet_bindings(
     targets: Vec<FleetTargetRequest>,
     sessions: &ServerSessionManager,
@@ -128,6 +187,41 @@ pub async fn agent_v2_fleet_plan_draft(
     )
 }
 
+/// Creates the initial single-stage Fleet graph for an explicit multi-target
+/// user request. React submits intent and exact candidate bindings only; Rust
+/// owns stage identity, concurrency limits and production strategy validation.
+#[tauri::command]
+pub async fn agent_v2_fleet_prompt_draft(
+    request: AgentV2FleetPromptDraftRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    sessions: State<'_, ServerSessionManager>,
+) -> AppResult<FleetRunV2> {
+    let goal = request.goal.trim();
+    if goal.is_empty() || goal.len() > 4_000 {
+        return Err(crate::domain::AppError::InvalidOperation);
+    }
+    let targets = exact_fleet_bindings(request.targets, &sessions).await?;
+    let concurrency_limit = match request.execution_strategy {
+        FleetExecutionStrategyV2::Sequential | FleetExecutionStrategyV2::Canary => 1,
+        FleetExecutionStrategyV2::RollingBatch => targets.len().min(2),
+        FleetExecutionStrategyV2::Parallel => targets.len(),
+    };
+    let target_ids = targets.iter().map(|target| target.profile_id).collect();
+    runtime.create_fleet_draft(
+        request.production,
+        request.failure_policy,
+        targets,
+        vec![FleetStageDraft {
+            id: Uuid::new_v4(),
+            summary: goal.to_owned(),
+            target_ids,
+            depends_on: vec![],
+            execution_strategy: request.execution_strategy,
+            concurrency_limit,
+        }],
+    )
+}
+
 #[tauri::command]
 pub fn agent_v2_fleet_plan_get(
     fleet_run_id: Uuid,
@@ -136,11 +230,266 @@ pub fn agent_v2_fleet_plan_get(
     runtime.fleet_run(fleet_run_id)
 }
 
+/// Live, bounded structured facts only. This endpoint cannot return terminal
+/// transcripts, model reasoning, commands or raw remote output.
+#[tauri::command]
+pub fn agent_v2_fleet_investigation_get(
+    fleet_run_id: Uuid,
+    runtime: State<'_, AgentRuntimeV2Service>,
+) -> AppResult<FleetInvestigationView> {
+    runtime.fleet_investigation(fleet_run_id)
+}
+
+/// Loads only an existing live ChangeSet execution that is cryptographically
+/// bound to the exact Fleet graph. Absence is not treated as an empty or
+/// synthetic proposal.
+#[tauri::command]
+pub async fn agent_v2_fleet_changeset_latest(
+    fleet_run_id: Uuid,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    changes: State<'_, ChangeSetService>,
+    fleets: State<'_, FleetExecutionService>,
+) -> AppResult<Option<FleetChangeSetReview>> {
+    let run = runtime.fleet_run(fleet_run_id)?;
+    FleetChangeSetReview::latest_bound(&run, &changes, &fleets).await
+}
+
+/// Drafts one independent typed ChangeSet per exact Fleet target and returns
+/// the real step previews, risks, rollback capabilities and policy results.
+#[tauri::command]
+pub async fn agent_v2_fleet_changeset_draft(
+    request: FleetChangeSetDraftRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    changes: State<'_, ChangeSetService>,
+    fleets: State<'_, FleetExecutionService>,
+    policies: State<'_, AgentPolicyService>,
+    sessions: State<'_, ServerSessionManager>,
+    tools: State<'_, NativeToolExecutionService>,
+) -> AppResult<FleetChangeSetReview> {
+    let run = runtime.fleet_run(request.fleet_run_id)?;
+    revalidate_fleet_run_sessions(&run, &sessions).await?;
+    FleetChangeSetReview::draft(&run, request, &changes, &fleets, &policies)
+        .await?
+        .capture_preconditions(&changes, &sessions, &tools)
+        .await
+}
+
+/// Seals the previously reviewed target-local preconditions and exact
+/// ChangeSet versions through the established Fleet approval boundary.
+#[tauri::command]
+pub async fn agent_v2_fleet_changeset_approve(
+    request: AgentV2FleetChangeActionRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    changes: State<'_, ChangeSetService>,
+    fleets: State<'_, FleetExecutionService>,
+    sessions: State<'_, ServerSessionManager>,
+) -> AppResult<MultiChangeSet> {
+    let run = runtime.fleet_run(request.fleet_run_id)?;
+    if run.version != request.fleet_run_version {
+        return Err(crate::domain::AppError::InvalidOperation);
+    }
+    revalidate_fleet_run_sessions(&run, &sessions).await?;
+    FleetChangeSetReview::approve(
+        &run,
+        request.execution_id,
+        request.execution_version,
+        &changes,
+        &fleets,
+    )
+    .await
+}
+
+/// Executes only a previously approved, still-exact Fleet ChangeSet through
+/// its existing sequential/canary/rolling verification pipeline.
+#[tauri::command]
+pub async fn agent_v2_fleet_changeset_execute(
+    request: AgentV2FleetChangeActionRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    changes: State<'_, ChangeSetService>,
+    fleets: State<'_, FleetExecutionService>,
+    policies: State<'_, AgentPolicyService>,
+    sessions: State<'_, ServerSessionManager>,
+    tools: State<'_, NativeToolExecutionService>,
+) -> AppResult<MultiChangeSet> {
+    let run = runtime.fleet_run(request.fleet_run_id)?;
+    if run.version != request.fleet_run_version {
+        return Err(crate::domain::AppError::InvalidOperation);
+    }
+    revalidate_fleet_run_sessions(&run, &sessions).await?;
+    FleetChangeSetReview::execute(
+        &run,
+        request.execution_id,
+        request.execution_version,
+        &changes,
+        &fleets,
+        &sessions,
+        &tools,
+        &policies,
+    )
+    .await
+}
+
 #[tauri::command]
 pub fn agent_v2_fleet_plan_list(
     runtime: State<'_, AgentRuntimeV2Service>,
 ) -> AppResult<Vec<FleetRunV2>> {
     runtime.fleet_runs()
+}
+
+/// Seals the current Fleet graph for review. This does not start execution.
+#[tauri::command]
+pub async fn agent_v2_fleet_plan_request_approval(
+    request: AgentV2FleetApprovalRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    sessions: State<'_, ServerSessionManager>,
+    policies: State<'_, AgentPolicyService>,
+) -> AppResult<FleetApprovalV2> {
+    let run = runtime.fleet_run(request.fleet_run_id)?;
+    revalidate_fleet_run_sessions(&run, &sessions).await?;
+    let (policy_version, policy_hash) = policies.command_approval_identity().await;
+    runtime.request_fleet_approval(
+        request.fleet_run_id,
+        request.version,
+        policy_version,
+        policy_hash,
+    )
+}
+
+#[tauri::command]
+pub async fn agent_v2_fleet_plan_approve(
+    request: AgentV2FleetApprovalActionRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    sessions: State<'_, ServerSessionManager>,
+    policies: State<'_, AgentPolicyService>,
+) -> AppResult<FleetApprovalV2> {
+    let run = runtime.fleet_run(request.fleet_run_id)?;
+    revalidate_fleet_run_sessions(&run, &sessions).await?;
+    let (policy_version, policy_hash) = policies.command_approval_identity().await;
+    runtime.decide_fleet_approval(
+        request.fleet_run_id,
+        request.approval_id,
+        true,
+        policy_version,
+        &policy_hash,
+    )
+}
+
+#[tauri::command]
+pub async fn agent_v2_fleet_plan_reject(
+    request: AgentV2FleetApprovalActionRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    policies: State<'_, AgentPolicyService>,
+) -> AppResult<FleetApprovalV2> {
+    let (policy_version, policy_hash) = policies.command_approval_identity().await;
+    runtime.decide_fleet_approval(
+        request.fleet_run_id,
+        request.approval_id,
+        false,
+        policy_version,
+        &policy_hash,
+    )
+}
+
+#[tauri::command]
+pub fn agent_v2_fleet_events_after(
+    fleet_run_id: Uuid,
+    after_seq: u64,
+    runtime: State<'_, AgentRuntimeV2Service>,
+) -> AppResult<Vec<FleetEventEnvelopeV2>> {
+    runtime.fleet_events_after(fleet_run_id, after_seq)
+}
+
+/// Explicitly starts the next scheduler batch after Fleet approval. Child
+/// commands remain individually approval-gated by Runtime V2.
+#[tauri::command]
+pub async fn agent_v2_fleet_plan_start(
+    request: AgentV2FleetStartRequest,
+    app: AppHandle,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    gateway: State<'_, Arc<ModelGateway>>,
+    sessions: State<'_, ServerSessionManager>,
+    policies: State<'_, AgentPolicyService>,
+) -> AppResult<Vec<Uuid>> {
+    runtime
+        .start_fleet_children(
+            app,
+            gateway.inner().clone(),
+            request.fleet_run_id,
+            request.approval_id,
+            request.capacity,
+            &sessions,
+            &policies,
+        )
+        .await
+}
+
+/// Rolls back only completed targets with real ChangeSet rollback payloads.
+/// The exact Fleet graph/session binding and execution version are rechecked
+/// before any rollback tool is invoked.
+#[tauri::command]
+pub async fn agent_v2_fleet_changeset_rollback(
+    request: AgentV2FleetChangeActionRequest,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    changes: State<'_, ChangeSetService>,
+    fleets: State<'_, FleetExecutionService>,
+    sessions: State<'_, ServerSessionManager>,
+    tools: State<'_, NativeToolExecutionService>,
+) -> AppResult<MultiChangeSet> {
+    let run = runtime.fleet_run(request.fleet_run_id)?;
+    if run.version != request.fleet_run_version {
+        return Err(crate::domain::AppError::InvalidOperation);
+    }
+    revalidate_fleet_run_sessions(&run, &sessions).await?;
+    FleetChangeSetReview::rollback(
+        &run,
+        request.execution_id,
+        request.execution_version,
+        &changes,
+        &fleets,
+        &sessions,
+        &tools,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn agent_v2_fleet_plan_pause(
+    fleet_run_id: Uuid,
+    runtime: State<'_, AgentRuntimeV2Service>,
+) -> AppResult<Vec<Uuid>> {
+    runtime.pause_fleet(fleet_run_id).await
+}
+
+/// Continues the same live, approved Fleet graph after explicit review. Rust
+/// revalidates every target/session and policy binding before retiring paused
+/// child controllers and creating bounded fresh attempts.
+#[tauri::command]
+pub async fn agent_v2_fleet_plan_continue(
+    request: AgentV2FleetContinueRequest,
+    app: AppHandle,
+    runtime: State<'_, AgentRuntimeV2Service>,
+    gateway: State<'_, Arc<ModelGateway>>,
+    sessions: State<'_, ServerSessionManager>,
+    policies: State<'_, AgentPolicyService>,
+) -> AppResult<Vec<Uuid>> {
+    runtime
+        .continue_fleet(
+            app,
+            gateway.inner().clone(),
+            request.fleet_run_id,
+            request.approval_id,
+            &sessions,
+            &policies,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn agent_v2_fleet_plan_cancel(
+    fleet_run_id: Uuid,
+    runtime: State<'_, AgentRuntimeV2Service>,
+) -> AppResult<Vec<Uuid>> {
+    runtime.cancel_fleet(fleet_run_id).await
 }
 
 #[derive(Debug, Serialize)]

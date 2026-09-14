@@ -51,6 +51,18 @@ describe("Agent run error presentation", () => {
     expect(markup).toContain('src="data:image/webp;base64,cached"');
   });
 
+  it("falls back to display-name initials when no avatar image is available", () => {
+    const userMessage: AgentEventEnvelope = {
+      runId: "run-1", seq: 1, timestampEpochMs: 1000,
+      event: { type: "user_message_added", payload: { content: "Install PM2" } },
+    };
+    const markup = renderToStaticMarkup(
+      <AgentTimeline events={[userMessage]} userDisplayName="张三" expanded={{}} onToggle={() => {}} onApprove={() => {}} onReject={() => {}} />,
+    );
+    expect(markup).toContain('class="agent-user-avatar"');
+    expect(markup).toContain(">张<");
+  });
+
   it("shows an approval IPC failure while the run remains awaiting approval", () => {
     const markup = renderToStaticMarkup(
       <AgentRunError events={[]} lastErrorCode="INVALID_OPERATION" running />,

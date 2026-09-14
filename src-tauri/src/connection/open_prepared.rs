@@ -69,16 +69,15 @@ pub async fn open_prepared_ssh_session_on_transport(
 
     let observed = Arc::new(Mutex::new(None::<HostKeyInfo>));
     let handler = HostKeyHandler::new(expected, Arc::clone(&observed));
-    let prefer_host_certs = matches!(
-        prepared.ssh.auth,
-        SshAuthPlan::OpenSshCert { .. }
-    ) || matches!(
-        &prepared.ssh.host_identity,
-        HostIdentityPolicy::ProviderManaged { provider_id, .. } if provider_id == "teleport"
-    ) || matches!(
-        &prepared.ssh.host_identity,
-        HostIdentityPolicy::HostCertificateAuthority { .. }
-    );
+    let prefer_host_certs = matches!(prepared.ssh.auth, SshAuthPlan::OpenSshCert { .. })
+        || matches!(
+            &prepared.ssh.host_identity,
+            HostIdentityPolicy::ProviderManaged { provider_id, .. } if provider_id == "teleport"
+        )
+        || matches!(
+            &prepared.ssh.host_identity,
+            HostIdentityPolicy::HostCertificateAuthority { .. }
+        );
     let config = Arc::new(if prepared.ssh.bastion_gateway {
         bastion_like_config()
     } else {
@@ -119,7 +118,15 @@ pub async fn open_prepared_ssh_session_on_transport(
         .await
         .map_err(|_| BastionError::SessionRejected)?;
     channel
-        .request_pty(false, "xterm-256color", u32::from(cols), u32::from(rows), 0, 0, &[])
+        .request_pty(
+            false,
+            "xterm-256color",
+            u32::from(cols),
+            u32::from(rows),
+            0,
+            0,
+            &[],
+        )
         .await
         .map_err(|_| BastionError::SessionRejected)?;
     channel

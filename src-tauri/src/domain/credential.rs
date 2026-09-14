@@ -18,6 +18,8 @@ pub enum CredentialKind {
     LlmApiKey,
     /// Boundary / bastion control-plane auth token (keyed by ServerProfile id).
     BastionToken,
+    /// JumpServer Access Key material stored as `id:secret` (never in Profile JSON).
+    BastionAccessKey,
     /// Optional target SSH password when overriding Boundary-brokered credentials.
     BastionTargetPassword,
 }

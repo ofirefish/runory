@@ -89,7 +89,10 @@ pub trait ExternalHelperManager: Send + Sync {
 
     async fn spawn_stdio_proxy(&self, spec: ProcessSpec) -> Result<StdioProxyHandle, HelperError>;
 
-    async fn spawn_local_proxy(&self, spec: LocalProxySpec) -> Result<LocalProxyHandle, HelperError>;
+    async fn spawn_local_proxy(
+        &self,
+        spec: LocalProxySpec,
+    ) -> Result<LocalProxyHandle, HelperError>;
 
     async fn wait_ready(&self, process: &HelperProcess) -> Result<(), HelperError>;
 
@@ -180,7 +183,10 @@ impl ExternalHelperManager for DefaultExternalHelperManager {
         stdio::spawn_stdio_proxy(self, spec).await
     }
 
-    async fn spawn_local_proxy(&self, spec: LocalProxySpec) -> Result<LocalProxyHandle, HelperError> {
+    async fn spawn_local_proxy(
+        &self,
+        spec: LocalProxySpec,
+    ) -> Result<LocalProxyHandle, HelperError> {
         local_proxy::spawn_local_proxy(self, spec).await
     }
 

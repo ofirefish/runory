@@ -2,9 +2,7 @@ use async_trait::async_trait;
 
 use super::account::BastionAccount;
 use super::asset::{AssetPage, AssetQuery, BastionAsset};
-use super::auth::{
-    AuthChallengeResponse, AuthSession, AuthStepResult, BastionCredential,
-};
+use super::auth::{AuthChallengeResponse, AuthSession, AuthStepResult, BastionCredential};
 use super::capabilities::{BastionCapabilities, ProviderLimits};
 use super::errors::BastionError;
 use super::session::{
@@ -25,10 +23,7 @@ pub trait BastionProvider: Send + Sync {
         ProviderLimits::default()
     }
 
-    async fn probe(
-        &self,
-        endpoint: &BastionEndpoint,
-    ) -> Result<BastionProbeResult, BastionError>;
+    async fn probe(&self, endpoint: &BastionEndpoint) -> Result<BastionProbeResult, BastionError>;
 
     async fn start_auth(
         &self,

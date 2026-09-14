@@ -22,7 +22,11 @@ pub(crate) use changes::{
     ApprovalState, ChangeSet, ChangeSetDraftRequest, ChangeSetService, ExecutionState,
     PolicyCheckContext,
 };
-pub(crate) use fleet::FleetExecutionService;
+pub(crate) use fleet::{
+    ExecutionStrategy, FailurePolicy, FleetExecutionService, FleetOrchestrationBinding,
+    FleetOrchestrationTargetBinding, FleetRecoveryState, MultiChangeSet,
+    MultiChangeSetDraftRequest,
+};
 pub(crate) use incident::{
     Incident, IncidentAuditExport, IncidentChangeSet, IncidentClosureRequest,
     IncidentHandoffRequest, IncidentRequest, IncidentService,

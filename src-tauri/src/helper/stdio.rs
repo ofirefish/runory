@@ -78,10 +78,7 @@ pub async fn spawn_stdio_proxy(
     spec.stdout = true;
     spec.stderr = true;
     let process = spawn(spec).await?;
-    let mut child = process
-        .take_child()
-        .await
-        .ok_or(HelperError::SpawnFailed)?;
+    let mut child = process.take_child().await.ok_or(HelperError::SpawnFailed)?;
     let stdin = child.stdin.take().ok_or(HelperError::SpawnFailed)?;
     let stdout = child.stdout.take().ok_or(HelperError::SpawnFailed)?;
     // Drain stderr so Teleport diagnostics cannot block the SSH byte stream on a full pipe.

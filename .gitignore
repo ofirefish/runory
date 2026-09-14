@@ -25,3 +25,5 @@ tests/ssh-server/generated/
 # Updater signing private key
 runory-updater.key
 supabase/.temp/
+.vercel
+.env*

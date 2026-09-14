@@ -133,10 +133,13 @@ fn parse_semver_prefix(s: &str) -> Option<HelperVersion> {
     let mut parts = s.split('.');
     let major: u32 = parts.next()?.parse().ok()?;
     let minor: u32 = parts.next()?.parse().ok()?;
-    let patch: u32 = parts.next().and_then(|p| {
-        let digits: String = p.chars().take_while(|c| c.is_ascii_digit()).collect();
-        digits.parse().ok()
-    }).unwrap_or(0);
+    let patch: u32 = parts
+        .next()
+        .and_then(|p| {
+            let digits: String = p.chars().take_while(|c| c.is_ascii_digit()).collect();
+            digits.parse().ok()
+        })
+        .unwrap_or(0);
     Some(HelperVersion {
         raw: format!("{major}.{minor}.{patch}"),
         major,

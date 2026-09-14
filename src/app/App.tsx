@@ -7,6 +7,7 @@ import { PrimaryNavigationRail } from "../components/layout/PrimaryNavigationRai
 import { SettingsPanel, type SettingsSection } from "../features/settings/SettingsPanel";
 import { DesktopUpdateController } from "../features/settings/DesktopUpdateController";
 import { MobilePrivacyGuard } from "../features/mobile/MobilePrivacyGuard";
+import { useLanguage } from "../hooks/use-language";
 import { useTheme } from "../hooks/use-theme";
 import { useCatalogStore } from "../stores/catalog-store";
 import { useSessionStore } from "../stores/session-store";
@@ -19,6 +20,7 @@ const PricingDialog = lazy(() => import("../features/settings/PricingDialog").th
 export function App() {
   const { t } = useTranslation();
   useTheme();
+  useLanguage();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [activeNavigation, setActiveNavigation] = useState<"servers" | "sessions" | "tunnels">("servers");
   const [tunnelProfileId, setTunnelProfileId] = useState<string | undefined>();

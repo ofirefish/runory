@@ -14,6 +14,13 @@ mod decision;
 mod dispatch;
 mod event;
 mod facts;
+mod fleet_changeset;
+mod fleet_control;
+mod fleet_facts;
+// Scheduling is Rust-only groundwork; Tauri exposure intentionally waits for
+// the child Runtime V2 driver so React can never become the scheduler.
+#[allow(dead_code)]
+mod fleet_coordinator;
 mod fleet_run;
 mod fleet_target;
 mod gate;
@@ -49,9 +56,15 @@ pub use decision::{
 };
 pub use dispatch::{ToolDispatcher, ToolOutcome};
 pub use event::{AgentEvent, AgentEventEnvelope};
-pub(crate) use fleet_run::{FleetFailurePolicyV2, FleetRunV2, FleetStageDraft};
+pub(crate) use fleet_changeset::{FleetChangeSetDraftRequest, FleetChangeSetReview};
+pub(crate) use fleet_control::{FleetApprovalV2, FleetEventEnvelopeV2};
+pub(crate) use fleet_facts::FleetInvestigationView;
+pub(crate) use fleet_run::{
+    FleetExecutionStrategyV2, FleetFailurePolicyV2, FleetRunV2, FleetStageDraft,
+};
 pub(crate) use fleet_target::{
-    validate_fleet_target_shape, FleetTargetBinding, FleetTargetRequest,
+    validate_fleet_target_sessions, validate_fleet_target_shape, FleetTargetBinding,
+    FleetTargetRequest,
 };
 pub use gate::{
     Authorization, AuthorizationGate, AutoAuthorizationGate, CommandAuthorization,

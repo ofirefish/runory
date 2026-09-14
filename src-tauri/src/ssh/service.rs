@@ -71,7 +71,9 @@ impl SshService {
     /// identifiers are often reset by KoKo during KEX (Windows 10054).
     pub async fn scan_bastion_gateway_host_key(host: &str, port: u16) -> AppResult<HostKeyInfo> {
         Self::assert_ssh_banner(host, port).await?;
-        Self::scan_host_key_with_config(host, port, bastion_gateway_client_config()).await
+        Self::scan_host_key_with_config(host, port, bastion_gateway_client_config())
+            .await
+            .map_err(|error| enrich_bastion_gateway_probe_error(host, port, error))
     }
 
     /// Fail fast when the port accepts TCP but does not speak SSH (common misconfigured KoKo port).
@@ -89,13 +91,15 @@ impl SshService {
                     "[runory ssh] ssh banner probe failed host={host} port={port} code={}",
                     error.code()
                 );
-                Err(error)
+                Err(enrich_bastion_gateway_probe_error(host, port, error))
             }
             Err(_) => {
                 eprintln!(
                     "[runory ssh] ssh banner timeout host={host} port={port} (TCP open but no SSH- greeting)"
                 );
-                Err(AppError::BastionKokoUnreachable)
+                Err(AppError::BastionKokoUnreachable {
+                    endpoint: crate::domain::format_ssh_endpoint(host, port),
+                })
             }
         }
     }
@@ -220,7 +224,10 @@ impl SshService {
             .await
             .map_err(map_russh_error)?;
         // KoKo may attach the target slowly; do not block on a shell success reply.
-        channel.request_shell(false).await.map_err(map_russh_error)?;
+        channel
+            .request_shell(false)
+            .await
+            .map_err(map_russh_error)?;
         let (reader, writer) = channel.split();
         Ok(OpenedSession {
             client,
@@ -336,26 +343,20 @@ async fn authenticate_with_config(
         expected_fingerprint: Some(expected_fingerprint.clone()),
         observed: Arc::clone(&observed),
     };
-    let mut client = match connect_transport_with_config(
-        &request.host,
-        request.port,
-        handler,
-        config,
-    )
-    .await
-    {
-        Ok(client) => client,
-        Err(error) => {
-            if let Some(actual) = observed
-                .lock()
-                .ok()
-                .and_then(|value| value.as_ref().map(|info| info.fingerprint.clone()))
-            {
-                verify_exact_fingerprint(&expected_fingerprint, &actual)?;
+    let mut client =
+        match connect_transport_with_config(&request.host, request.port, handler, config).await {
+            Ok(client) => client,
+            Err(error) => {
+                if let Some(actual) = observed
+                    .lock()
+                    .ok()
+                    .and_then(|value| value.as_ref().map(|info| info.fingerprint.clone()))
+                {
+                    verify_exact_fingerprint(&expected_fingerprint, &actual)?;
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
-    };
+        };
     let actual = observed
         .lock()
         .ok()
@@ -579,11 +580,14 @@ fn verify_exact_fingerprint(expected: &str, actual: &str) -> AppResult<()> {
 
 async fn read_ssh_banner(host: &str, port: u16) -> AppResult<String> {
     use tokio::io::AsyncReadExt;
+    let endpoint = crate::domain::format_ssh_endpoint(host, port);
     let mut stream = tokio::net::TcpStream::connect((host, port))
         .await
         .map_err(|error| {
             eprintln!("[runory ssh] banner tcp connect failed: {error}");
-            AppError::ConnectionRefused
+            AppError::BastionGatewayUnreachable {
+                endpoint: endpoint.clone(),
+            }
         })?;
     let _ = stream.set_nodelay(true);
     let mut buf = vec![0_u8; 256];
@@ -597,9 +601,13 @@ async fn read_ssh_banner(host: &str, port: u16) -> AppResult<String> {
                     | std::io::ErrorKind::ConnectionAborted
                     | std::io::ErrorKind::BrokenPipe
             ) {
-                AppError::BastionKokoUnreachable
+                AppError::BastionKokoUnreachable {
+                    endpoint: endpoint.clone(),
+                }
             } else {
-                AppError::ConnectionRefused
+                AppError::BastionGatewayUnreachable {
+                    endpoint: endpoint.clone(),
+                }
             }
         })?;
         if n == 0 {
@@ -619,7 +627,7 @@ async fn read_ssh_banner(host: &str, port: u16) -> AppResult<String> {
             collected.len(),
             banner.chars().take(80).collect::<String>()
         );
-        Err(AppError::BastionKokoUnreachable)
+        Err(AppError::BastionKokoUnreachable { endpoint })
     }
 }
 
@@ -650,8 +658,33 @@ fn direct_client_config() -> client::Config {
 }
 
 fn bastion_gateway_client_config() -> client::Config {
+    use russh::keys::{Algorithm, EcdsaCurve, HashAlg};
+    use russh::{Preferred, SshId};
     use std::borrow::Cow;
-    use russh::SshId;
+    // KoKo typically offers only an RSA host key. Prefer rsa-sha2-* (OpenSSH order) before
+    // legacy ssh-rsa; requires the russh `rsa` feature for signature verification.
+    let preferred = Preferred {
+        key: Cow::Borrowed(&[
+            Algorithm::Rsa {
+                hash: Some(HashAlg::Sha512),
+            },
+            Algorithm::Rsa {
+                hash: Some(HashAlg::Sha256),
+            },
+            Algorithm::Rsa { hash: None },
+            Algorithm::Ed25519,
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP384,
+            },
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP521,
+            },
+        ]),
+        ..Preferred::DEFAULT
+    };
     client::Config {
         client_id: SshId::Standard(Cow::Borrowed("SSH-2.0-OpenSSH_9.6")),
         // JumpServer KoKo keepalive replies are incompatible with russh (Eugeny/russh#567).
@@ -659,6 +692,7 @@ fn bastion_gateway_client_config() -> client::Config {
         keepalive_max: 0,
         inactivity_timeout: None,
         nodelay: true,
+        preferred,
         ..Default::default()
     }
 }
@@ -697,6 +731,23 @@ fn validate_endpoint(host: &str, port: u16) -> AppResult<()> {
     }
 }
 
+/// Attach the probed `host:port` when a bastion gateway TCP/SSH probe fails.
+fn enrich_bastion_gateway_probe_error(host: &str, port: u16, error: AppError) -> AppError {
+    let endpoint = crate::domain::format_ssh_endpoint(host, port);
+    match error {
+        AppError::ConnectionRefused | AppError::ConnectionTimeout => {
+            AppError::BastionGatewayUnreachable { endpoint }
+        }
+        AppError::BastionKokoUnreachable { endpoint: _ } => {
+            AppError::BastionKokoUnreachable { endpoint }
+        }
+        AppError::BastionGatewayUnreachable { endpoint: _ } => {
+            AppError::BastionGatewayUnreachable { endpoint }
+        }
+        other => other,
+    }
+}
+
 pub(crate) fn map_russh_error(error: russh::Error) -> AppError {
     // Always print — bastion debugging must be visible even if tracing filter is tight.
     eprintln!("[runory ssh] russh error: {error:?} ({error})");
@@ -704,6 +755,7 @@ pub(crate) fn map_russh_error(error: russh::Error) -> AppError {
     match error {
         russh::Error::ConnectionTimeout => AppError::ConnectionTimeout,
         russh::Error::Disconnect => AppError::ConnectionLost,
+        russh::Error::WrongServerSig => AppError::HostKeyUnknown,
         russh::Error::IO(ref io)
             if matches!(
                 io.kind(),
@@ -738,6 +790,7 @@ mod integration_tests {
     use crate::transfers::{LocalFileGrant, LocalFileGrantKind, TransferQueue};
     use russh::{ChannelMsg, Disconnect};
     use tokio::sync::Mutex as TokioMutex;
+    use uuid::Uuid;
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -791,6 +844,34 @@ mod integration_tests {
         assert!(status.success(), "docker compose command failed");
     }
 
+    fn try_mysql_fixture_query(service: &str, sql: &str) -> Option<String> {
+        let output = std::process::Command::new("docker")
+            .args([
+                "compose",
+                "--profile",
+                "mysql-fleet",
+                "exec",
+                "-T",
+                service,
+                "sh",
+                "-c",
+                "MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" exec mysql --batch --skip-column-names -uroot -e \"$1\"",
+                "runory-mysql-query",
+                sql,
+            ])
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."))
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    }
+
+    fn mysql_fixture_query(service: &str, sql: &str) -> String {
+        try_mysql_fixture_query(service, sql).expect("MySQL fixture query")
+    }
+
     async fn wait_for_fixture() {
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -823,6 +904,188 @@ mod integration_tests {
             cols: 100,
             rows: 30,
         }
+    }
+
+    fn fleet_node_count() -> usize {
+        std::env::var("RUNORY_FLEET_NODE_COUNT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(3)
+            .clamp(3, 10)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires docker compose --profile fleet OpenSSH fixtures"]
+    async fn fleet_fixture_authenticates_three_to_ten_distinct_openssh_targets() {
+        let _guard = integration_lock().lock().await;
+        let node_count = fleet_node_count();
+        let mut probes = tokio::task::JoinSet::new();
+        for index in 0..node_count {
+            let port = 2231 + index as u16;
+            probes.spawn(async move {
+                tokio::time::timeout(Duration::from_secs(30), async move {
+                    loop {
+                        if let Ok(key) = SshService::scan_host_key("127.0.0.1", port).await {
+                            let result = SshService::test_connection(
+                                connection_on_port(
+                                    port,
+                                    SshAuthentication::Password {
+                                        password: zeroize::Zeroizing::new("runory-spike".into()),
+                                    },
+                                ),
+                                key.fingerprint.clone(),
+                            )
+                            .await;
+                            if result.is_ok() {
+                                break key.fingerprint;
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                })
+                .await
+                .expect("Fleet node startup timeout")
+            });
+        }
+        let mut fingerprints = std::collections::HashSet::new();
+        while let Some(result) = probes.join_next().await {
+            fingerprints.insert(result.expect("Fleet node probe task"));
+        }
+        assert_eq!(
+            fingerprints.len(),
+            node_count,
+            "each Fleet node needs an independent host identity"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires docker compose --profile fleet OpenSSH fixtures"]
+    async fn fleet_target_binding_fails_closed_after_mismatch_and_disconnect() {
+        let _guard = integration_lock().lock().await;
+        let manager = crate::ssh::ServerSessionManager::default();
+        let profile_id = Uuid::new_v4();
+        let port = 2233;
+        let fingerprint = current_fingerprint_on_port(port).await;
+        let session_id = manager
+            .connect(
+                profile_id,
+                ConnectRequest {
+                    connection: connection_on_port(
+                        port,
+                        SshAuthentication::Password {
+                            password: zeroize::Zeroizing::new("runory-spike".into()),
+                        },
+                    ),
+                    cols: 100,
+                    rows: 30,
+                },
+                fingerprint,
+                tauri::ipc::Channel::new(|_| Ok(())),
+            )
+            .await
+            .expect("connect Fleet target session");
+        let binding = crate::agent::FleetTargetBinding {
+            profile_id,
+            session_id,
+            role: Some("replica".into()),
+            ordinal: 0,
+        };
+        crate::agent::validate_fleet_target_sessions(std::slice::from_ref(&binding), &manager)
+            .await
+            .expect("valid exact binding");
+
+        let mut mismatched = binding.clone();
+        mismatched.profile_id = Uuid::new_v4();
+        assert!(matches!(
+            crate::agent::validate_fleet_target_sessions(&[mismatched], &manager).await,
+            Err(AppError::AgentFleetTargetMismatch)
+        ));
+
+        docker_compose(&["--profile", "fleet", "stop", "fleet-03"]);
+        // Direct SSH sessions use a 30-second inactivity timeout plus keepalive,
+        // so allow one complete detection window before declaring a failure.
+        let disconnected = tokio::time::timeout(Duration::from_secs(45), async {
+            loop {
+                match crate::agent::validate_fleet_target_sessions(
+                    std::slice::from_ref(&binding),
+                    &manager,
+                )
+                .await
+                {
+                    Err(AppError::ConnectionLost) => break true,
+                    _ => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+        docker_compose(&["--profile", "fleet", "start", "fleet-03"]);
+        assert!(disconnected, "disconnected Fleet sessions must fail closed");
+        assert!(matches!(
+            crate::agent::validate_fleet_target_sessions(&[binding], &manager).await,
+            // The output task may remove the dead session after the probe sees
+            // ConnectionLost. Either result prevents the old exact binding
+            // from becoming valid again when the container restarts.
+            Err(AppError::ConnectionLost | AppError::SessionNotFound)
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires docker compose --profile mysql-fleet MySQL fixtures"]
+    async fn mysql_gtid_fixture_replicates_deterministic_write_and_reports_topology() {
+        let _guard = integration_lock().lock().await;
+        let source = mysql_fixture_query(
+            "mysql-source",
+            "SELECT CONCAT(@@server_id, '|', @@gtid_mode, '|', @@read_only, '|', @@server_uuid)",
+        );
+        let replica = mysql_fixture_query(
+            "mysql-replica",
+            "SELECT CONCAT(@@server_id, '|', @@gtid_mode, '|', @@read_only, '|', @@server_uuid)",
+        );
+        let source_parts = source.split('|').collect::<Vec<_>>();
+        let replica_parts = replica.split('|').collect::<Vec<_>>();
+        assert_eq!(&source_parts[..3], ["101", "ON", "0"]);
+        assert_eq!(&replica_parts[..3], ["102", "ON", "1"]);
+        assert_ne!(source_parts[3], replica_parts[3]);
+
+        let payload = Uuid::new_v4().simple().to_string();
+        mysql_fixture_query(
+            "mysql-source",
+            &format!(
+                "INSERT INTO runory_qualification.replication_probe (id, payload) VALUES (1, '{payload}') ON DUPLICATE KEY UPDATE payload = '{payload}'"
+            ),
+        );
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if try_mysql_fixture_query(
+                    "mysql-replica",
+                    "SELECT payload FROM runory_qualification.replication_probe WHERE id = 1",
+                )
+                .as_deref()
+                    == Some(payload.as_str())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await
+        .expect("MySQL GTID replication timeout");
+
+        assert_eq!(
+            mysql_fixture_query(
+                "mysql-replica",
+                "SELECT SERVICE_STATE FROM performance_schema.replication_connection_status WHERE CHANNEL_NAME = ''",
+            ),
+            "ON"
+        );
+        assert_eq!(
+            mysql_fixture_query(
+                "mysql-replica",
+                "SELECT SERVICE_STATE FROM performance_schema.replication_applier_status WHERE CHANNEL_NAME = ''",
+            ),
+            "ON"
+        );
     }
 
     #[tokio::test]
@@ -1824,5 +2087,21 @@ mod integration_tests {
             known_hosts.prepare("127.0.0.1", 2222, changed).await,
             Err(AppError::HostKeyChanged)
         ));
+    }
+
+    /// Live probe against a local JumpServer KoKo (port 2222). Requires the russh `rsa`
+    /// feature so RSA host-key signatures verify.
+    #[tokio::test]
+    #[ignore = "requires local JumpServer KoKo on localhost:2222"]
+    async fn bastion_gateway_scans_jumpserver_rsa_host_key() {
+        let info = SshService::scan_bastion_gateway_host_key("localhost", 2222)
+            .await
+            .expect("KoKo RSA host key scan");
+        assert!(
+            info.key_type.contains("rsa") || info.key_type.contains("ssh-rsa"),
+            "unexpected key type {}",
+            info.key_type
+        );
+        assert!(!info.fingerprint.is_empty());
     }
 }

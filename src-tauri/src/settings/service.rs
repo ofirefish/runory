@@ -105,7 +105,10 @@ mod tests {
             updated.boundary_cli_path.as_deref(),
             Some(r"C:\Tools\boundary.exe")
         );
-        assert_eq!(updated.teleport_cli_path.as_deref(), Some(r"C:\Tools\tsh.exe"));
+        assert_eq!(
+            updated.teleport_cli_path.as_deref(),
+            Some(r"C:\Tools\tsh.exe")
+        );
 
         let cleared = service
             .update(AppSettingsPatch {
@@ -115,7 +118,10 @@ mod tests {
             .await
             .expect("clear boundary path");
         assert_eq!(cleared.boundary_cli_path, None);
-        assert_eq!(cleared.teleport_cli_path.as_deref(), Some(r"C:\Tools\tsh.exe"));
+        assert_eq!(
+            cleared.teleport_cli_path.as_deref(),
+            Some(r"C:\Tools\tsh.exe")
+        );
 
         let reloaded = SettingsService::new(
             SettingsRepository::new(JsonRepository::new(directory.path().join("settings.json"))),
@@ -127,6 +133,9 @@ mod tests {
         assert_eq!(reloaded.theme, Theme::Dark);
         assert_eq!(reloaded.language, Language::ZhCn);
         assert_eq!(reloaded.boundary_cli_path, None);
-        assert_eq!(reloaded.teleport_cli_path.as_deref(), Some(r"C:\Tools\tsh.exe"));
+        assert_eq!(
+            reloaded.teleport_cli_path.as_deref(),
+            Some(r"C:\Tools\tsh.exe")
+        );
     }
 }

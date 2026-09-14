@@ -23,15 +23,21 @@ pub struct TeleportConnectParams {
 impl TeleportConnectParams {
     pub fn from_endpoint(endpoint: &BastionEndpoint, username_hint: Option<&str>) -> Self {
         let proxy_addr = proxy_addr_from_endpoint(endpoint);
-        let cluster_name = string_config(&endpoint.provider_config, &["clusterName", "cluster_name"]);
-        let insecure = bool_config(&endpoint.provider_config, &["insecure", "insecureSkipVerify"])
-            || endpoint
-                .tls
-                .as_ref()
-                .map(|tls| tls.insecure_skip_verify)
-                .unwrap_or(false);
-        let teleport_user = string_config(&endpoint.provider_config, &["teleportUser", "teleport_user"])
-            .or_else(|| username_hint.map(str::to_string));
+        let cluster_name =
+            string_config(&endpoint.provider_config, &["clusterName", "cluster_name"]);
+        let insecure = bool_config(
+            &endpoint.provider_config,
+            &["insecure", "insecureSkipVerify"],
+        ) || endpoint
+            .tls
+            .as_ref()
+            .map(|tls| tls.insecure_skip_verify)
+            .unwrap_or(false);
+        let teleport_user = string_config(
+            &endpoint.provider_config,
+            &["teleportUser", "teleport_user"],
+        )
+        .or_else(|| username_hint.map(str::to_string));
         Self {
             proxy_addr,
             teleport_user,
@@ -141,7 +147,11 @@ impl TshClient {
             "login".into(),
             format!("--proxy={}", params.proxy_addr.trim()),
         ];
-        if let Some(user) = params.teleport_user.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
+        if let Some(user) = params
+            .teleport_user
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
         {
             args.push(format!("--user={user}"));
         }
@@ -311,28 +321,24 @@ fn string_config(config: &serde_json::Value, keys: &[&str]) -> Option<String> {
 }
 
 fn bool_config(config: &serde_json::Value, keys: &[&str]) -> bool {
-    keys.iter().any(|key| {
-        config
-            .get(*key)
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    })
+    keys.iter()
+        .any(|key| config.get(*key).and_then(|v| v.as_bool()).unwrap_or(false))
 }
 
 pub fn parse_tsh_status(value: &serde_json::Value) -> TshStatus {
     // Teleport 18 `tsh status --format=json` nests fields under `active`.
-    let root = value
-        .get("active")
-        .cloned()
-        .unwrap_or_else(|| {
-            if value.get("cluster").is_some() || value.get("username").is_some() {
-                value.clone()
-            } else if let Some(obj) = value.as_object() {
-                obj.values().next().cloned().unwrap_or_else(|| value.clone())
-            } else {
-                value.clone()
-            }
-        });
+    let root = value.get("active").cloned().unwrap_or_else(|| {
+        if value.get("cluster").is_some() || value.get("username").is_some() {
+            value.clone()
+        } else if let Some(obj) = value.as_object() {
+            obj.values()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| value.clone())
+        } else {
+            value.clone()
+        }
+    });
 
     let user = root
         .get("username")
@@ -349,7 +355,11 @@ pub fn parse_tsh_status(value: &serde_json::Value) -> TshStatus {
         .or_else(|| root.get("proxy_host"))
         .or_else(|| root.get("profile_url"))
         .and_then(|v| v.as_str())
-        .map(|s| s.trim_start_matches("https://").trim_start_matches("http://").to_string());
+        .map(|s| {
+            s.trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .to_string()
+        });
 
     let valid_until_ms = root
         .get("valid_until")
@@ -357,7 +367,10 @@ pub fn parse_tsh_status(value: &serde_json::Value) -> TshStatus {
         .and_then(parse_time_to_millis);
 
     let mut os_logins = Vec::new();
-    collect_logins(root.get("logins").or_else(|| root.get("login")), &mut os_logins);
+    collect_logins(
+        root.get("logins").or_else(|| root.get("login")),
+        &mut os_logins,
+    );
     // Traits may also list logins (Teleport 18).
     collect_logins(root.pointer("/traits/logins"), &mut os_logins);
     if let Some(roles) = root.get("roles").and_then(|v| v.as_array()) {
@@ -444,7 +457,12 @@ fn parse_rfc3339_millis(s: &str) -> Option<i64> {
 
     let (time, offset_secs) = if let Some(idx) = rest.rfind(['+', '-']) {
         // Avoid treating the date separator; offset always appears after HH:MM:SS.
-        if idx > 0 && rest.as_bytes().get(idx - 1).is_some_and(|b| b.is_ascii_digit()) {
+        if idx > 0
+            && rest
+                .as_bytes()
+                .get(idx - 1)
+                .is_some_and(|b| b.is_ascii_digit())
+        {
             let (time, off) = rest.split_at(idx);
             (time, parse_offset_secs(off)?)
         } else if rest.ends_with('Z') || rest.ends_with('z') {
@@ -843,7 +861,9 @@ Host *.teleport.local teleport.local
 
     #[test]
     fn load_live_teleport_identity_material() {
-        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap();
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap();
         let key_path = std::path::PathBuf::from(&home).join(".tsh/keys/teleport.local/runory-test");
         let cert_path = std::path::PathBuf::from(&home)
             .join(".tsh/keys/teleport.local/runory-test-ssh/teleport.local-cert.pub");
@@ -855,8 +875,9 @@ Host *.teleport.local teleport.local
         let cert_bytes = std::fs::read(&cert_path).unwrap();
         let key = russh::keys::decode_secret_key(std::str::from_utf8(&key_bytes).unwrap(), None)
             .expect("decode key");
-        let cert = russh::keys::Certificate::from_openssh(std::str::from_utf8(&cert_bytes).unwrap())
-            .expect("decode cert");
+        let cert =
+            russh::keys::Certificate::from_openssh(std::str::from_utf8(&cert_bytes).unwrap())
+                .expect("decode cert");
         eprintln!(
             "key ok alg={:?} cert principals={:?}",
             key.algorithm(),
@@ -868,7 +889,9 @@ Host *.teleport.local teleport.local
     #[tokio::test]
     #[ignore = "requires live Teleport cluster + tsh login"]
     async fn live_stdio_proxy_cert_auth_smoke() {
-        let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap();
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap();
         let key_path = std::path::PathBuf::from(&home).join(".tsh/keys/teleport.local/runory-test");
         let cert_path = std::path::PathBuf::from(&home)
             .join(".tsh/keys/teleport.local/runory-test-ssh/teleport.local-cert.pub");
@@ -904,7 +927,9 @@ Host *.teleport.local teleport.local
                 use tokio::io::AsyncReadExt;
                 let mut buf = [0u8; 512];
                 while let Ok(n) = err.read(&mut buf).await {
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     eprintln!("tsh-proxy-stderr: {}", String::from_utf8_lossy(&buf[..n]));
                 }
             });
@@ -956,7 +981,10 @@ Host *.teleport.local teleport.local
             }
         }
 
-        let stream = Stream { r: stdout, w: stdin };
+        let stream = Stream {
+            r: stdout,
+            w: stdin,
+        };
         let config = std::sync::Arc::new(russh::client::Config {
             preferred: russh::Preferred {
                 host_key_certificates: std::borrow::Cow::Borrowed(&[

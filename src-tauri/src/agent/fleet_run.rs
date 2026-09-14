@@ -20,6 +20,7 @@ pub enum FleetRunStateV2 {
     Investigating,
     Planning,
     AwaitingApproval,
+    Approved,
     Executing,
     Verifying,
     PausedForReview,
@@ -72,7 +73,8 @@ impl FleetRunStateV2 {
             Self::ValidatingTargets => matches!(next, Self::Investigating),
             Self::Investigating => matches!(next, Self::Planning | Self::PausedForReview),
             Self::Planning => matches!(next, Self::AwaitingApproval | Self::PausedForReview),
-            Self::AwaitingApproval => matches!(next, Self::Executing | Self::Planning),
+            Self::AwaitingApproval => matches!(next, Self::Approved | Self::Planning),
+            Self::Approved => matches!(next, Self::Executing | Self::Planning),
             Self::Executing => matches!(
                 next,
                 Self::Verifying | Self::PausedForReview | Self::RollingBack

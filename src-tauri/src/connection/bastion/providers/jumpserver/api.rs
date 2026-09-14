@@ -92,9 +92,7 @@ impl JumpServerApiAuth {
                 key_id: key_id.clone(),
                 secret: secret.clone(),
             },
-            Self::PrivateToken { token, .. } => {
-                JumpServerRequestAuth::PrivateToken(token.clone())
-            }
+            Self::PrivateToken { token, .. } => JumpServerRequestAuth::PrivateToken(token.clone()),
         }
     }
 }
@@ -242,13 +240,12 @@ impl<H: JumpServerHttp> JumpServerApiClient<H> {
             }) {
                 return Ok(user);
             }
-            let fallback = fallback_user_from_body(&response.body).unwrap_or_else(|| {
-                JumpServerUser {
+            let fallback =
+                fallback_user_from_body(&response.body).unwrap_or_else(|| JumpServerUser {
                     id: None,
                     username: "jumpserver-user".into(),
                     name: None,
-                }
-            });
+                });
             eprintln!(
                 "[runory jumpserver] current-user parse fallback username={}",
                 fallback.username
@@ -376,11 +373,7 @@ impl<H: JumpServerHttp> JumpServerApiClient<H> {
             .into_iter()
             .filter_map(parse_asset)
             .collect::<Vec<_>>();
-        let has_more = response
-            .body
-            .get("next")
-            .and_then(Value::as_str)
-            .is_some();
+        let has_more = response.body.get("next").and_then(Value::as_str).is_some();
         Ok((items, has_more))
     }
 
@@ -749,7 +742,9 @@ pub struct JumpServerAccountDto {
     pub privileged: bool,
 }
 
-fn parse_auth_response(response: JumpServerHttpResponse) -> Result<JumpServerAuthOutcome, BastionError> {
+fn parse_auth_response(
+    response: JumpServerHttpResponse,
+) -> Result<JumpServerAuthOutcome, BastionError> {
     let session_id = extract_session_id(&response);
     let error = response
         .body
@@ -791,7 +786,9 @@ fn parse_auth_response(response: JumpServerHttpResponse) -> Result<JumpServerAut
         .and_then(Value::as_str)
         .ok_or(BastionError::AuthenticationFailed)?
         .to_string();
-    Ok(JumpServerAuthOutcome::Authenticated(JumpServerToken { token }))
+    Ok(JumpServerAuthOutcome::Authenticated(JumpServerToken {
+        token,
+    }))
 }
 
 fn extract_session_id(response: &JumpServerHttpResponse) -> Option<String> {
@@ -831,10 +828,13 @@ fn looks_like_auth_failure(body: &Value) -> bool {
         || error.contains("mfa")
         || error.contains("otp")
         || error == "not_authenticated"
-        || body.get("detail").and_then(Value::as_str).is_some_and(|detail| {
-            detail.to_lowercase().contains("credential")
-                || detail.to_lowercase().contains("authenticat")
-        })
+        || body
+            .get("detail")
+            .and_then(Value::as_str)
+            .is_some_and(|detail| {
+                detail.to_lowercase().contains("credential")
+                    || detail.to_lowercase().contains("authenticat")
+            })
 }
 
 fn normalize_api_path(path: &str, base_path: &str) -> String {
@@ -942,10 +942,12 @@ fn parse_asset(value: Value) -> Option<JumpServerAssetDto> {
             .and_then(Value::as_str)
             .map(str::to_string),
         platform: value.get("platform").and_then(|platform| {
-            platform
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| platform.get("name").and_then(Value::as_str).map(str::to_string))
+            platform.as_str().map(str::to_string).or_else(|| {
+                platform
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
         }),
         protocols,
     })
@@ -994,7 +996,12 @@ fn parse_account(value: Value) -> Option<JumpServerAccountDto> {
                     .map(str::to_string)
                     .or_else(|| id.as_i64().map(|n| n.to_string()))
             })
-            .or_else(|| value.get("account").and_then(Value::as_str).map(str::to_string)),
+            .or_else(|| {
+                value
+                    .get("account")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
         username: username.clone(),
         name: name.or(Some(username)),
         alias,
@@ -1321,15 +1328,9 @@ mod tests {
         let calls = client.http.calls.lock().expect("lock");
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].1, "/api/v1/authentication/mfa/challenge/");
-        assert_eq!(
-            calls[0].2.as_deref(),
-            Some("jms_sessionid=sess-abc")
-        );
+        assert_eq!(calls[0].2.as_deref(), Some("jms_sessionid=sess-abc"));
         assert_eq!(calls[1].1, "/api/v1/authentication/auth/");
-        assert_eq!(
-            calls[1].2.as_deref(),
-            Some("jms_sessionid=sess-abc")
-        );
+        assert_eq!(calls[1].2.as_deref(), Some("jms_sessionid=sess-abc"));
     }
 
     #[test]

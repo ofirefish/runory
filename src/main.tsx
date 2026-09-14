@@ -4,6 +4,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import "./i18n";
 import { App } from "./app/App";
+import { applyLanguage } from "./hooks/use-language";
 import { applyTheme } from "./hooks/use-theme";
 import { useSettingsStore } from "./stores/settings-store";
 import { cloudConfigured } from "./lib/supabase/client";
@@ -26,6 +27,7 @@ async function bootstrap() {
     await initializeCloudOAuthDeepLinks().catch(() => undefined);
   }
   applyTheme(useSettingsStore.getState().theme);
+  await applyLanguage(useSettingsStore.getState().language);
   ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
 }
 

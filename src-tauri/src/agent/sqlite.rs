@@ -22,6 +22,10 @@ use super::approval::{ApprovalRequest, ApprovalRequestState};
 use super::checkpoint::AgentCheckpoint;
 use super::decision::{PreparedCommandProposal, PreparedToolCall};
 use super::event::{AgentEvent, AgentEventEnvelope};
+use super::fleet_control::{
+    FleetApprovalStateV2, FleetApprovalV2, FleetControlStore, FleetEventEnvelopeV2,
+    FleetEventKindV2, FLEET_APPROVAL_RECOVERED,
+};
 use super::fleet_run::{
     FleetChildRun, FleetRecoveryStateV2, FleetRunStateV2, FleetRunStore, FleetRunV2, FleetStage,
 };
@@ -35,7 +39,7 @@ use super::state::AgentRunStateV2;
 use crate::agentic::context::redact_secrets;
 
 /// Current schema version written by this build.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const EMPTY_JSON_OBJECT: &str = "{}";
 const EMPTY_JSON_ARRAY: &str = "[]";
@@ -147,6 +151,7 @@ impl SqliteAgentDatabase {
                 None => {
                     apply_v1(conn)?;
                     apply_v3(conn)?;
+                    apply_v4(conn)?;
                     conn.execute(
                         "INSERT INTO schema_version (version) VALUES (?1)",
                         params![SCHEMA_VERSION],
@@ -160,8 +165,13 @@ impl SqliteAgentDatabase {
                         1 => {
                             apply_v2(conn)?;
                             apply_v3(conn)?;
+                            apply_v4(conn)?;
                         }
-                        2 => apply_v3(conn)?,
+                        2 => {
+                            apply_v3(conn)?;
+                            apply_v4(conn)?;
+                        }
+                        3 => apply_v4(conn)?,
                         _ => return Err(AgentStoreError::MigrationFailed),
                     }
                     conn.execute(
@@ -466,6 +476,41 @@ fn apply_v3(conn: &Connection) -> Result<(), AgentStoreError> {
             error_code TEXT,
             PRIMARY KEY (fleet_run_id, stage_id, target_id, attempt)
          );",
+    )
+    .map_err(|_| AgentStoreError::MigrationFailed)
+}
+
+fn apply_v4(conn: &Connection) -> Result<(), AgentStoreError> {
+    conn.execute_batch(
+        "CREATE TABLE fleet_approvals_v2 (
+            id TEXT PRIMARY KEY NOT NULL,
+            fleet_run_id TEXT NOT NULL REFERENCES fleet_runs_v2(id) ON DELETE CASCADE,
+            fleet_version INTEGER NOT NULL,
+            graph_digest TEXT NOT NULL,
+            targets_json TEXT NOT NULL,
+            policy_version INTEGER NOT NULL,
+            policy_hash TEXT NOT NULL,
+            state TEXT NOT NULL,
+            invalidation_code TEXT,
+            created_at INTEGER NOT NULL,
+            decided_at INTEGER
+         );
+
+         CREATE TABLE fleet_events_v2 (
+            fleet_run_id TEXT NOT NULL REFERENCES fleet_runs_v2(id) ON DELETE CASCADE,
+            seq INTEGER NOT NULL,
+            timestamp_ms INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            approval_id TEXT,
+            code TEXT,
+            PRIMARY KEY (fleet_run_id, seq)
+         );
+
+         CREATE INDEX fleet_approvals_run_idx
+            ON fleet_approvals_v2(fleet_run_id, created_at);
+         CREATE INDEX fleet_events_run_idx
+            ON fleet_events_v2(fleet_run_id, seq);",
     )
     .map_err(|_| AgentStoreError::MigrationFailed)
 }
@@ -1507,9 +1552,182 @@ fn load_fleet_run(
     Ok(Some(run))
 }
 
+const MAX_DURABLE_FLEET_EVENTS: i64 = 512;
+
+fn append_fleet_event(
+    tx: &Transaction<'_>,
+    event: &FleetEventEnvelopeV2,
+) -> Result<(), AgentStoreError> {
+    let expected: i64 = tx
+        .query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM fleet_events_v2 WHERE fleet_run_id = ?1",
+            params![event.fleet_run_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    if checked_u64(expected)? != event.seq {
+        return Err(AgentStoreError::EventSequenceInvalid {
+            last: checked_u64(expected - 1)?,
+            attempted: event.seq,
+        });
+    }
+    tx.execute(
+        "INSERT INTO fleet_events_v2 (
+            fleet_run_id, seq, timestamp_ms, kind, state, approval_id, code
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            event.fleet_run_id.to_string(),
+            event.seq as i64,
+            event.timestamp_ms as i64,
+            fleet_enum_name(event.kind)?,
+            fleet_enum_name(event.state)?,
+            event.approval_id.map(|id| id.to_string()),
+            event.code.as_deref(),
+        ],
+    )
+    .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    tx.execute(
+        "DELETE FROM fleet_events_v2
+         WHERE fleet_run_id = ?1 AND seq <= (
+            SELECT COALESCE(MAX(seq), 0) - ?2 FROM fleet_events_v2 WHERE fleet_run_id = ?1
+         )",
+        params![event.fleet_run_id.to_string(), MAX_DURABLE_FLEET_EVENTS],
+    )
+    .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    Ok(())
+}
+
+fn insert_fleet_approval_row(
+    tx: &Transaction<'_>,
+    approval: &FleetApprovalV2,
+) -> Result<(), AgentStoreError> {
+    let targets =
+        serde_json::to_string(&approval.targets).map_err(|_| AgentStoreError::PersistenceFailed)?;
+    tx.execute(
+        "INSERT INTO fleet_approvals_v2 (
+            id, fleet_run_id, fleet_version, graph_digest, targets_json,
+            policy_version, policy_hash, state, invalidation_code, created_at, decided_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            approval.id.to_string(),
+            approval.fleet_run_id.to_string(),
+            approval.fleet_version as i64,
+            approval.graph_digest.as_str(),
+            targets,
+            approval.policy_version as i64,
+            approval.policy_hash.as_str(),
+            fleet_enum_name(approval.state)?,
+            approval.invalidation_code.as_deref(),
+            approval.created_at_epoch_ms as i64,
+            approval.decided_at_epoch_ms.map(|value| value as i64),
+        ],
+    )
+    .map_err(|_| AgentStoreError::PersistenceFailed)?;
+    Ok(())
+}
+
+fn load_fleet_approval(
+    conn: &Connection,
+    approval_id: Uuid,
+) -> Result<Option<FleetApprovalV2>, AgentStoreError> {
+    let row = conn
+        .query_row(
+            "SELECT id, fleet_run_id, fleet_version, graph_digest, targets_json,
+                    policy_version, policy_hash, state, invalidation_code, created_at, decided_at
+             FROM fleet_approvals_v2 WHERE id = ?1",
+            params![approval_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, Option<i64>>(10)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|_| AgentStoreError::StoreCorrupt)?;
+    let Some((
+        id,
+        run_id,
+        version,
+        graph_digest,
+        targets,
+        policy_version,
+        policy_hash,
+        state,
+        invalidation_code,
+        created,
+        decided,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let approval = FleetApprovalV2 {
+        id: parse_uuid(&id)?,
+        fleet_run_id: parse_uuid(&run_id)?,
+        fleet_version: checked_u64(version)?,
+        graph_digest,
+        targets: serde_json::from_str(&targets).map_err(|_| AgentStoreError::StoreCorrupt)?,
+        policy_version: checked_u64(policy_version)?,
+        policy_hash,
+        state: parse_fleet_enum(&state)?,
+        invalidation_code,
+        created_at_epoch_ms: checked_u64(created)?,
+        decided_at_epoch_ms: decided.map(checked_u64).transpose()?,
+    };
+    if approval.graph_digest.len() != 64 || approval.policy_hash.is_empty() {
+        return Err(AgentStoreError::StoreCorrupt);
+    }
+    Ok(Some(approval))
+}
+
+impl SqliteAgentDatabase {
+    /// Atomically persists a Fleet scheduling decision and the newly owned
+    /// child AgentRun identities. No controller is started by this method.
+    pub(crate) fn persist_fleet_schedule(
+        &self,
+        run: &FleetRunV2,
+        child_runs: &[AgentRun],
+        events: &[FleetEventEnvelopeV2],
+    ) -> Result<(), AgentStoreError> {
+        self.with_tx(|tx| {
+            write_fleet_run(tx, run, false)?;
+            for child in child_runs {
+                insert_run_new(tx, child)?;
+            }
+            for event in events {
+                append_fleet_event(tx, event)?;
+            }
+            Ok(())
+        })
+    }
+}
+
 impl FleetRunStore for SqliteAgentDatabase {
     fn insert_fleet_run(&self, run: &FleetRunV2) -> Result<(), AgentStoreError> {
-        self.with_tx(|tx| write_fleet_run(tx, run, true))
+        self.with_tx(|tx| {
+            write_fleet_run(tx, run, true)?;
+            append_fleet_event(
+                tx,
+                &FleetEventEnvelopeV2 {
+                    fleet_run_id: run.id,
+                    seq: 1,
+                    timestamp_ms: run.created_at_epoch_ms,
+                    kind: FleetEventKindV2::DraftCreated,
+                    state: run.state,
+                    approval_id: None,
+                    code: None,
+                },
+            )
+        })
     }
 
     fn save_fleet_run(&self, run: &FleetRunV2) -> Result<(), AgentStoreError> {
@@ -1556,13 +1774,14 @@ impl FleetRunStore for SqliteAgentDatabase {
             let changed = tx
                 .execute(
                     "UPDATE fleet_runs_v2 SET state = ?1, updated_at = ?2
-                     WHERE state IN (?3, ?4, ?5, ?6, ?7, ?8)",
+                     WHERE state IN (?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
                         interrupted,
                         now_ms() as i64,
                         fleet_enum_name(FleetRunStateV2::ValidatingTargets)?,
                         fleet_enum_name(FleetRunStateV2::Investigating)?,
                         fleet_enum_name(FleetRunStateV2::Planning)?,
+                        fleet_enum_name(FleetRunStateV2::Approved)?,
                         fleet_enum_name(FleetRunStateV2::Executing)?,
                         fleet_enum_name(FleetRunStateV2::Verifying)?,
                         fleet_enum_name(FleetRunStateV2::RollingBack)?,
@@ -1574,7 +1793,111 @@ impl FleetRunStore for SqliteAgentDatabase {
                 params![fleet_enum_name(FleetRecoveryStateV2::MetadataOnly)?],
             )
             .map_err(|_| AgentStoreError::PersistenceFailed)?;
+            tx.execute(
+                "UPDATE fleet_approvals_v2
+                 SET state = ?1, invalidation_code = ?2, decided_at = ?3
+                 WHERE state IN (?4, ?5)",
+                params![
+                    fleet_enum_name(FleetApprovalStateV2::Invalidated)?,
+                    FLEET_APPROVAL_RECOVERED,
+                    now_ms() as i64,
+                    fleet_enum_name(FleetApprovalStateV2::Pending)?,
+                    fleet_enum_name(FleetApprovalStateV2::Granted)?,
+                ],
+            )
+            .map_err(|_| AgentStoreError::PersistenceFailed)?;
             Ok(changed)
+        })
+    }
+}
+
+impl FleetControlStore for SqliteAgentDatabase {
+    fn insert_fleet_approval(
+        &self,
+        run: &FleetRunV2,
+        approval: &FleetApprovalV2,
+        event: &FleetEventEnvelopeV2,
+    ) -> Result<(), AgentStoreError> {
+        self.with_tx(|tx| {
+            write_fleet_run(tx, run, false)?;
+            insert_fleet_approval_row(tx, approval)?;
+            append_fleet_event(tx, event)
+        })
+    }
+
+    fn decide_fleet_approval(
+        &self,
+        run: &FleetRunV2,
+        approval: &FleetApprovalV2,
+        event: &FleetEventEnvelopeV2,
+    ) -> Result<(), AgentStoreError> {
+        self.with_tx(|tx| {
+            write_fleet_run(tx, run, false)?;
+            let changed = tx
+                .execute(
+                    "UPDATE fleet_approvals_v2 SET state = ?1, invalidation_code = ?2,
+                            decided_at = ?3 WHERE id = ?4",
+                    params![
+                        fleet_enum_name(approval.state)?,
+                        approval.invalidation_code.as_deref(),
+                        approval.decided_at_epoch_ms.map(|value| value as i64),
+                        approval.id.to_string(),
+                    ],
+                )
+                .map_err(|_| AgentStoreError::PersistenceFailed)?;
+            if changed != 1 {
+                return Err(AgentStoreError::ApprovalNotFound);
+            }
+            append_fleet_event(tx, event)
+        })
+    }
+
+    fn get_fleet_approval(
+        &self,
+        approval_id: Uuid,
+    ) -> Result<Option<FleetApprovalV2>, AgentStoreError> {
+        self.with_conn(|conn| load_fleet_approval(conn, approval_id))
+    }
+
+    fn fleet_events_after(
+        &self,
+        fleet_run_id: Uuid,
+        after_seq: u64,
+    ) -> Result<Vec<FleetEventEnvelopeV2>, AgentStoreError> {
+        self.with_conn(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT seq, timestamp_ms, kind, state, approval_id, code
+                     FROM fleet_events_v2 WHERE fleet_run_id = ?1 AND seq > ?2 ORDER BY seq",
+                )
+                .map_err(|_| AgentStoreError::PersistenceFailed)?;
+            let rows = stmt
+                .query_map(params![fleet_run_id.to_string(), after_seq as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                })
+                .map_err(|_| AgentStoreError::StoreCorrupt)?;
+            let mut events = Vec::new();
+            for row in rows {
+                let (seq, timestamp, kind, state, approval_id, code) =
+                    row.map_err(|_| AgentStoreError::StoreCorrupt)?;
+                events.push(FleetEventEnvelopeV2 {
+                    fleet_run_id,
+                    seq: checked_u64(seq)?,
+                    timestamp_ms: checked_u64(timestamp)?,
+                    kind: parse_fleet_enum(&kind)?,
+                    state: parse_fleet_enum(&state)?,
+                    approval_id: approval_id.as_deref().map(parse_uuid).transpose()?,
+                    code,
+                });
+            }
+            Ok(events)
         })
     }
 }
@@ -1589,6 +1912,10 @@ mod tests {
         validate_decision, AgentDecision, CommandProposalRequest, ToolCallRequest,
     };
     use crate::agent::event::AgentEvent;
+    use crate::agent::fleet_control::{
+        FleetApprovalStateV2, FleetApprovalV2, FleetControlStore, FleetEventEnvelopeV2,
+        FleetEventKindV2, FLEET_APPROVAL_RECOVERED,
+    };
     use crate::agent::fleet_run::{
         FleetExecutionStrategyV2, FleetFailurePolicyV2, FleetRunDraft, FleetStageDraft,
         FleetStageStateV2,
@@ -2145,5 +2472,161 @@ mod tests {
 
         let error = FleetRunStore::get_fleet_run(&db, run.id).expect_err("corrupt fleet");
         assert_eq!(error, AgentStoreError::StoreCorrupt);
+    }
+
+    #[test]
+    fn fleet_approval_and_events_round_trip_as_content_free_metadata() {
+        let db = SqliteAgentDatabase::open_in_memory().expect("open");
+        let mut run = fleet_run(FleetRunStateV2::AwaitingApproval);
+        FleetRunStore::insert_fleet_run(&db, &run).expect("insert fleet");
+        let mut approval = FleetApprovalV2::bind(&run, 3, "policy-hash".into(), 200).expect("bind");
+        let required = FleetEventEnvelopeV2 {
+            fleet_run_id: run.id,
+            seq: 2,
+            timestamp_ms: 200,
+            kind: FleetEventKindV2::ApprovalRequired,
+            state: run.state,
+            approval_id: Some(approval.id),
+            code: None,
+        };
+        FleetControlStore::insert_fleet_approval(&db, &run, &approval, &required)
+            .expect("persist approval");
+
+        approval.decide(FleetApprovalStateV2::Granted, 300);
+        run.state = FleetRunStateV2::Approved;
+        let granted = FleetEventEnvelopeV2 {
+            fleet_run_id: run.id,
+            seq: 3,
+            timestamp_ms: 300,
+            kind: FleetEventKindV2::ApprovalGranted,
+            state: run.state,
+            approval_id: Some(approval.id),
+            code: None,
+        };
+        FleetControlStore::decide_fleet_approval(&db, &run, &approval, &granted)
+            .expect("grant approval");
+
+        let stored = FleetControlStore::get_fleet_approval(&db, approval.id)
+            .expect("load approval")
+            .expect("approval exists");
+        assert_eq!(stored, approval);
+        let events = FleetControlStore::fleet_events_after(&db, run.id, 0).expect("events");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].kind, FleetEventKindV2::DraftCreated);
+        assert_eq!(events[2].kind, FleetEventKindV2::ApprovalGranted);
+
+        let dump = db
+            .with_conn(|conn| {
+                conn.query_row(
+                    "SELECT targets_json || policy_hash FROM fleet_approvals_v2 WHERE id = ?1",
+                    params![approval.id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|_| AgentStoreError::StoreCorrupt)
+            })
+            .expect("approval metadata");
+        assert!(!dump.contains("Inspect"));
+        assert!(!dump.contains("password"));
+    }
+
+    #[test]
+    fn fleet_recovery_invalidates_existing_approval_authority() {
+        let db = SqliteAgentDatabase::open_in_memory().expect("open");
+        let run = fleet_run(FleetRunStateV2::AwaitingApproval);
+        FleetRunStore::insert_fleet_run(&db, &run).expect("insert fleet");
+        let approval = FleetApprovalV2::bind(&run, 3, "policy-hash".into(), 200).expect("bind");
+        FleetControlStore::insert_fleet_approval(
+            &db,
+            &run,
+            &approval,
+            &FleetEventEnvelopeV2 {
+                fleet_run_id: run.id,
+                seq: 2,
+                timestamp_ms: 200,
+                kind: FleetEventKindV2::ApprovalRequired,
+                state: run.state,
+                approval_id: Some(approval.id),
+                code: None,
+            },
+        )
+        .expect("persist approval");
+
+        FleetRunStore::recover_fleet_runs(&db).expect("recover");
+        let recovered = FleetControlStore::get_fleet_approval(&db, approval.id)
+            .expect("load")
+            .expect("approval");
+        assert_eq!(recovered.state, FleetApprovalStateV2::Invalidated);
+        assert_eq!(
+            recovered.invalidation_code.as_deref(),
+            Some(FLEET_APPROVAL_RECOVERED)
+        );
+    }
+
+    #[test]
+    fn fleet_event_history_is_bounded_and_keeps_monotonic_sequence() {
+        let db = SqliteAgentDatabase::open_in_memory().expect("open");
+        let run = fleet_run(FleetRunStateV2::Draft);
+        FleetRunStore::insert_fleet_run(&db, &run).expect("insert fleet");
+        for seq in 2..=520 {
+            db.with_tx(|tx| {
+                append_fleet_event(
+                    tx,
+                    &FleetEventEnvelopeV2 {
+                        fleet_run_id: run.id,
+                        seq,
+                        timestamp_ms: 100 + seq,
+                        kind: FleetEventKindV2::StateChanged,
+                        state: FleetRunStateV2::Draft,
+                        approval_id: None,
+                        code: None,
+                    },
+                )
+            })
+            .expect("append event");
+        }
+        let events = FleetControlStore::fleet_events_after(&db, run.id, 0).expect("events");
+        assert_eq!(events.len(), MAX_DURABLE_FLEET_EVENTS as usize);
+        assert_eq!(events.first().map(|event| event.seq), Some(9));
+        assert_eq!(events.last().map(|event| event.seq), Some(520));
+    }
+
+    #[test]
+    fn fleet_schedule_atomically_persists_child_ownership() {
+        let db = SqliteAgentDatabase::open_in_memory().expect("open");
+        let mut run = fleet_run(FleetRunStateV2::Approved);
+        FleetRunStore::insert_fleet_run(&db, &run).expect("insert fleet");
+        let child = AgentRun::new(Uuid::new_v4());
+        run.children.push(FleetChildRun {
+            stage_id: run.stages[0].id,
+            target_id: run.targets[0].profile_id,
+            agent_run_id: Some(child.id()),
+            attempt: 1,
+            state: FleetStageStateV2::Running,
+            error_code: None,
+        });
+        db.persist_fleet_schedule(
+            &run,
+            std::slice::from_ref(&child),
+            &[FleetEventEnvelopeV2 {
+                fleet_run_id: run.id,
+                seq: 2,
+                timestamp_ms: 200,
+                kind: FleetEventKindV2::ChildClaimed,
+                state: run.state,
+                approval_id: None,
+                code: None,
+            }],
+        )
+        .expect("persist schedule");
+
+        assert!(AgentRunStore::get(&db, child.id())
+            .expect("load child")
+            .is_some());
+        let stored = FleetRunStore::get_fleet_run(&db, run.id)
+            .expect("load fleet")
+            .expect("fleet");
+        assert_eq!(stored.children[0].agent_run_id, Some(child.id()));
+        let events = FleetControlStore::fleet_events_after(&db, run.id, 1).expect("events");
+        assert_eq!(events[0].kind, FleetEventKindV2::ChildClaimed);
     }
 }

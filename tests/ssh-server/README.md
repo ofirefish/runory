@@ -54,3 +54,29 @@ cargo test production_fault_lab_correlates_three_real_openssh_targets -- --ignor
 ```
 
 The lab only varies typed fixture state. It does not expose an unrestricted command interface or change production execution policy.
+
+## Fleet qualification fixtures
+
+The `fleet` profile defines ten independent OpenSSH server identities on loopback ports
+2231–2240. Start the first three for the default qualification run:
+
+```powershell
+docker compose --profile fleet up -d --build fleet-01 fleet-02 fleet-03
+cd src-tauri
+cargo test fleet_fixture_authenticates_three_to_ten_distinct_openssh_targets -- --ignored
+cargo test fleet_target_binding_fails_closed_after_mismatch_and_disconnect -- --ignored
+```
+
+For the ten-node boundary, start every Fleet service and set the requested node count:
+
+```powershell
+docker compose --profile fleet up -d --build fleet-01 fleet-02 fleet-03 fleet-04 fleet-05 fleet-06 fleet-07 fleet-08 fleet-09 fleet-10
+cd src-tauri
+$env:RUNORY_FLEET_NODE_COUNT = "10"
+cargo test fleet_fixture_authenticates_three_to_ten_distinct_openssh_targets -- --ignored
+```
+
+The tests perform concurrent real host-key scans and password authentication, verify that
+every node has a distinct server identity, reject a mismatched profile/session binding, and
+stop/restart `fleet-03` to prove that an old exact session binding fails closed. The profile
+is test-only and exposes no production IPC or fault injection capability.

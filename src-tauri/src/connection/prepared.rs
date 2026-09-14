@@ -28,9 +28,7 @@ pub enum SshAuthPlan {
         password: zeroize::Zeroizing<String>,
     },
     /// SSH Core will prompt / use an already-open agent session.
-    Deferred {
-        username: String,
-    },
+    Deferred { username: String },
     /// OpenSSH certificate authentication (Teleport short-lived cert + private key).
     /// Certificate bytes are public; private key material is zeroized.
     OpenSshCert {

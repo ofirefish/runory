@@ -66,6 +66,7 @@ impl PortableCredentialVault {
             CredentialKind::McpToken => "mcp-token",
             CredentialKind::LlmApiKey => "llm-api-key",
             CredentialKind::BastionToken => "bastion-token",
+            CredentialKind::BastionAccessKey => "bastion-access-key",
             CredentialKind::BastionTargetPassword => "bastion-target-password",
         };
         format!("{prefix}:{profile_id}")

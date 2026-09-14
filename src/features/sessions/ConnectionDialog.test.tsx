@@ -59,6 +59,17 @@ afterEach(async () => {
 });
 
 describe("connection dialog progress", () => {
+  it("shows the detected OS logo in the header when the profile already has a distribution", async () => {
+    vi.mocked(ssh.credentialStatus).mockResolvedValue({ ...vault, hasCredential: false });
+    await act(async () => {
+      root.render(<ConnectionDialog profile={{ ...profile, osDistribution: "ubuntu" }} mode="connect" onClose={onClose} onConnect={onConnect} onTest={onTest} />);
+    });
+    const icon = container.querySelector(".connection-server-icon.has-os-logo");
+    expect(icon).toBeTruthy();
+    expect(icon?.querySelector(".host-os-logo")).toBeTruthy();
+    expect(icon?.getAttribute("style")).toContain("--os-logo-color");
+  });
+
   it("keeps keyboard focus in the dialog and allows Escape before connecting", async () => {
     vi.mocked(ssh.credentialStatus).mockResolvedValue({ ...vault, hasCredential: false });
     await render();

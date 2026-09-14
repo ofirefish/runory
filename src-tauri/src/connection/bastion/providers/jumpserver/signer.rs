@@ -40,9 +40,7 @@ impl JumpServerSigner {
         path_and_query: &str,
         date: Option<&str>,
     ) -> JumpServerSignedHeaders {
-        let date = date
-            .map(str::to_string)
-            .unwrap_or_else(http_date_gmt_now);
+        let date = date.map(str::to_string).unwrap_or_else(http_date_gmt_now);
         let method_lower = method.trim().to_ascii_lowercase();
         let path = if path_and_query.starts_with('/') {
             path_and_query.to_string()
@@ -169,7 +167,9 @@ mod tests {
             let tag = hmac::sign(&key, signing.as_bytes());
             base64::engine::general_purpose::STANDARD.encode(tag.as_ref())
         };
-        assert!(signed.authorization.ends_with(&format!("signature=\"{expected_sig}\"")));
+        assert!(signed
+            .authorization
+            .ends_with(&format!("signature=\"{expected_sig}\"")));
     }
 
     #[test]

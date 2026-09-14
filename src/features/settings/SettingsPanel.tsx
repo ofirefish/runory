@@ -29,7 +29,7 @@ const sections: { id: SettingsSection; icon: LucideIcon; label: string }[] = [
 ];
 
 export function SettingsPanel({ onClose, initialSection = "general" }: { onClose: () => void; initialSection?: SettingsSection }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { theme, language, saving, persistenceError, setTheme, setLanguage } = useSettingsStore();
   const [knownHosts, setKnownHosts] = useState<KnownHost[]>([]);
   const [vault, setVault] = useState<CredentialStatus | null>(null);
@@ -39,7 +39,6 @@ export function SettingsPanel({ onClose, initialSection = "general" }: { onClose
   const [loadFailed, setLoadFailed] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   useEffect(() => { setActiveSection(initialSection); }, [initialSection]);
-  useEffect(() => { void i18n.changeLanguage(language); document.documentElement.lang = language; }, [i18n, language]);
   useEffect(() => { void listKnownHosts().then(setKnownHosts).catch(() => setLoadFailed(true)); }, []);
   useEffect(() => { void credentialStatus().then(setVault).catch(() => setVaultFailure(true)); }, []);
   const remove = async (knownHost: KnownHost) => { try { await removeKnownHost(knownHost.routeScope, knownHost.host, knownHost.port); setKnownHosts((hosts) => hosts.filter((host) => host.routeScope !== knownHost.routeScope || host.host !== knownHost.host || host.port !== knownHost.port)); } catch { setLoadFailed(true); } };

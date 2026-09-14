@@ -302,6 +302,33 @@ impl ChangeSetService {
             .ok_or(AppError::InvalidOperation)
     }
 
+    /// Content-free identity for the exact precondition observations captured
+    /// for one ChangeSet version. Used by Fleet approval binding only.
+    pub(crate) async fn precondition_binding_digest(
+        &self,
+        id: Uuid,
+        version: u64,
+    ) -> AppResult<String> {
+        let items = self.items.lock().await;
+        let stored = items.get(&id).ok_or(AppError::InvalidOperation)?;
+        if stored.public.version != version
+            || stored.public.recovery_state != ChangeSetRecoveryState::Live
+            || stored.precondition_bindings.len() != stored.public.steps.len()
+        {
+            return Err(AppError::InvalidOperation);
+        }
+        let bytes = stored
+            .precondition_bindings
+            .iter()
+            .flat_map(|binding| binding.digest)
+            .collect::<Vec<_>>();
+        Ok(digest(&SHA256, &bytes)
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
+    }
+
     pub(crate) async fn list(&self) -> AppResult<Vec<ChangeSet>> {
         let mut items = self
             .items

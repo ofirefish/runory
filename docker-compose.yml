@@ -1,3 +1,17 @@
+x-fleet-node: &fleet-node
+  build:
+    context: ./tests/ssh-server
+  profiles: ["fleet"]
+  environment:
+    RUNORY_TEST_PASSWORD: runory-spike
+  volumes:
+    - ./tests/ssh-server/generated:/fixtures
+  healthcheck:
+    test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+    interval: 2s
+    timeout: 2s
+    retries: 15
+
 services:
   tunnel-target:
     build:
@@ -87,3 +101,107 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+  fleet-01:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2231:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-01
+  fleet-02:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2232:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-02
+  fleet-03:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2233:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-03
+  fleet-04:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2234:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-04
+  fleet-05:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2235:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-05
+  fleet-06:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2236:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-06
+  fleet-07:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2237:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-07
+  fleet-08:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2238:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-08
+  fleet-09:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2239:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-09
+  fleet-10:
+    <<: *fleet-node
+    ports: ["127.0.0.1:2240:22"]
+    environment:
+      RUNORY_TEST_PASSWORD: runory-spike
+      RUNORY_TEST_NODE_ID: fleet-10
+  mysql-source:
+    image: ${RUNORY_MYSQL_FIXTURE_IMAGE:-mysql:8.4.11}
+    profiles: ["mysql-fleet"]
+    command:
+      - --server-id=101
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+    environment:
+      MYSQL_ROOT_PASSWORD: runory-mysql-root-test-only
+    ports:
+      - "127.0.0.1:33071:3306"
+    volumes:
+      - ./tests/mysql-cluster/source-init.sql:/docker-entrypoint-initdb.d/01-source.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  mysql-replica:
+    image: ${RUNORY_MYSQL_FIXTURE_IMAGE:-mysql:8.4.11}
+    profiles: ["mysql-fleet"]
+    command:
+      - --server-id=102
+      - --log-bin=mysql-bin
+      - --relay-log=relay-bin
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+    environment:
+      MYSQL_ROOT_PASSWORD: runory-mysql-root-test-only
+    ports:
+      - "127.0.0.1:33072:3306"
+    volumes:
+      - ./tests/mysql-cluster/replica-init.sql:/docker-entrypoint-initdb.d/01-replica.sql:ro
+    depends_on:
+      mysql-source:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

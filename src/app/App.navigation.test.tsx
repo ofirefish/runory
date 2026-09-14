@@ -20,6 +20,7 @@ vi.mock("../components/ui/popover", async (importOriginal) => {
   return { ...actual, PopoverContent: (props: ComponentProps<typeof actual.PopoverContent>) => <actual.PopoverContent {...props} avoidCollisions={false} /> };
 });
 vi.mock("../hooks/use-theme", () => ({ useTheme: () => undefined }));
+vi.mock("../hooks/use-language", () => ({ useLanguage: () => undefined }));
 vi.mock("../components/layout/WindowControls", () => ({ WindowControls: ({ onOpenPricing }: { onOpenPricing: () => void }) => <button type="button" aria-label="window.openPricing" onClick={onOpenPricing} /> }));
 vi.mock("../features/mobile/MobilePrivacyGuard", () => ({ MobilePrivacyGuard: () => null }));
 vi.mock("../components/context-panel/ContextPanel", () => ({ ContextPanel: ({ onNewTerminal }: ComponentProps<typeof ContextPanel>) => <aside data-testid="context-panel"><button onClick={onNewTerminal}>new terminal fixture</button></aside> }));

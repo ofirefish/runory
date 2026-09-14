@@ -10,8 +10,8 @@ use uuid::Uuid;
 use crate::connection::bastion::{
     AssetPage, AssetQuery, AuthChallenge, AuthChallengeResponse, AuthSession, AuthStepResult,
     BastionAccount, BastionAsset, BastionConnectOptions, BastionConnectRequest, BastionConnection,
-    BastionContext, BastionCredential, BastionEndpoint, BastionError, BastionPorts, BastionProtocol,
-    BastionRegistry, BastionSessionMetadata, BastionSessionState, BastionTimeouts,
+    BastionContext, BastionCredential, BastionEndpoint, BastionError, BastionPorts,
+    BastionProtocol, BastionRegistry, BastionSessionMetadata, BastionSessionState, BastionTimeouts,
     ExternalAuthAction, TerminalOptions,
 };
 use crate::domain::{AppError, AppResult, ConnectionRoute, ServerProfile};
@@ -141,7 +141,11 @@ impl BastionFlowService {
             .ok_or(AppError::BastionProviderNotFound)?;
 
         match &credential {
-            BastionCredential::Password { username, transient_password, .. } => {
+            BastionCredential::Password {
+                username,
+                transient_password,
+                ..
+            } => {
                 if username.trim().is_empty()
                     || transient_password
                         .as_ref()
@@ -165,7 +169,9 @@ impl BastionFlowService {
                     return Err(AppError::BastionAuthFailed);
                 }
             }
-            BastionCredential::Token { transient_token, .. } => {
+            BastionCredential::Token {
+                transient_token, ..
+            } => {
                 if transient_token
                     .as_ref()
                     .map(|value| value.is_empty())
@@ -275,11 +281,7 @@ impl BastionFlowService {
         self.snapshot(flow_id).await
     }
 
-    pub async fn list_assets(
-        &self,
-        flow_id: Uuid,
-        query: AssetQuery,
-    ) -> AppResult<AssetPage> {
+    pub async fn list_assets(&self, flow_id: Uuid, query: AssetQuery) -> AppResult<AssetPage> {
         let (provider_id, session) = self.require_auth_session(flow_id).await?;
         {
             let mut flows = self.flows.lock().await;
@@ -500,14 +502,11 @@ impl BastionFlowService {
             .get(&provider_id)
             .ok_or(AppError::BastionProviderNotFound)?;
         let mut options = BastionConnectOptions::default();
-        let skip_host_fingerprint =
-            provider_id == "mock" || provider_id == "teleport" || provider_id == "boundary";
+        let skip_host_fingerprint = provider_id == "teleport" || provider_id == "boundary";
         if !skip_host_fingerprint {
             let fingerprint = expected_fingerprint.ok_or(AppError::HostVerificationExpired)?;
-            options = crate::connection::bastion::providers::attach_fingerprint(
-                options,
-                &fingerprint,
-            );
+            options =
+                crate::connection::bastion::providers::attach_fingerprint(options, &fingerprint);
         }
         if let Some(password) = ssh_password {
             options.transient_ssh_password = Some(password);
@@ -539,10 +538,7 @@ impl BastionFlowService {
     }
 
     /// Resolves the SSH gateway used for host-key verification and remembers it on the flow.
-    pub async fn resolve_gateway_endpoint(
-        &self,
-        flow_id: Uuid,
-    ) -> AppResult<(String, u16)> {
+    pub async fn resolve_gateway_endpoint(&self, flow_id: Uuid) -> AppResult<(String, u16)> {
         let (provider_id, session, asset, account) = {
             let flows = self.flows.lock().await;
             let flow = Self::get(&flows, flow_id)?;
@@ -601,10 +597,7 @@ impl BastionFlowService {
         if !matches!(flow.state, BastionSessionState::Connected) {
             return Err(AppError::BastionUnavailable);
         }
-        let connection = flow
-            .connection
-            .take()
-            .ok_or(AppError::BastionUnavailable)?;
+        let connection = flow.connection.take().ok_or(AppError::BastionUnavailable)?;
         let provider = flow.provider.clone();
         flows.remove(&flow_id);
         Ok((connection, provider))
@@ -635,11 +628,7 @@ impl BastionFlowService {
                 BastionSessionState::AwaitingExternalAuth { .. } => String::new(),
                 _ => return Err(AppError::BastionUnavailable),
             };
-            (
-                flow.provider.clone(),
-                flow.auth_session.clone(),
-                url,
-            )
+            (flow.provider.clone(), flow.auth_session.clone(), url)
         };
 
         if provider_id == "teleport" {
@@ -716,10 +705,7 @@ impl BastionFlowService {
         Ok(())
     }
 
-    async fn require_auth_session(
-        &self,
-        flow_id: Uuid,
-    ) -> AppResult<(String, AuthSession)> {
+    async fn require_auth_session(&self, flow_id: Uuid) -> AppResult<(String, AuthSession)> {
         let flows = self.flows.lock().await;
         let flow = Self::get(&flows, flow_id)?;
         let session = flow
@@ -758,10 +744,7 @@ impl BastionFlowService {
         Ok(id)
     }
 
-    fn get<'a>(
-        flows: &'a HashMap<Uuid, BastionFlow>,
-        flow_id: Uuid,
-    ) -> AppResult<&'a BastionFlow> {
+    fn get<'a>(flows: &'a HashMap<Uuid, BastionFlow>, flow_id: Uuid) -> AppResult<&'a BastionFlow> {
         flows
             .get(&flow_id)
             .filter(|flow| flow.expires_at > Instant::now())
@@ -779,16 +762,11 @@ impl BastionFlowService {
             flows.remove(&flow_id);
             return Err(AppError::BastionUnavailable);
         }
-        flows
-            .get_mut(&flow_id)
-            .ok_or(AppError::BastionUnavailable)
+        flows.get_mut(&flow_id).ok_or(AppError::BastionUnavailable)
     }
 }
 
-fn flow_from_auth_step(
-    flow: &mut BastionFlow,
-    step: AuthStepResult,
-) -> AppResult<()> {
+fn flow_from_auth_step(flow: &mut BastionFlow, step: AuthStepResult) -> AppResult<()> {
     match step {
         AuthStepResult::Challenge { pending, challenge } => {
             flow.auth_session = Some(pending);
@@ -813,18 +791,19 @@ fn snapshot_of(flow_id: Uuid, flow: &BastionFlow) -> BastionFlowSnapshot {
         BastionSessionState::Authenticating | BastionSessionState::Probing => {
             (BastionFlowUiState::Authenticating, None, None, None)
         }
-        BastionSessionState::AwaitingUser { challenge } => {
-            (BastionFlowUiState::AwaitingUser, Some(challenge.clone()), None, None)
-        }
+        BastionSessionState::AwaitingUser { challenge } => (
+            BastionFlowUiState::AwaitingUser,
+            Some(challenge.clone()),
+            None,
+            None,
+        ),
         BastionSessionState::AwaitingExternalAuth { action } => (
             BastionFlowUiState::AwaitingUser,
             None,
             Some(action.clone()),
             None,
         ),
-        BastionSessionState::Authenticated => {
-            (BastionFlowUiState::Authenticated, None, None, None)
-        }
+        BastionSessionState::Authenticated => (BastionFlowUiState::Authenticated, None, None, None),
         BastionSessionState::DiscoveringAssets => {
             (BastionFlowUiState::DiscoveringAssets, None, None, None)
         }
@@ -873,14 +852,35 @@ fn mock_or_profile_endpoint(
     profile: &ServerProfile,
     helper_defaults: &HelperCliDefaults,
 ) -> BastionEndpoint {
-    let ssh_port = if provider == "jumpserver" {
-        crate::connection::bastion::providers::normalize_koko_ssh_port(
-            if profile.port == 0 { 2222 } else { profile.port },
-        )
-    } else if profile.port == 0 {
-        2222
-    } else {
-        profile.port
+    let ssh_port = match provider {
+        "jumpserver" => {
+            crate::connection::bastion::providers::normalize_koko_ssh_port(if profile.port == 0 {
+                2222
+            } else {
+                profile.port
+            })
+        }
+        "teleport" => {
+            if profile.port == 0 {
+                3080
+            } else {
+                profile.port
+            }
+        }
+        "boundary" => {
+            if profile.port == 0 {
+                9200
+            } else {
+                profile.port
+            }
+        }
+        _ => {
+            if profile.port == 0 {
+                22
+            } else {
+                profile.port
+            }
+        }
     };
     let (api_base_url, org_id, cli_path, cluster_name, insecure) = match &profile.connection_route {
         ConnectionRoute::Bastion {
@@ -910,7 +910,13 @@ fn mock_or_profile_endpoint(
                 .filter(|value| !value.is_empty()),
             *insecure,
         ),
-        _ => (None, None, helper_defaults.for_provider(provider), None, false),
+        _ => (
+            None,
+            None,
+            helper_defaults.for_provider(provider),
+            None,
+            false,
+        ),
     };
     let (api_port, web_port, mut provider_config) = if let Some(ref base) = api_base_url {
         let parsed = crate::connection::bastion::providers::parse_api_base_url(base);
@@ -945,10 +951,10 @@ fn mock_or_profile_endpoint(
             .insert("cliPath".into(), serde_json::Value::String(cli_path));
     }
     if let Some(cluster_name) = cluster_name {
-        provider_config
-            .as_object_mut()
-            .expect("object")
-            .insert("clusterName".into(), serde_json::Value::String(cluster_name));
+        provider_config.as_object_mut().expect("object").insert(
+            "clusterName".into(),
+            serde_json::Value::String(cluster_name),
+        );
     }
     if insecure {
         provider_config
@@ -963,19 +969,25 @@ fn mock_or_profile_endpoint(
         );
     }
     let host = if provider == "jumpserver" {
-        crate::connection::bastion::providers::normalize_koko_host(&profile.host).unwrap_or_else(
-            || {
-                if profile.host.trim().is_empty() {
-                    "mock.bastion.local".into()
-                } else {
-                    profile.host.clone()
-                }
-            },
-        )
-    } else if profile.host.trim().is_empty() {
-        "mock.bastion.local".into()
-    } else {
+        crate::connection::bastion::providers::normalize_koko_host(&profile.host)
+            .or_else(|| {
+                api_base_url
+                    .as_ref()
+                    .and_then(|base| {
+                        crate::connection::bastion::providers::parse_api_base_url(base)
+                    })
+                    .map(|parsed| parsed.host)
+            })
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| profile.host.trim().to_string())
+    } else if !profile.host.trim().is_empty() {
         profile.host.clone()
+    } else {
+        api_base_url
+            .as_ref()
+            .and_then(|base| crate::connection::bastion::providers::parse_api_base_url(base))
+            .map(|parsed| parsed.host)
+            .unwrap_or_default()
     };
     BastionEndpoint {
         id: bastion_id,
@@ -1038,121 +1050,5 @@ fn map_bastion_error(error: BastionError) -> AppError {
         // Prefer a distinct message from generic SSH lost during direct connects.
         BastionError::SessionRejected => AppError::BastionUnavailable,
         _ => AppError::BastionUnavailable,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::connection::{default_bastion_registry, AuthChallengeResponse};
-    use crate::domain::{AuthMethod, ConnectionRoute};
-
-    fn bastion_profile(asset_id: &str, account_id: Option<&str>) -> ServerProfile {
-        ServerProfile {
-            id: Uuid::new_v4(),
-            name: "Mock Target".into(),
-            host: "mock.bastion.local".into(),
-            port: 2222,
-            username: "alice".into(),
-            group_id: None,
-            auth_method: AuthMethod::Password,
-            key_source: None,
-            connection_route: ConnectionRoute::Bastion {
-                bastion_id: Uuid::new_v4(),
-                provider: "mock".into(),
-                asset_id: asset_id.into(),
-                account_id: account_id.map(str::to_string),
-                api_base_url: None,
-                org_id: None,
-                cli_path: None,
-                cluster_name: None,
-                insecure: false,
-            },
-            sort_order: 0,
-            created_at: "now".into(),
-            updated_at: "now".into(),
-            last_connected_at: None,
-            os_distribution: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn flow_awaits_totp_then_resumes_to_bound_target() {
-        let service = BastionFlowService::new(Arc::new(default_bastion_registry()));
-        let profile = bastion_profile("asset-prod-db-01", Some("root"));
-        let snap = service
-            .start(
-                &profile,
-                BastionCredential::password("alice", "secret"),
-                HelperCliDefaults::default(),
-            )
-            .await
-            .expect("start");
-        assert_eq!(snap.state, BastionFlowUiState::AwaitingUser);
-        let challenge = snap.challenge.expect("challenge");
-        let snap = service
-            .continue_auth(
-                snap.flow_id,
-                AuthChallengeResponse::Totp {
-                    id: challenge.id().into(),
-                    code: "123456".into(),
-                },
-            )
-            .await
-            .expect("resume");
-        assert_eq!(snap.state, BastionFlowUiState::Connecting);
-        assert_eq!(snap.selected_asset_id.as_deref(), Some("asset-prod-db-01"));
-        assert_eq!(snap.selected_account.as_deref(), Some("root"));
-        let snap = service
-            .connect(snap.flow_id, 120, 40, None, None)
-            .await
-            .expect("connect");
-        assert_eq!(snap.state, BastionFlowUiState::Connected);
-        assert!(snap.session_metadata.is_some());
-    }
-
-    #[tokio::test]
-    async fn flow_without_bound_asset_stops_at_selection() {
-        let service = BastionFlowService::new(Arc::new(default_bastion_registry()));
-        let profile = bastion_profile("", None);
-        let snap = service
-            .start(
-                &profile,
-                BastionCredential::password("alice", "secret"),
-                HelperCliDefaults::default(),
-            )
-            .await
-            .expect("start");
-        let challenge = snap.challenge.expect("challenge");
-        let snap = service
-            .continue_auth(
-                snap.flow_id,
-                AuthChallengeResponse::Totp {
-                    id: challenge.id().into(),
-                    code: "123456".into(),
-                },
-            )
-            .await
-            .expect("resume");
-        assert_eq!(snap.state, BastionFlowUiState::SelectingAsset);
-        let assets = service
-            .list_assets(
-                snap.flow_id,
-                AssetQuery {
-                    search: None,
-                    node: None,
-                    protocol: None,
-                    page: 0,
-                    page_size: 10,
-                },
-            )
-            .await
-            .expect("assets");
-        assert!(!assets.items.is_empty());
-        let snap = service
-            .select_asset(snap.flow_id, assets.items[0].remote_id.clone())
-            .await
-            .expect("select asset");
-        assert_eq!(snap.state, BastionFlowUiState::SelectingAccount);
     }
 }

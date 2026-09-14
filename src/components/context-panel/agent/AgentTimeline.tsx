@@ -1,5 +1,7 @@
-import { ChevronDown, ChevronRight, UserRound } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { avatarInitials } from "../../../lib/avatar-initials";
 import type { AgentEventEnvelope, AgentV2DisplayContext, TimelineApproval } from "../../../types/agent-v2";
 import { toolLabelKey } from "./agent-timeline-utils";
 import { AgentApprovalCard } from "./AgentApprovalCard";
@@ -9,10 +11,11 @@ const COMPACT_TOOL_EVENTS = new Set([
   "tool_completed",
   "tool_failed",
 ]);
-export function AgentTimeline({ events, displayContext, userAvatarUrl, pendingApproval, busy, expanded, onToggle, onApprove, onReject, readOnly = false }: {
+export function AgentTimeline({ events, displayContext, userAvatarUrl, userDisplayName, pendingApproval, busy, expanded, onToggle, onApprove, onReject, readOnly = false }: {
   events: AgentEventEnvelope[];
   displayContext?: AgentV2DisplayContext;
   userAvatarUrl?: string | null;
+  userDisplayName?: string | null;
   pendingApproval?: TimelineApproval;
   busy?: boolean;
   readOnly?: boolean;
@@ -22,6 +25,7 @@ export function AgentTimeline({ events, displayContext, userAvatarUrl, pendingAp
   onReject: () => void;
 }) {
   const { t } = useTranslation();
+  const avatarLabel = useMemo(() => avatarInitials(userDisplayName || t("userMenu.localUser")), [t, userDisplayName]);
   if (events.length === 0) return null;
   return <div className="agent-timeline" aria-label={t("contextPanel.timeline.label")}>
     {events.map((envelope) => {
@@ -32,7 +36,7 @@ export function AgentTimeline({ events, displayContext, userAvatarUrl, pendingAp
         return <div key={key} className="agent-user-turn">
           <div className="agent-user-message"><p>{String(payload.content ?? "")}</p></div>
           <span className="agent-user-avatar" aria-hidden>
-            {userAvatarUrl ? <img src={userAvatarUrl} alt="" /> : <UserRound size={13} />}
+            {userAvatarUrl ? <img src={userAvatarUrl} alt="" /> : <span>{avatarLabel}</span>}
           </span>
           {displayContext && <p className="agent-runtime-context">
             <span>OS: {displayContext.os}</span>

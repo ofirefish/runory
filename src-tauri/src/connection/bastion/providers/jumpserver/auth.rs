@@ -50,10 +50,7 @@ pub enum JumpServerAuthState {
 }
 
 impl JumpServerAuthState {
-    pub fn from_endpoint(
-        endpoint: &BastionEndpoint,
-        stage: JumpServerStage,
-    ) -> Result<Self, ()> {
+    pub fn from_endpoint(endpoint: &BastionEndpoint, stage: JumpServerStage) -> Result<Self, ()> {
         let base_url = endpoint_base_url(endpoint)?;
         let koko_host = normalize_koko_host(&endpoint.host).ok_or(())?;
         let koko_port = normalize_koko_ssh_port(endpoint.ports.ssh.unwrap_or(2222));
@@ -151,10 +148,12 @@ impl JumpServerAuthState {
     /// Control-plane auth material for subsequent JumpServer API calls.
     pub fn api_auth(&self) -> Option<super::api::JumpServerApiAuth> {
         match self {
-            Self::Authenticated { bearer, org_id, .. } => Some(super::api::JumpServerApiAuth::Bearer {
-                token: bearer.clone(),
-                org_id: org_id.clone(),
-            }),
+            Self::Authenticated { bearer, org_id, .. } => {
+                Some(super::api::JumpServerApiAuth::Bearer {
+                    token: bearer.clone(),
+                    org_id: org_id.clone(),
+                })
+            }
             Self::AuthenticatedAccessKey {
                 key_id,
                 secret,
@@ -382,6 +381,36 @@ pub fn normalize_koko_ssh_port(port: u16) -> u16 {
     }
 }
 
+pub fn is_loopback_host(host: &str) -> bool {
+    let host = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "0:0:0:0:0:0:0:1"
+    )
+}
+
+/// When API is reached via loopback, smart/client-url often advertises LAN/public hosts
+/// that are unreachable from this client (local install or SSH tunnel). Keep the port,
+/// rewrite the host to the API loopback hostname.
+pub fn coerce_gateway_to_api_loopback(
+    api_base_url: &str,
+    host: String,
+    port: u16,
+) -> (String, u16) {
+    let Some(parsed) = parse_api_base_url(api_base_url) else {
+        return (host, port);
+    };
+    if is_loopback_host(&parsed.host) && !is_loopback_host(&host) {
+        (parsed.host, port)
+    } else {
+        (host, port)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,8 +419,7 @@ mod tests {
 
     #[test]
     fn parses_http_api_url_with_custom_port() {
-        let parsed = parse_api_base_url("http://122.114.1.1:61080/")
-            .expect("parse");
+        let parsed = parse_api_base_url("http://122.114.1.1:61080/").expect("parse");
         assert_eq!(parsed.scheme, "http");
         assert_eq!(parsed.host, "122.114.1.1");
         assert_eq!(parsed.port, 61080);
@@ -420,6 +448,30 @@ mod tests {
         assert_eq!(normalize_koko_ssh_port(443), 2222);
         assert_eq!(normalize_koko_ssh_port(2222), 2222);
         assert_eq!(normalize_koko_ssh_port(3022), 3022);
+    }
+
+    #[test]
+    fn coerce_gateway_rewrites_smart_host_when_api_is_loopback() {
+        let (host, port) =
+            coerce_gateway_to_api_loopback("http://localhost", "10.0.0.5".into(), 2222);
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 2222);
+
+        let (host, port) =
+            coerce_gateway_to_api_loopback("http://127.0.0.1:61080", "jms.internal".into(), 3022);
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 3022);
+    }
+
+    #[test]
+    fn coerce_gateway_keeps_remote_api_smart_host() {
+        let (host, port) = coerce_gateway_to_api_loopback(
+            "http://jms.example.com:61080",
+            "koko.example.com".into(),
+            2222,
+        );
+        assert_eq!(host, "koko.example.com");
+        assert_eq!(port, 2222);
     }
 
     #[test]

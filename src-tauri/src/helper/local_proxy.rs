@@ -136,7 +136,11 @@ async fn wait_for_listener(
     process: &HelperProcess,
 ) -> Result<(), HelperError> {
     let deadline = tokio::time::Instant::now() + ready_timeout;
-    let bind_host = if host == "localhost" { "127.0.0.1" } else { host };
+    let bind_host = if host == "localhost" {
+        "127.0.0.1"
+    } else {
+        host
+    };
     loop {
         if tokio::time::Instant::now() >= deadline {
             let _ = super::process::kill_process_tree(process).await;
@@ -164,10 +168,7 @@ async fn discover_endpoint(
     process: HelperProcess,
     ready_timeout: Duration,
 ) -> Result<LocalProxyHandle, HelperError> {
-    let mut child = process
-        .take_child()
-        .await
-        .ok_or(HelperError::SpawnFailed)?;
+    let mut child = process.take_child().await.ok_or(HelperError::SpawnFailed)?;
     let stdout = child.stdout.take().ok_or(HelperError::SpawnFailed)?;
     let stderr = child.stderr.take().ok_or(HelperError::SpawnFailed)?;
     process.restore_child(child).await;
@@ -333,8 +334,8 @@ pub fn parse_local_endpoint(line: &str) -> Option<(String, u16)> {
 
 /// Reserve an ephemeral loopback port for helpers that accept `-listen-port`.
 pub fn reserve_loopback_port() -> Result<u16, HelperError> {
-    let listener =
-        std::net::TcpListener::bind("127.0.0.1:0").map_err(|_| HelperError::EndpointDiscoveryFailed)?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .map_err(|_| HelperError::EndpointDiscoveryFailed)?;
     let port = listener
         .local_addr()
         .map_err(|_| HelperError::EndpointDiscoveryFailed)?
@@ -375,18 +376,12 @@ mod tests {
           "port": 53921,
           "session_id": "s_abc"
         }"#;
-        assert_eq!(
-            parse_boundary_json(json),
-            Some(("127.0.0.1".into(), 53921))
-        );
+        assert_eq!(parse_boundary_json(json), Some(("127.0.0.1".into(), 53921)));
     }
 
     #[test]
     fn parses_boundary_json_embedded_in_logs() {
         let text = "starting proxy\n{\"address\":\"127.0.0.1\",\"port\":40001}\nready";
-        assert_eq!(
-            parse_boundary_json(text),
-            Some(("127.0.0.1".into(), 40001))
-        );
+        assert_eq!(parse_boundary_json(text), Some(("127.0.0.1".into(), 40001)));
     }
 }

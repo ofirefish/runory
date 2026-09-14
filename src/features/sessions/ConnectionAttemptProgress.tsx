@@ -1,21 +1,34 @@
 import { Check, Circle, LoaderCircle, Monitor, Server, ShieldCheck } from "lucide-react";
+import type { CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
+import type { OsDistribution } from "../../types/domain";
+import { OsLogo } from "../profiles/OsLogo";
+import { osLogoDictionary } from "../profiles/os-logo-data";
 
 export type ConnectionProgressStage = "verify" | "connect";
 
-export function ConnectionAttemptProgress({ stage, testing }: {
+export function ConnectionAttemptProgress({ stage, testing, osDistribution }: {
   stage: ConnectionProgressStage;
   testing: boolean;
+  osDistribution?: OsDistribution;
 }) {
   const { t } = useTranslation();
   const steps = ["verify", "connect"] as const;
+  const osLogo = osDistribution ? osLogoDictionary[osDistribution] : null;
   return <section className="connection-attempt" aria-label={t("connection.progress.title")}>
     <div className="connection-route-visual" aria-hidden="true">
       <span className="connection-route-endpoint"><Monitor size={21} strokeWidth={1.5} /></span>
       <span className="connection-route-line"><i /></span>
       <span className="connection-route-shield"><ShieldCheck size={17} strokeWidth={1.5} /></span>
       <span className="connection-route-line"><i /></span>
-      <span className="connection-route-endpoint remote"><Server size={21} strokeWidth={1.5} /></span>
+      <span
+        className={osLogo ? "connection-route-endpoint remote has-os-logo" : "connection-route-endpoint remote"}
+        style={osLogo ? { "--os-logo-color": osLogo.color } as CSSProperties : undefined}
+      >
+        {osDistribution && osLogo
+          ? <OsLogo plain distribution={osDistribution} state="idle" statusLabel={osLogo.label} />
+          : <Server size={21} strokeWidth={1.5} />}
+      </span>
     </div>
     <div className="connection-attempt-heading" role="status" aria-live="polite">
       <h3>{t(testing ? "connection.progress.testing" : "connection.progress.connecting")}</h3>

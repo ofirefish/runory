@@ -575,6 +575,40 @@ impl ServerSessionManager {
             .ok_or(AppError::SessionNotFound)
     }
 
+    /// Validates both immutable profile ownership and live transport state for
+    /// an operation that is already bound to an exact session.
+    pub(crate) async fn validate_profile_session(
+        &self,
+        session_id: SessionId,
+        profile_id: uuid::Uuid,
+    ) -> AppResult<()> {
+        let client = {
+            let sessions = self.sessions.read().await;
+            let session = sessions.get(&session_id).ok_or(AppError::SessionNotFound)?;
+            if session.profile_id != profile_id {
+                return Err(AppError::AgentFleetTargetMismatch);
+            }
+            Arc::clone(&session.client)
+        };
+        if client.is_closed() {
+            return Err(AppError::ConnectionLost);
+        }
+
+        // `Handle::is_closed` can remain false until the idle TCP connection is
+        // used. Approval revalidation must fail closed before scheduling a
+        // Fleet child, so probe the transport with an otherwise unused SSH
+        // session channel and bound the round trip.
+        let channel = tokio::time::timeout(Duration::from_secs(5), client.channel_open_session())
+            .await
+            .map_err(|_| AppError::ConnectionLost)?
+            .map_err(|_| AppError::ConnectionLost)?;
+        channel
+            .close()
+            .await
+            .map_err(|_| AppError::ConnectionLost)?;
+        Ok(())
+    }
+
     pub(crate) async fn detect_os_distribution(
         &self,
         session_id: SessionId,

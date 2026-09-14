@@ -24,8 +24,8 @@ use super::api::{
     ReqwestJumpServerHttp,
 };
 use super::auth::{
-    auth_session, normalize_koko_host, normalize_koko_ssh_port, parse_api_base_url,
-    JumpServerAuthState, JumpServerStage,
+    auth_session, coerce_gateway_to_api_loopback, normalize_koko_host, normalize_koko_ssh_port,
+    parse_api_base_url, JumpServerAuthState, JumpServerStage,
 };
 use super::koko::KokoClient;
 
@@ -70,8 +70,8 @@ impl<H: JumpServerHttp + 'static> JumpServerProvider<H> {
         let koko_host = super::auth::normalize_koko_host(&endpoint.host)
             .ok_or(BastionError::ProviderUnavailable)?;
         let koko_port = super::auth::normalize_koko_ssh_port(endpoint.ports.ssh.unwrap_or(2222));
-        let base_url = super::auth::resolve_api_base_url(endpoint)
-            .ok_or(BastionError::ProviderUnavailable)?;
+        let base_url =
+            super::auth::resolve_api_base_url(endpoint).ok_or(BastionError::ProviderUnavailable)?;
         Ok((
             self.client_for_url(&base_url)?,
             JumpServerAuthState::Authenticated {
@@ -218,7 +218,8 @@ impl<H: JumpServerHttp + 'static> JumpServerProvider<H> {
             },
         )
         .map_err(|_| BastionError::Internal)?;
-        let mut session = auth_session(ctx.endpoint.id, state, None).map_err(|_| BastionError::Internal)?;
+        let mut session =
+            auth_session(ctx.endpoint.id, state, None).map_err(|_| BastionError::Internal)?;
         session.principal.display_name = user.name.or(Some(user.username));
         tracing::info!(
             provider = "jumpserver",
@@ -230,7 +231,10 @@ impl<H: JumpServerHttp + 'static> JumpServerProvider<H> {
     }
 }
 
-pub fn attach_fingerprint(options: BastionConnectOptions, fingerprint: &str) -> BastionConnectOptions {
+pub fn attach_fingerprint(
+    options: BastionConnectOptions,
+    fingerprint: &str,
+) -> BastionConnectOptions {
     BastionConnectOptions {
         locale: Some(format!("{FINGERPRINT_PREFIX}{fingerprint}")),
         ..options
@@ -269,10 +273,7 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
             | BastionCapabilities::MANAGED_CREDENTIALS
     }
 
-    async fn probe(
-        &self,
-        endpoint: &BastionEndpoint,
-    ) -> Result<BastionProbeResult, BastionError> {
+    async fn probe(&self, endpoint: &BastionEndpoint) -> Result<BastionProbeResult, BastionError> {
         if endpoint.host.trim().is_empty() {
             return Err(BastionError::Network);
         }
@@ -295,7 +296,10 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
                 key_id,
                 transient_secret,
                 ..
-            } => self.start_access_key_auth(ctx, key_id, transient_secret).await,
+            } => {
+                self.start_access_key_auth(ctx, key_id, transient_secret)
+                    .await
+            }
             BastionCredential::Password {
                 username,
                 transient_password,
@@ -368,7 +372,9 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
     ) -> Result<AssetPage, BastionError> {
         let state =
             JumpServerAuthState::decode(&session.provider_state).ok_or(BastionError::Internal)?;
-        let auth = state.api_auth().ok_or(BastionError::AuthenticationExpired)?;
+        let auth = state
+            .api_auth()
+            .ok_or(BastionError::AuthenticationExpired)?;
         let client = self.client_for_url(state.base_url())?;
         let page_size = query.page_size.max(1);
         let offset = query.page.saturating_mul(page_size);
@@ -418,7 +424,9 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
     ) -> Result<Vec<BastionAccount>, BastionError> {
         let state =
             JumpServerAuthState::decode(&session.provider_state).ok_or(BastionError::Internal)?;
-        let auth = state.api_auth().ok_or(BastionError::AuthenticationExpired)?;
+        let auth = state
+            .api_auth()
+            .ok_or(BastionError::AuthenticationExpired)?;
         let client = self.client_for_url(state.base_url())?;
         let accounts = client.list_accounts(&auth, &asset.remote_id).await?;
         Ok(accounts
@@ -444,7 +452,9 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
     ) -> Result<(String, u16), BastionError> {
         let state =
             JumpServerAuthState::decode(&session.provider_state).ok_or(BastionError::Internal)?;
-        let auth = state.api_auth().ok_or(BastionError::AuthenticationExpired)?;
+        let auth = state
+            .api_auth()
+            .ok_or(BastionError::AuthenticationExpired)?;
         let client = self.client_for_url(state.base_url())?;
         let (host, port) = resolve_koko_ssh_endpoint(&client, &auth, &state).await?;
         eprintln!("[runory jumpserver] resolve_ssh_gateway host={host} port={port}");
@@ -466,7 +476,9 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
             fingerprint_from_options(&request.options).ok_or(BastionError::SessionRejected)?;
         let state =
             JumpServerAuthState::decode(&session.provider_state).ok_or(BastionError::Internal)?;
-        let auth = state.api_auth().ok_or(BastionError::AuthenticationExpired)?;
+        let auth = state
+            .api_auth()
+            .ok_or(BastionError::AuthenticationExpired)?;
         let client = self.client_for_url(state.base_url())?;
         // JumpServer connection-token looks up by Account.alias (usually `name`, not username).
         // jumpserver-client uses permed_accounts[0].name for the same reason.
@@ -484,9 +496,18 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
             )
             .await?;
 
-        let (host, port) = resolve_koko_ssh_endpoint(&client, &auth, &state).await?;
-        let cols = request.terminal.as_ref().map(|term| term.cols).unwrap_or(120);
-        let rows = request.terminal.as_ref().map(|term| term.rows).unwrap_or(40);
+        let (host, port) =
+            resolve_koko_ssh_endpoint_for_token(&client, &auth, &state, &token.id).await?;
+        let cols = request
+            .terminal
+            .as_ref()
+            .map(|term| term.cols)
+            .unwrap_or(120);
+        let rows = request
+            .terminal
+            .as_ref()
+            .map(|term| term.rows)
+            .unwrap_or(40);
         tracing::info!(
             provider = "jumpserver",
             bastion_id = %session.bastion_id,
@@ -611,7 +632,9 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
             fingerprint_from_options(&request.options).ok_or(BastionError::SessionRejected)?;
         let state =
             JumpServerAuthState::decode(&session.provider_state).ok_or(BastionError::Internal)?;
-        let auth = state.api_auth().ok_or(BastionError::AuthenticationExpired)?;
+        let auth = state
+            .api_auth()
+            .ok_or(BastionError::AuthenticationExpired)?;
         let client = self.client_for_url(state.base_url())?;
         let account_candidates = connection_account_candidates(&request.account);
         let token = client
@@ -622,7 +645,8 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
                 "ssh",
             )
             .await?;
-        let (host, port) = resolve_koko_ssh_endpoint(&client, &auth, &state).await?;
+        let (host, port) =
+            resolve_koko_ssh_endpoint_for_token(&client, &auth, &state, &token.id).await?;
         let username = format!("JMS-{}", token.id.trim());
         let session_id = Uuid::new_v4().to_string();
         Ok(crate::connection::PreparedConnection {
@@ -664,11 +688,7 @@ impl<H: JumpServerHttp + 'static> BastionProvider for JumpServerProvider<H> {
         let BastionConnection::SshInteractive { session } = connection;
         let _ = session
             .client
-            .disconnect(
-                russh::Disconnect::ByApplication,
-                "bastion disconnect",
-                "en",
-            )
+            .disconnect(russh::Disconnect::ByApplication, "bastion disconnect", "en")
             .await;
         Ok(())
     }
@@ -722,21 +742,38 @@ fn connection_account_candidates(account: &BastionAccount) -> Vec<String> {
 /// Resolve KoKo SSH host/port the same way as jumpserver-client:
 /// 1. `GET /terminal/endpoints/smart/?protocol=ssh`
 /// 2. else hostname from JumpServer API URL + profile/default SSH port
+///
+/// When the API itself is reached via loopback (`localhost` / `127.0.0.1`), smart
+/// endpoints often advertise LAN/public hosts that are unreachable from this client
+/// (local install or SSH port-forward). In that case keep the smart SSH port but
+/// coerce the host back to the API loopback host.
 async fn resolve_koko_ssh_endpoint<H: JumpServerHttp>(
     client: &JumpServerApiClient<H>,
     auth: &JumpServerApiAuth,
     state: &JumpServerAuthState,
 ) -> Result<(String, u16), BastionError> {
     if let Some((host, port)) = client.fetch_smart_ssh_endpoint(auth).await? {
+        let port = normalize_koko_ssh_port(port);
+        let advertised = host.clone();
+        let (host, port) = coerce_gateway_to_api_loopback(state.base_url(), host, port);
+        if advertised != host {
+            tracing::info!(
+                api_host = %host,
+                advertised_host = %advertised,
+                koko_port = port,
+                "jumpserver coercing koko host to API loopback"
+            );
+            eprintln!(
+                "[runory jumpserver] koko coerce advertised_host={advertised} -> api_loopback={host} port={port}"
+            );
+        }
         tracing::info!(
             provider = "jumpserver",
             koko_host = %host,
             koko_port = port,
             "jumpserver using smart terminal endpoint"
         );
-        eprintln!(
-            "[runory jumpserver] koko via smart endpoint host={host} port={port}"
-        );
+        eprintln!("[runory jumpserver] koko via smart endpoint host={host} port={port}");
         return Ok((host, port));
     }
 
@@ -765,4 +802,26 @@ async fn resolve_koko_ssh_endpoint<H: JumpServerHttp>(
     );
     eprintln!("[runory jumpserver] koko via profile host={host} port={port}");
     Ok((host, port))
+}
+
+/// Prefer token `client-url` endpoint when present, then fall back to smart/API resolution.
+async fn resolve_koko_ssh_endpoint_for_token<H: JumpServerHttp>(
+    client: &JumpServerApiClient<H>,
+    auth: &JumpServerApiAuth,
+    state: &JumpServerAuthState,
+    token_id: &str,
+) -> Result<(String, u16), BastionError> {
+    if let Some((host, port)) = client.fetch_token_client_endpoint(auth, token_id).await? {
+        let port = normalize_koko_ssh_port(port);
+        let advertised = host.clone();
+        let (host, port) = coerce_gateway_to_api_loopback(state.base_url(), host, port);
+        if advertised != host {
+            eprintln!(
+                "[runory jumpserver] koko coerce client-url host={advertised} -> api_loopback={host} port={port}"
+            );
+        }
+        eprintln!("[runory jumpserver] koko via token client-url host={host} port={port}");
+        return Ok((host, port));
+    }
+    resolve_koko_ssh_endpoint(client, auth, state).await
 }

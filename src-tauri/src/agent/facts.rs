@@ -75,8 +75,7 @@ impl WorkingFactSet {
         self.facts.is_empty()
     }
 
-    #[cfg(test)]
-    pub fn all(&self) -> &[WorkingFact] {
+    pub(crate) fn all(&self) -> &[WorkingFact] {
         &self.facts
     }
 

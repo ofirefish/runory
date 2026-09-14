@@ -18,12 +18,10 @@ pub use auth::{
 pub use capabilities::{BastionCapabilities, BastionTimeouts, ProviderLimits};
 pub use errors::{BastionError, BastionErrorDetail};
 pub use provider::BastionProvider;
-pub use providers::{
-    BoundaryProvider, JumpServerProvider, MockBastionProvider, TeleportProvider,
-};
+pub use providers::{BoundaryProvider, JumpServerProvider, TeleportProvider};
 pub use registry::BastionRegistry;
 pub use session::{
     BastionConnectOptions, BastionConnectRequest, BastionConnection, BastionContext,
     BastionEndpoint, BastionPorts, BastionProbeResult, BastionSessionMetadata, BastionSshSession,
-    NativeBastionSession, TerminalOptions, TlsOptions,
+    TerminalOptions, TlsOptions,
 };

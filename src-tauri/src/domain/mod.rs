@@ -32,7 +32,7 @@ pub use deployment::{
     EnvironmentConfigRequest, EnvironmentEntry, GitSetupRequest, RestartTarget, SslInspectRequest,
     SslIssueRequest,
 };
-pub use error::{AppError, AppResult};
+pub use error::{format_ssh_endpoint, AppError, AppResult};
 pub use group::{
     CreateGroupRequest, DeleteGroupRequest, HostGroup, ReorderGroupsRequest, UpdateGroupRequest,
 };

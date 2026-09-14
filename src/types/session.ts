@@ -53,6 +53,7 @@ export type CredentialKind =
   | "mcp-token"
   | "llm-api-key"
   | "bastion-token"
+  | "bastion-access-key"
   | "bastion-target-password";
 
 export type CredentialStatus = {

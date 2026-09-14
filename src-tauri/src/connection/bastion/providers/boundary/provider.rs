@@ -95,7 +95,8 @@ impl BastionProvider for BoundaryProvider {
         if endpoint.provider != "boundary" {
             return Err(BastionError::ProviderUnavailable);
         }
-        let override_path = crate::connection::bastion::provider_cli_path(&endpoint.provider_config);
+        let override_path =
+            crate::connection::bastion::provider_cli_path(&endpoint.provider_config);
         let cli = self.cli(override_path.as_deref())?;
         let version = cli.version_string().map_err(Self::map_helper)?;
         Ok(BastionProbeResult {
@@ -175,16 +176,14 @@ impl BastionProvider for BoundaryProvider {
         let mut prepared = self.prepare_connection(session, request.clone()).await?;
 
         let ctx = crate::connection::TransportContext::with_timeout(45);
-        let opened = crate::connection::transport::TransportFactory::open(
-            &prepared.transport,
-            &ctx,
-        )
-        .await
-        .map_err(|error| match error {
-            crate::domain::AppError::ConnectionTimeout => BastionError::Timeout,
-            crate::domain::AppError::ConnectionRefused => BastionError::Network,
-            _ => BastionError::HelperProxyFailed,
-        })?;
+        let opened =
+            crate::connection::transport::TransportFactory::open(&prepared.transport, &ctx)
+                .await
+                .map_err(|error| match error {
+                    crate::domain::AppError::ConnectionTimeout => BastionError::Timeout,
+                    crate::domain::AppError::ConnectionRefused => BastionError::Network,
+                    _ => BastionError::HelperProxyFailed,
+                })?;
 
         // SSH auth for the local Boundary proxy:
         // - UI target password → use UI username (or brokered username) + that password
@@ -196,7 +195,7 @@ impl BastionProvider for BoundaryProvider {
             .and_then(|payload| BoundaryCli::parse_brokered_ssh_credentials(payload));
         let account_username = request.account.username.trim();
         if let Some(password) = request.options.transient_ssh_password.as_ref() {
-            let username = if !account_username.is_empty() && account_username != "boundary" {
+            let username = if !account_username.is_empty() {
                 account_username.to_string()
             } else if let Some((brokered_user, _)) = brokered.as_ref() {
                 brokered_user.clone()
@@ -221,10 +220,9 @@ impl BastionProvider for BoundaryProvider {
             return Err(BastionError::AuthenticationFailed);
         }
 
-        let opened = crate::connection::open_prepared_ssh_session_on_transport(
-            prepared, opened, cols, rows,
-        )
-        .await?;
+        let opened =
+            crate::connection::open_prepared_ssh_session_on_transport(prepared, opened, cols, rows)
+                .await?;
         Ok(opened.connection)
     }
 
@@ -243,8 +241,7 @@ impl BastionProvider for BoundaryProvider {
         let state = auth::BoundarySessionState::decode(&session.provider_state)
             .ok_or(BastionError::AuthenticationExpired)?;
         let target_id = request.asset.remote_id.clone();
-        let listen_port =
-            crate::helper::reserve_loopback_port().map_err(Self::map_helper)?;
+        let listen_port = crate::helper::reserve_loopback_port().map_err(Self::map_helper)?;
         let mut command = CommandSpec::new(
             cli.binary().display().to_string(),
             BoundaryCli::connect_args(&target_id, listen_port),

@@ -31,6 +31,9 @@ pub struct BastionStartRequest {
     pub access_key_id: String,
     #[serde(default)]
     pub access_key_secret: String,
+    /// JumpServer Access Key as CredentialInput (`id:secret` in the secret field).
+    #[serde(default)]
+    pub access_key_credential: Option<CredentialInput>,
     #[serde(default)]
     pub token: String,
     /// Preferred Boundary token input (session-only / remember-securely / stored).
@@ -140,10 +143,11 @@ pub async fn bastion_prepare_host(
         Ok(observed) => observed,
         Err(error) => {
             eprintln!(
-                "[runory bastion] stage=prepare_host FAILED code={} host={} port={} hint=confirm_koko_ssh_port_mapping",
+                "[runory bastion] stage=prepare_host FAILED code={} host={} port={} endpoint={} hint=confirm_koko_ssh_port_mapping",
                 error.code(),
                 host,
-                port
+                port,
+                error.endpoint().unwrap_or("n/a"),
             );
             return Err(error);
         }
@@ -166,22 +170,41 @@ pub async fn bastion_start(
         return Err(AppError::InvalidProfile);
     }
     let mut token_to_remember: Option<zeroize::Zeroizing<String>> = None;
+    let mut access_key_to_remember: Option<zeroize::Zeroizing<String>> = None;
     let credential = match request.auth_mode.trim().to_ascii_lowercase().as_str() {
         "accesskey" | "access_key" | "access-key" => {
-            crate::connection::BastionCredential::access_key(
-                request.access_key_id,
-                request.access_key_secret,
-            )
+            let combined = if request.access_key_id.trim().is_empty() {
+                request.access_key_secret
+            } else if request.access_key_secret.trim().is_empty() {
+                request.access_key_id
+            } else {
+                format!(
+                    "{}:{}",
+                    request.access_key_id.trim(),
+                    request.access_key_secret.trim()
+                )
+            };
+            let input = request
+                .access_key_credential
+                .unwrap_or(CredentialInput::SessionOnly { secret: combined });
+            let resolved = credentials
+                .resolve_for_profile(profile.id, CredentialKind::BastionAccessKey, input, false)
+                .await?;
+            if resolved.remember_after_auth {
+                access_key_to_remember = Some(resolved.secret.clone());
+            }
+            let (key_id, secret) = split_access_key_material(resolved.secret.as_str());
+            crate::connection::BastionCredential::access_key(key_id, secret)
         }
         "browsersso" | "browser_sso" | "browser-sso" | "sso" => {
-            crate::connection::BastionCredential::browser_sso(
-                non_empty_string(request.username),
-            )
+            crate::connection::BastionCredential::browser_sso(non_empty_string(request.username))
         }
         "token" => {
-            let input = request.token_credential.unwrap_or(CredentialInput::SessionOnly {
-                secret: request.token,
-            });
+            let input = request
+                .token_credential
+                .unwrap_or(CredentialInput::SessionOnly {
+                    secret: request.token,
+                });
             let resolved = credentials
                 .resolve_for_profile(profile.id, CredentialKind::BastionToken, input, false)
                 .await?;
@@ -206,14 +229,14 @@ pub async fn bastion_start(
         }
     };
     let snap = flows.start(&profile, credential, helper_defaults).await?;
+    let should_save_secret = !matches!(
+        snap.state,
+        crate::connection::BastionFlowUiState::Failed
+            | crate::connection::BastionFlowUiState::Cancelled
+            | crate::connection::BastionFlowUiState::Authenticating
+    );
     if let Some(secret) = token_to_remember {
-        let should_save = !matches!(
-            snap.state,
-            crate::connection::BastionFlowUiState::Failed
-                | crate::connection::BastionFlowUiState::Cancelled
-                | crate::connection::BastionFlowUiState::Authenticating
-        );
-        if should_save {
+        if should_save_secret {
             if let Err(error) = credentials
                 .remember(profile.id, CredentialKind::BastionToken, secret)
                 .await
@@ -222,6 +245,20 @@ pub async fn bastion_start(
                     profile_id = %profile.id,
                     error_code = error.code(),
                     "could not remember bastion token"
+                );
+            }
+        }
+    }
+    if let Some(secret) = access_key_to_remember {
+        if should_save_secret {
+            if let Err(error) = credentials
+                .remember(profile.id, CredentialKind::BastionAccessKey, secret)
+                .await
+            {
+                tracing::warn!(
+                    profile_id = %profile.id,
+                    error_code = error.code(),
+                    "could not remember bastion access key"
                 );
             }
         }
@@ -235,6 +272,38 @@ fn non_empty_string(value: String) -> Option<String> {
         None
     } else {
         Some(trimmed)
+    }
+}
+
+/// Split JumpServer vault material (`id:secret`) for BastionCredential.
+fn split_access_key_material(combined: &str) -> (String, String) {
+    let combined = combined.trim();
+    if let Some((id, secret)) = combined.split_once(':') {
+        let id = id.trim();
+        let secret = secret.trim();
+        if !id.is_empty() && !secret.is_empty() {
+            return (id.to_string(), secret.to_string());
+        }
+    }
+    (combined.to_string(), String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_access_key_material;
+
+    #[test]
+    fn splits_combined_access_key_material() {
+        let (id, secret) = split_access_key_material("  ak-id:super-secret  ");
+        assert_eq!(id, "ak-id");
+        assert_eq!(secret, "super-secret");
+    }
+
+    #[test]
+    fn keeps_colon_inside_secret() {
+        let (id, secret) = split_access_key_material("id:sec:ret");
+        assert_eq!(id, "id");
+        assert_eq!(secret, "sec:ret");
     }
 }
 
@@ -278,9 +347,7 @@ pub async fn bastion_select_asset(
     request: BastionSelectAssetRequest,
     flows: State<'_, BastionFlowService>,
 ) -> AppResult<BastionFlowSnapshot> {
-    flows
-        .select_asset(request.flow_id, request.asset_id)
-        .await
+    flows.select_asset(request.flow_id, request.asset_id).await
 }
 
 #[tauri::command]
@@ -296,9 +363,7 @@ pub async fn bastion_select_account(
     request: BastionSelectAccountRequest,
     flows: State<'_, BastionFlowService>,
 ) -> AppResult<BastionFlowSnapshot> {
-    flows
-        .select_account(request.flow_id, request.account)
-        .await
+    flows.select_account(request.flow_id, request.account).await
 }
 
 #[tauri::command]
@@ -333,19 +398,16 @@ pub async fn bastion_connect_flow(
         port = profile.port,
         "bastion connect flow start"
     );
-    let fingerprint = if snap.provider == "mock"
-        || snap.provider == "teleport"
-        || snap.provider == "boundary"
-    {
+    let fingerprint = if snap.provider == "teleport" || snap.provider == "boundary" {
         None
     } else {
         let attempt_id = request
             .verification_attempt_id
             .ok_or(AppError::HostVerificationExpired)?;
-        let (host, port) = flows.gateway_endpoint(request.flow_id).await.unwrap_or((
-            profile.host.clone(),
-            profile.port,
-        ));
+        let (host, port) = flows
+            .gateway_endpoint(request.flow_id)
+            .await
+            .unwrap_or((profile.host.clone(), profile.port));
         Some(
             known_hosts
                 .consume_scoped(attempt_id, "bastion", &host, port)
@@ -374,13 +436,7 @@ pub async fn bastion_connect_flow(
     };
 
     let snap = match flows
-        .connect(
-            request.flow_id,
-            cols,
-            rows,
-            fingerprint,
-            ssh_password,
-        )
+        .connect(request.flow_id, cols, rows, fingerprint, ssh_password)
         .await
     {
         Ok(snap) => snap,
@@ -389,13 +445,15 @@ pub async fn bastion_connect_flow(
                 "[runory bastion] stage=provider_connect FAILED code={}",
                 error.code()
             );
-            return Err(error);
+            let (host, port) = flows
+                .gateway_endpoint(request.flow_id)
+                .await
+                .unwrap_or((profile.host.clone(), profile.port));
+            return Err(enrich_connect_gateway_error(&host, port, error));
         }
     };
     if snap.state != crate::connection::BastionFlowUiState::Connected {
-        eprintln!(
-            "[runory bastion] stage=provider_connect unexpected state (not connected)"
-        );
+        eprintln!("[runory bastion] stage=provider_connect unexpected state (not connected)");
         return Err(AppError::BastionUnavailable);
     }
     let (connection, provider) = flows
@@ -428,9 +486,7 @@ pub async fn bastion_connect_flow(
             credential_saved = false;
         }
     }
-    eprintln!(
-        "[runory bastion] stage=connect_flow OK session_id={session_id}"
-    );
+    eprintln!("[runory bastion] stage=connect_flow OK session_id={session_id}");
     Ok(ConnectResponse {
         session_id,
         credential_saved,
@@ -444,4 +500,14 @@ pub async fn bastion_cancel_flow(
 ) -> AppResult<()> {
     flows.cancel(request.flow_id).await;
     Ok(())
+}
+
+fn enrich_connect_gateway_error(host: &str, port: u16, error: AppError) -> AppError {
+    let endpoint = crate::domain::format_ssh_endpoint(host, port);
+    match error {
+        AppError::ConnectionRefused | AppError::ConnectionTimeout => {
+            AppError::BastionGatewayUnreachable { endpoint }
+        }
+        other => other,
+    }
 }

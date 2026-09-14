@@ -62,6 +62,9 @@ pub struct ReasonerInput<'a> {
     /// Redacted user replies collected through `AwaitingUser` resumes.
     pub user_replies: &'a [String],
     pub budget: BudgetStatus,
+    /// When true, the previous mutating/unknown command still needs a
+    /// successful approved ReadIntent command before `Final` is allowed.
+    pub verification_required: bool,
     // Read by unit tests today; the production reader is the ModelGateway
     // adapter, which lands with the V2 model protocol stage.
     #[allow(dead_code)]

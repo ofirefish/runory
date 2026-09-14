@@ -86,7 +86,12 @@ export type AssetPage = {
 
 export type BastionStartRequest =
   | { authMode?: "password"; username: string; password: string }
-  | { authMode: "accessKey"; accessKeyId: string; accessKeySecret: string }
+  | {
+      authMode: "accessKey";
+      accessKeyId?: string;
+      accessKeySecret?: string;
+      accessKeyCredential?: CredentialInput;
+    }
   | { authMode: "browserSso"; username?: string }
   | {
       authMode: "token";
@@ -101,8 +106,9 @@ export const bastionStart = (profileId: string, request: BastionStartRequest) =>
       request: {
         profileId,
         authMode: "accessKey",
-        accessKeyId: request.accessKeyId,
-        accessKeySecret: request.accessKeySecret,
+        accessKeyId: request.accessKeyId ?? "",
+        accessKeySecret: request.accessKeySecret ?? "",
+        accessKeyCredential: request.accessKeyCredential,
       },
     });
   }

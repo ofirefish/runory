@@ -12,6 +12,7 @@ import {
   onCloudAuthStateChange,
 } from "../../lib/supabase/cloud";
 import { loadCloudAvatar, loadLatestCachedCloudAvatar } from "../../lib/cloud-avatar";
+import { avatarInitials } from "../../lib/avatar-initials";
 import { lockCloudPolicy } from "../../lib/tauri/cloud-policy";
 import { useCloudIdentityStore } from "../../stores/cloud-identity-store";
 
@@ -30,23 +31,17 @@ function fallbackIdentity(session: Session | null, localLabel: string): UserIden
   };
 }
 
-function initials(value: string) {
-  const segments = value.trim().split(/\s+/).filter(Boolean);
-  if (segments.length > 1) return `${segments[0][0]}${segments.at(-1)?.[0] ?? ""}`.toUpperCase();
-  return value.slice(0, 2).toUpperCase();
-}
-
 export function UserMenu({ onOpenAccount, onOpenAuth, onOpenSettings, onOpenPricing }: { onOpenAccount: () => void; onOpenAuth: () => void; onOpenSettings: () => void; onOpenPricing: () => void }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [identity, setIdentity] = useState<UserIdentity>(() => fallbackIdentity(null, t("userMenu.localUser")));
   const [signOutFailed, setSignOutFailed] = useState(false);
-  const setSharedAvatarUrl = useCloudIdentityStore((store) => store.setAvatarUrl);
+  const setSharedIdentity = useCloudIdentityStore((store) => store.setIdentity);
 
   useEffect(() => {
-    setSharedAvatarUrl(identity.avatarUrl);
-  }, [identity.avatarUrl, setSharedAvatarUrl]);
+    setSharedIdentity({ avatarUrl: identity.avatarUrl, displayName: identity.displayName });
+  }, [identity.avatarUrl, identity.displayName, setSharedIdentity]);
 
   useEffect(() => {
     if (!cloudConfigured) {
@@ -95,7 +90,7 @@ export function UserMenu({ onOpenAccount, onOpenAuth, onOpenSettings, onOpenPric
     return () => { active = false; subscription.unsubscribe(); window.removeEventListener(cloudProfileUpdatedEvent, onProfileUpdated); };
   }, [t]);
 
-  const avatarLabel = useMemo(() => initials(identity.displayName), [identity.displayName]);
+  const avatarLabel = useMemo(() => avatarInitials(identity.displayName), [identity.displayName]);
   const openPanel = (action: () => void) => { setOpen(false); action(); };
   const signOut = async () => {
     setSignOutFailed(false);

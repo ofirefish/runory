@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appErrorCode } from "./app-error";
+import { appErrorCode, appErrorEndpoint } from "./app-error";
 
 describe("appErrorCode", () => {
   it("reads the structured Tauri error payload", () => {
@@ -14,5 +14,24 @@ describe("appErrorCode", () => {
   it("does not expose arbitrary backend error text as a translation key", () => {
     expect(appErrorCode("request failed with secret detail")).toBe("UNKNOWN");
     expect(appErrorCode({ code: "not a stable code" })).toBe("UNKNOWN");
+  });
+});
+
+describe("appErrorEndpoint", () => {
+  it("reads optional bastion gateway endpoint from the payload", () => {
+    expect(
+      appErrorEndpoint({ code: "BASTION_GATEWAY_UNREACHABLE", endpoint: "localhost:2222" }),
+    ).toBe("localhost:2222");
+  });
+
+  it("reads endpoint from stringified IPC payloads", () => {
+    expect(
+      appErrorEndpoint('{"code":"BASTION_KOKO_UNREACHABLE","endpoint":"127.0.0.1:3022"}'),
+    ).toBe("127.0.0.1:3022");
+  });
+
+  it("ignores missing or empty endpoints", () => {
+    expect(appErrorEndpoint({ code: "CONNECTION_REFUSED" })).toBeUndefined();
+    expect(appErrorEndpoint({ code: "BASTION_GATEWAY_UNREACHABLE", endpoint: "  " })).toBeUndefined();
   });
 });

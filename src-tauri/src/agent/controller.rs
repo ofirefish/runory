@@ -313,6 +313,44 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
         })
     }
 
+    /// Attaches a controller to a `Created` run whose identity was reserved
+    /// atomically by the Fleet coordinator, then emits the normal bootstrap
+    /// events. This preserves parent-child ownership without creating a
+    /// second run ID or bypassing the standard Runtime V2 loop.
+    pub(crate) fn attach_created(
+        run: AgentRun,
+        goal: String,
+        reasoner: R,
+        dispatcher: D,
+        stores: AgentStores,
+        config: AgentControllerConfig,
+    ) -> Result<Self, AgentControllerError> {
+        if run.state() != AgentRunStateV2::Created {
+            return Err(AgentControllerError::State(AgentStateError {
+                from: run.state(),
+                to: AgentRunStateV2::Running,
+            }));
+        }
+        let mut controller = Self::attach(
+            run,
+            goal,
+            reasoner,
+            dispatcher,
+            stores,
+            config,
+            Vec::new(),
+            Vec::new(),
+            0,
+            0,
+            0,
+        )?;
+        controller.emit(AgentEvent::RunCreated)?;
+        controller.emit(AgentEvent::UserMessageAdded {
+            content: controller.goal.clone(),
+        })?;
+        Ok(controller)
+    }
+
     /// Restores working facts from a checkpoint snapshot after attach.
     pub fn restore_facts_from_checkpoint(&mut self, checkpoint: &AgentCheckpoint) {
         if checkpoint.fact_snapshot.is_empty() || checkpoint.fact_snapshot == "{}" {
@@ -883,6 +921,9 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
 
     async fn drive_loop(&mut self, started: Instant) -> Result<RunOutcome, AgentControllerError> {
         loop {
+            // Yield so Stop can be delivered while Local (sync) reasoners would
+            // otherwise spin Final→verification→Final without awaiting.
+            tokio::task::yield_now().await;
             if self.is_cancelled() {
                 return self.finish_cancelled();
             }
@@ -919,6 +960,7 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
                         elapsed_ms: elapsed_ms(started),
                         time_budget_ms: self.budget.time_budget_ms,
                     },
+                    verification_required: self.pending_command_verification,
                     context: &context,
                 };
                 (self.reasoner.decide(&input).await, tokens)
@@ -928,6 +970,9 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
                 Ok(decision) => decision,
                 Err(error) => return self.fail_reasoner(error.code),
             };
+            if self.is_cancelled() {
+                return self.finish_cancelled();
+            }
 
             self.trace_runtime_decision(&decision);
 
@@ -944,6 +989,26 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
             match validated {
                 ValidatedDecision::Final { summary } => {
                     if self.pending_command_verification {
+                        let already_notified = self.observations.last().is_some_and(|observation| {
+                            observation.error_code.as_deref()
+                                == Some("COMMAND_VERIFICATION_REQUIRED")
+                        });
+                        if already_notified {
+                            // Avoid spamming the same observation; park so the
+                            // user can Stop or steer instead of burning rounds.
+                            let question = "A mutating or unknown command still requires a successful read-only verification command before completion. Propose a verification command, or stop the run.".to_string();
+                            self.emit(AgentEvent::UserInputRequired {
+                                question: question.clone(),
+                            })?;
+                            self.transition(AgentRunStateV2::AwaitingUser)?;
+                            self.save_checkpoint(
+                                Some(PendingInterruptRef::UserInput {
+                                    question: question.clone(),
+                                }),
+                                started,
+                            )?;
+                            return Ok(RunOutcome::AwaitingUser { question });
+                        }
                         let verification_summary = "A mutating or unknown command requires a successful follow-up verification command before completion.".to_string();
                         self.emit(AgentEvent::ObservationAdded {
                             summary: verification_summary.clone(),
@@ -2273,6 +2338,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn attach_created_preserves_fleet_reserved_run_identity() {
+        let harness = Harness::new();
+        let reserved = AgentRun::new(Uuid::new_v4());
+        let reserved_id = reserved.id();
+        harness
+            .run_store
+            .insert(reserved.clone())
+            .expect("reserve child run");
+        let controller = AgentController::attach_created(
+            reserved,
+            "Inspect assigned target".into(),
+            FnReasoner(|_: &ReasonerInput<'_>| Ok(final_answer("done"))),
+            FnDispatcher(|call: &PreparedToolCall| success_outcome(call, "ok")),
+            harness.stores(),
+            harness.config(
+                Arc::new(AutoAuthorizationGate),
+                RunBudget::default(),
+                Arc::new(NoopChangeSetExecutor),
+            ),
+        )
+        .expect("attach reserved run");
+
+        assert_eq!(controller.run_id(), reserved_id);
+        assert_eq!(
+            harness.event_types(reserved_id),
+            vec!["run_created", "user_message_added"]
+        );
+    }
+
     /// A reasoner mimicking a diagnosis: check disk; if usage is high dig
     /// into /var; otherwise finish immediately.
     fn diagnosis_reasoner(
@@ -3055,6 +3150,49 @@ mod tests {
         let outcome = controller.cancel().expect("cancel");
         assert_eq!(outcome, RunOutcome::Cancelled);
         assert_eq!(controller.run_id(), run_id);
+        assert_eq!(controller.state(), AgentRunStateV2::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn repeated_final_while_verification_pending_parks_for_user() {
+        let harness = Harness::new();
+        let mut controller = harness.auto_controller(
+            FnReasoner(|_: &ReasonerInput<'_>| Ok(final_answer("Done without verification."))),
+            FnDispatcher(|_: &PreparedToolCall| panic!("no tools")),
+            RunBudget::default(),
+        );
+        controller.restore_pending_command_verification(true);
+        let outcome = controller.run_to_interrupt().await.expect("run");
+        assert!(matches!(outcome, RunOutcome::AwaitingUser { .. }));
+        assert_eq!(controller.state(), AgentRunStateV2::AwaitingUser);
+        let types = harness.event_types(controller.run_id());
+        assert_eq!(
+            types
+                .iter()
+                .filter(|event| **event == "observation_added")
+                .count(),
+            1
+        );
+        assert!(types.contains(&"user_input_required"));
+    }
+
+    #[tokio::test]
+    async fn cancel_signal_stops_verification_final_loop() {
+        let harness = Harness::new();
+        let cancel_tx = harness.cancel_tx.clone();
+        let mut controller = harness.auto_controller(
+            FnReasoner(move |input: &ReasonerInput<'_>| {
+                if input.verification_required {
+                    let _ = cancel_tx.send(true);
+                }
+                Ok(final_answer("still trying to finish"))
+            }),
+            FnDispatcher(|_: &PreparedToolCall| panic!("no tools")),
+            RunBudget::default(),
+        );
+        controller.restore_pending_command_verification(true);
+        let outcome = controller.run_to_interrupt().await.expect("run");
+        assert_eq!(outcome, RunOutcome::Cancelled);
         assert_eq!(controller.state(), AgentRunStateV2::Cancelled);
     }
 

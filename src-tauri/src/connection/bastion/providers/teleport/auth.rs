@@ -18,7 +18,7 @@ use crate::connection::bastion::auth::{
     BastionPrincipal, ExternalAuthAction, ProtectedProviderState,
 };
 use crate::connection::bastion::errors::BastionError;
-use crate::connection::bastion::session::BastionContext;
+use crate::connection::bastion::session::{BastionContext, BastionEndpoint};
 use crate::helper::{ExternalHelperManager, HelperError, VersionConstraint};
 
 use super::tsh::{TeleportConnectParams, TshClient, TshStatus};
@@ -86,7 +86,7 @@ pub async fn start_auth(
 ) -> Result<AuthStepResult, BastionError> {
     let cli_override = provider_cli_path(&ctx.endpoint.provider_config);
     let client = tsh_client(helpers, cli_override.as_deref())?;
-    let username = credential_username(credential);
+    let username = credential_username(credential, &ctx.endpoint);
     let params = TeleportConnectParams::from_endpoint(&ctx.endpoint, Some(username.as_str()));
     if params.proxy_addr.trim().is_empty() {
         return Err(BastionError::ProviderUnavailable);
@@ -210,16 +210,15 @@ pub async fn continue_auth(
     if session.provider != PROVIDER {
         return Err(BastionError::ProviderUnavailable);
     }
-    let pending = TeleportSessionState::decode(&session.provider_state).unwrap_or(
-        TeleportSessionState {
+    let pending =
+        TeleportSessionState::decode(&session.provider_state).unwrap_or(TeleportSessionState {
             proxy_addr: String::new(),
             teleport_user: session.principal.username.clone(),
             cluster_name: None,
             insecure: false,
             os_logins: Vec::new(),
             valid_until_ms: None,
-        },
-    );
+        });
     let params = if pending.proxy_addr.trim().is_empty() {
         TeleportConnectParams {
             proxy_addr: String::new(),
@@ -270,16 +269,28 @@ fn tsh_client(
     Ok(TshClient::new(binary))
 }
 
-fn credential_username(credential: &BastionCredential) -> String {
-    match credential {
+fn credential_username(credential: &BastionCredential, endpoint: &BastionEndpoint) -> String {
+    let from_credential = match credential {
         BastionCredential::BrowserSso { username_hint } => username_hint
             .clone()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| "teleport-user".into()),
-        BastionCredential::Password { username, .. } => username.clone(),
-        BastionCredential::ExternalAgent { username } => username.clone(),
-        _ => "teleport-user".into(),
+            .filter(|value| !value.trim().is_empty()),
+        BastionCredential::Password { username, .. }
+        | BastionCredential::ExternalAgent { username } => {
+            Some(username.clone()).filter(|value| !value.trim().is_empty())
+        }
+        _ => None,
+    };
+    if let Some(username) = from_credential {
+        return username;
     }
+    endpoint
+        .provider_config
+        .get("teleportUser")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn pending_session(

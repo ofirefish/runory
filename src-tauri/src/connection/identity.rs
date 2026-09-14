@@ -20,10 +20,7 @@ pub struct LogicalTarget {
 }
 
 impl LogicalTarget {
-    pub fn new(
-        stable_id: impl Into<String>,
-        display_name: impl Into<String>,
-    ) -> Self {
+    pub fn new(stable_id: impl Into<String>, display_name: impl Into<String>) -> Self {
         Self {
             stable_id: stable_id.into(),
             display_name: display_name.into(),

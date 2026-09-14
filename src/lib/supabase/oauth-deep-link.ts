@@ -1,5 +1,6 @@
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { cloudOAuthErrorEvent, completeCloudOAuthRedirect, isCloudOAuthRedirect } from "./cloud";
+import { authDeepLinkDebugInfo, authErrorDebugInfo, logAuthDebug } from "./auth-debug";
+import { cloudOAuthErrorEvent, completeCloudAuthDeepLink, isCloudOAuthRedirect } from "./cloud";
 
 const consumed = new Set<string>();
 
@@ -11,9 +12,11 @@ async function consume(urls: string[]) {
   for (const value of urls) {
     if (!isCloudOAuthRedirect(value) || consumed.has(value)) continue;
     consumed.add(value);
+    logAuthDebug("deepLink:consume", authDeepLinkDebugInfo(value));
     try {
-      await completeCloudOAuthRedirect(value);
-    } catch {
+      await completeCloudAuthDeepLink(value);
+    } catch (error) {
+      logAuthDebug("deepLink:consume-error", authErrorDebugInfo(error));
       reportFailure();
     }
   }

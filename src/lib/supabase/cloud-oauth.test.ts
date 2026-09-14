@@ -17,7 +17,14 @@ vi.mock("./client", () => ({
   supabase: { auth: { setSession: mocks.setSession } },
 }));
 
-import { cloudSignInWithGitHub, cloudSignInWithGoogle, completeCloudOAuthRedirect, isCloudOAuthRedirect } from "./cloud";
+import {
+  buildCloudEmailConfirmDeepLink,
+  cloudSignInWithGitHub,
+  cloudSignInWithGoogle,
+  completeCloudAuthDeepLink,
+  completeCloudOAuthRedirect,
+  isCloudOAuthRedirect,
+} from "./cloud";
 
 const session = {
   access_token: "access-token",
@@ -81,5 +88,30 @@ describe("cloud social OAuth", () => {
     expect(isCloudOAuthRedirect("runory://auth/callback?code=value")).toBe(true);
     expect(isCloudOAuthRedirect("runory://attacker/callback?code=value")).toBe(false);
     await expect(completeCloudOAuthRedirect("https://attacker.example/callback?code=value")).rejects.toThrow("OAUTH_REDIRECT_INVALID");
+  });
+
+  it("applies email-confirm handoff tokens from the deep-link fragment", async () => {
+    const deepLink = buildCloudEmailConfirmDeepLink("access-token", "refresh-token");
+    expect(deepLink.startsWith("runory://auth/callback#")).toBe(true);
+    expect(deepLink).not.toContain("?access_token=");
+    await expect(completeCloudAuthDeepLink(deepLink)).resolves.toEqual(session);
+    expect(mocks.setSession).toHaveBeenCalledExactlyOnceWith({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+    });
+    expect(mocks.exchangeCodeForSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects email-confirm tokens placed in the query string", async () => {
+    await expect(
+      completeCloudAuthDeepLink("runory://auth/callback?access_token=access&refresh_token=refresh"),
+    ).rejects.toThrow("AUTH_DEEPLINK_TOKEN_IN_QUERY");
+    expect(mocks.setSession).not.toHaveBeenCalled();
+  });
+
+  it("routes a pending OAuth code through completeCloudAuthDeepLink", async () => {
+    await cloudSignInWithGoogle();
+    await expect(completeCloudAuthDeepLink("runory://auth/callback?code=one-use-code")).resolves.toEqual(session);
+    expect(mocks.exchangeCodeForSession).toHaveBeenCalledExactlyOnceWith("one-use-code");
   });
 });

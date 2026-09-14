@@ -86,10 +86,7 @@ impl BastionCredential {
         Self::token_with_username(token, None)
     }
 
-    pub fn token_with_username(
-        token: impl Into<String>,
-        username_hint: Option<String>,
-    ) -> Self {
+    pub fn token_with_username(token: impl Into<String>, username_hint: Option<String>) -> Self {
         Self::Token {
             token_ref: SecretRef {
                 id: "transient:session".into(),
@@ -239,14 +236,37 @@ pub enum ExternalAuthAction {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AuthChallengeResponse {
-    Password { id: String, password: String },
-    Totp { id: String, code: String },
-    SmsCode { id: String, code: String },
-    Confirm { id: String, accepted: bool },
-    Choice { id: String, #[serde(rename = "choiceId")] choice_id: String },
-    Text { id: String, value: String },
-    ExternalCompleted { id: String },
-    Cancel { id: String },
+    Password {
+        id: String,
+        password: String,
+    },
+    Totp {
+        id: String,
+        code: String,
+    },
+    SmsCode {
+        id: String,
+        code: String,
+    },
+    Confirm {
+        id: String,
+        accepted: bool,
+    },
+    Choice {
+        id: String,
+        #[serde(rename = "choiceId")]
+        choice_id: String,
+    },
+    Text {
+        id: String,
+        value: String,
+    },
+    ExternalCompleted {
+        id: String,
+    },
+    Cancel {
+        id: String,
+    },
 }
 
 impl AuthChallengeResponse {

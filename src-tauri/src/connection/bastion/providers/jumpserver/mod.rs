@@ -9,8 +9,8 @@ mod koko;
 mod provider;
 mod signer;
 
-pub use provider::JumpServerProvider;
-pub use provider::attach_fingerprint;
 pub use auth::{normalize_koko_host, normalize_koko_ssh_port, parse_api_base_url};
+pub use provider::attach_fingerprint;
+pub use provider::JumpServerProvider;
 #[allow(unused_imports)]
 pub use signer::JumpServerSigner;

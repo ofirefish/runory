@@ -150,7 +150,10 @@ async fn authenticate_tcp_hop(
     ctx: &TransportContext,
 ) -> AppResult<client::Handle<HostKeyHandler>> {
     let observed = Arc::new(Mutex::new(None));
-    let handler = HostKeyHandler::new(Some(hop.expected_fingerprint.clone()), Arc::clone(&observed));
+    let handler = HostKeyHandler::new(
+        Some(hop.expected_fingerprint.clone()),
+        Arc::clone(&observed),
+    );
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(Duration::from_secs(30)),
         keepalive_interval: Some(Duration::from_secs(15)),
@@ -173,7 +176,10 @@ async fn authenticate_stream_hop(
     hop: &ResolvedJumpHop,
 ) -> AppResult<client::Handle<HostKeyHandler>> {
     let observed = Arc::new(Mutex::new(None));
-    let handler = HostKeyHandler::new(Some(hop.expected_fingerprint.clone()), Arc::clone(&observed));
+    let handler = HostKeyHandler::new(
+        Some(hop.expected_fingerprint.clone()),
+        Arc::clone(&observed),
+    );
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(Duration::from_secs(30)),
         keepalive_interval: Some(Duration::from_secs(15)),
@@ -251,10 +257,7 @@ fn load_private_key(
     })
 }
 
-fn verify_observed(
-    observed: &Arc<Mutex<Option<HostKeyInfo>>>,
-    expected: &str,
-) -> AppResult<()> {
+fn verify_observed(observed: &Arc<Mutex<Option<HostKeyInfo>>>, expected: &str) -> AppResult<()> {
     let actual = observed
         .lock()
         .ok()

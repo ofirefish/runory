@@ -3,6 +3,7 @@ set -eu
 
 password="${RUNORY_TEST_PASSWORD:?RUNORY_TEST_PASSWORD is required}"
 printf '%s\n' "${RUNORY_SERVICE_STATE:-active}" > /etc/runory-service-state
+printf '%s\n' "${RUNORY_TEST_NODE_ID:-standalone}" > /etc/runory-node-id
 printf '%s:%s\n' 'runory' "$password" | chpasswd
 ssh-keygen -A
 mkdir -p /home/runory/.ssh /fixtures

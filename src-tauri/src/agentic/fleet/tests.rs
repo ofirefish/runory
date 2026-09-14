@@ -1,5 +1,7 @@
 use super::*;
 use crate::agentic::{ChangeSetDraftRequest, ChangeStepDraft};
+use crate::storage::JsonRepository;
+use crate::tools::ToolAuditRepository;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,6 +212,36 @@ async fn pause_resume_batches_only_pending_targets() {
         execution_batches(&resumed).expect("resume batches"),
         vec![vec![2], vec![3]]
     );
+}
+
+#[tokio::test]
+async fn explicit_rollback_is_hidden_without_a_completed_reversible_step() {
+    let changes = ChangeSetService::default();
+    let fleets = FleetExecutionService::default();
+    let draft = fleets
+        .draft(
+            &changes,
+            request(ExecutionStrategy::Sequential, FailurePolicy::PauseForReview),
+        )
+        .await
+        .expect("fleet draft");
+    {
+        let mut items = fleets.items.lock().await;
+        let run = items.get_mut(&draft.id).expect("run");
+        run.execution_state = FleetExecutionState::Failed;
+        run.targets[0].state = FleetTargetState::Succeeded;
+    }
+    let sessions = ServerSessionManager::default();
+    let audit_directory = tempfile::tempdir().expect("temporary audit directory");
+    let tools = NativeToolExecutionService::foundation(ToolAuditRepository::new(
+        JsonRepository::new(audit_directory.path().join("tool-audit.json")),
+    ));
+    assert!(matches!(
+        fleets
+            .rollback_explicit(&changes, &sessions, &tools, draft.id, draft.version,)
+            .await,
+        Err(AppError::InvalidOperation)
+    ));
 }
 
 #[test]

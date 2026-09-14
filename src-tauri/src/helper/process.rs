@@ -99,7 +99,10 @@ pub fn locate_binary_with_override(
     override_path: Option<&str>,
     names: &[&str],
 ) -> Result<PathBuf, HelperError> {
-    if let Some(raw) = override_path.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(raw) = override_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         let path = PathBuf::from(raw);
         if path.is_file() {
             return Ok(path);
@@ -153,7 +156,12 @@ fn windows_common_helper_paths(names: &[&str]) -> Vec<PathBuf> {
             out.push(PathBuf::from(local).join(name).join(&exe));
         }
         if let Some(ref pf) = program_files {
-            out.push(PathBuf::from(pf).join("HashiCorp").join("Boundary").join(&exe));
+            out.push(
+                PathBuf::from(pf)
+                    .join("HashiCorp")
+                    .join("Boundary")
+                    .join(&exe),
+            );
             out.push(PathBuf::from(pf).join("Teleport").join(&exe));
             out.push(PathBuf::from(pf).join(name).join(&exe));
         }

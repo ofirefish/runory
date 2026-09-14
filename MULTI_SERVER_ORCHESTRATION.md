@@ -448,50 +448,51 @@ generic.
 - [x] Add a pure frontend parser/resolver with ambiguity and connection validation.
 - [x] Add Rust exact `(profile_id, session_id, role)` validation IPC.
 - [x] Add unit tests for duplicate, ambiguous, disconnected and over-limit input.
-- [ ] Add accessible autocomplete and target chips.
+- [x] Add accessible autocomplete and target chips.
 
 ### M2 — Fleet run domain
 
 - [x] Add `FleetRun`, `FleetStage`, `FleetChildRun` and state transition validation.
 - [x] Add content-free SQLite metadata repository and restart recovery.
 - [x] Create an immutable exact-target/stage Graph Digest for later approval binding.
-- [ ] Bind Graph Digest and exact targets to an approval/version transition.
-- [ ] Add Fleet event envelopes and bounded history projection.
+- [x] Bind Graph Digest and exact targets to an approval/version transition.
+- [x] Add Fleet event envelopes and bounded history projection.
 
 ### M3 — Coordinator and child Runtime V2
 
-- [ ] Create parent-child AgentRun ownership.
-- [ ] Route each child to its exact Session dispatcher and target Policy.
-- [ ] Schedule acyclic stages with bounded concurrency.
-- [ ] Pause and cancel without leaking work into other targets.
+- [x] Create parent-child AgentRun ownership.
+- [x] Route each child to its exact Session dispatcher and target Policy.
+- [x] Schedule acyclic stages with bounded concurrency.
+- [x] Pause and cancel without leaking work into other targets.
 
 ### M4 — Multi-target investigation
 
-- [ ] Fan out allowed read Tools under per-run budgets.
-- [ ] Aggregate target-bound structured facts.
-- [ ] Add role, version, service and configuration-digest comparisons.
-- [ ] Prevent raw cross-target transcript aggregation.
+- [x] Fan out allowed read Tools under per-run budgets.
+- [x] Aggregate target-bound structured facts.
+- [x] Add role, version, service and configuration-digest comparisons.
+- [x] Prevent raw cross-target transcript aggregation.
 
 ### M5 — Fleet ChangeSet integration
 
-- [ ] Convert target write proposals to independent ChangeSets.
-- [ ] Reuse `FleetExecutionService` approval/execution/recovery semantics.
-- [ ] Bind graph, target roles and verification contract into approval identity.
-- [ ] Surface real diff, risk, rollback and precondition review.
+- [x] Convert target write proposals to independent ChangeSets.
+- [x] Reuse `FleetExecutionService` approval/execution/recovery semantics.
+- [x] Bind graph, target roles and verification contract into approval identity.
+- [x] Surface real diff, risk, rollback and precondition review.
 
 ### M6 — Fleet UI
 
-- [ ] Add topology/stage view and per-target status.
-- [ ] Add Sequential/Canary/Rolling controls within Policy.
-- [ ] Add Pause/Continue/Stop/Rollback actions.
-- [ ] Keep UI event-driven and orchestration-free.
+- [x] Add topology/stage view and per-target status.
+- [x] Add Sequential/Canary/Rolling controls within Policy.
+- [x] Add Pause/Continue/Stop actions with exact Fleet approval/session/policy revalidation.
+- [x] Surface Rollback only from a bound Fleet ChangeSet with completed reversible steps.
+- [x] Keep UI event-driven and orchestration-free.
 
 ### M7 — Qualification
 
-- [ ] Add 3–10 node Docker OpenSSH integration fixtures.
-- [ ] Cover target/session mismatch, disconnect, cancellation and restart interruption.
-- [ ] Cover partial failure, approval invalidation, verification failure and rollback failure.
-- [ ] Add a deterministic MySQL-compatible fixture only after the generic framework passes.
+- [x] Add 3–10 node Docker OpenSSH integration fixtures.
+- [x] Cover target/session mismatch, disconnect, cancellation and restart interruption.
+- [x] Cover partial failure, approval invalidation, verification failure and rollback failure.
+- [x] Add a deterministic MySQL-compatible fixture only after the generic framework passes.
 
 ## 17. Completion criteria
 

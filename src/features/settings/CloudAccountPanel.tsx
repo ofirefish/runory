@@ -1,10 +1,11 @@
 import type { Session } from "@supabase/supabase-js";
-import { ImagePlus, Save, Trash2, UserCircle } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ImagePlus, Save, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { avatarInitials } from "../../lib/avatar-initials";
 import {
   cloudProfileUpdatedEvent,
   deleteCloudAvatar,
@@ -95,11 +96,16 @@ export function CloudAccountPanel({ session }: { session: Session }) {
     } catch { showProfileError(); } finally { setBusy(false); }
   };
 
+  const avatarLabel = useMemo(
+    () => avatarInitials(displayName || session.user.email?.split("@")[0] || session.user.id),
+    [displayName, session.user.email, session.user.id],
+  );
+
   return <section className="settings-card">
     <h4>{t("cloud.accountTitle")}</h4>
     <div className="mt-3 flex items-center gap-3">
-      <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-[hsl(var(--surface-raised))]" aria-label={t("cloud.avatar")}>
-        {avatarUrl ? <img src={avatarUrl} alt={t("cloud.avatar")} className="h-full w-full object-cover" /> : <UserCircle size={34} className="text-[hsl(var(--muted))]" />}
+      <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-[hsl(var(--surface-raised))] text-2xl font-semibold text-[hsl(var(--primary))]" aria-label={t("cloud.avatar")}>
+        {avatarUrl ? <img src={avatarUrl} alt={t("cloud.avatar")} className="h-full w-full object-cover" /> : <span aria-hidden="true">{avatarLabel}</span>}
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-xs font-medium">{session.user.email}</p>

@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { cloudConfigured, cloudEndpoint, cloudPublishableKey } from "../../lib/supabase/client";
+import { cloudAuthErrorKey } from "../../lib/supabase/auth-error";
+import { authErrorDebugInfo, logAuthDebug } from "../../lib/supabase/auth-debug";
 import {
   cloudOAuthErrorEvent,
   cloudSession,
@@ -49,8 +51,9 @@ export function AccountSettings({ onOpenCloud = () => undefined, onAuthenticated
   const [oauthPending, setOAuthPending] = useState(false);
   const [workspaceCount, setWorkspaceCount] = useState<number | null>(null);
   const [persistenceFailed, setPersistenceFailed] = useState(cloudSessionPersistenceFailed);
-  const showAccountError = useCallback(() => {
-    toast.error(t("cloud.accountError"), { id: "cloud-account-error" });
+  const awaitingEmailConfirm = useRef(false);
+  const showAccountError = useCallback((error?: unknown) => {
+    toast.error(t(error === undefined ? "cloud.accountError" : cloudAuthErrorKey(error)), { id: "cloud-account-error" });
   }, [t]);
 
   const bootstrapAccount = useCallback(async (nextSession: Session) => {
@@ -81,15 +84,24 @@ export function AccountSettings({ onOpenCloud = () => undefined, onAuthenticated
     const subscription = onCloudAuthStateChange((event, nextSession) => {
       if (event === "SIGNED_OUT") {
         setSession(null);
+        awaitingEmailConfirm.current = false;
         queueMicrotask(() => void lockCloudPolicy());
       } else if (nextSession && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION")) {
+        const confirmedFromEmail = event === "SIGNED_IN" && awaitingEmailConfirm.current;
+        if (confirmedFromEmail) awaitingEmailConfirm.current = false;
+        if (confirmedFromEmail) logAuthDebug("ui:email_confirm:signed_in", { userId: nextSession.user.id, email: nextSession.user.email ?? null });
         acceptSession(nextSession);
         queueMicrotask(() => void refreshPolicyCredentials(nextSession).catch(() => undefined));
-        if (event === "SIGNED_IN") queueMicrotask(() => void bootstrapAccount(nextSession).catch(() => setWorkspaceFailed(true)));
+        if (event === "SIGNED_IN") {
+          queueMicrotask(() => {
+            void bootstrapAccount(nextSession).catch(() => setWorkspaceFailed(true));
+            if (confirmedFromEmail) toast.success(t("cloud.emailConfirmedSignedIn"));
+          });
+        }
       }
     });
     return () => subscription.unsubscribe();
-  }, [acceptSession, bootstrapAccount]);
+  }, [acceptSession, bootstrapAccount, t]);
 
   useEffect(() => {
     const onOAuthError = () => { setOAuthPending(false); showAccountError(); };
@@ -111,16 +123,26 @@ export function AccountSettings({ onOpenCloud = () => undefined, onAuthenticated
     if (!passwordValue) { setAuthValidationError("cloud.authPasswordRequired"); password.current?.focus(); return; }
     if (signup && passwordValue.length < 8) { setAuthValidationError("cloud.authPasswordTooShort"); password.current?.focus(); return; }
     setAuthValidationError(null); setBusy(true);
+    logAuthDebug(signup ? "ui:signUp:click" : "ui:signIn:click", { email: emailValue });
     try {
       if (signup) {
         const user = await cloudSignUp(emailValue, passwordValue);
-        if (user) toast.success(t("cloud.confirmEmail"));
+        if (user) {
+          awaitingEmailConfirm.current = true;
+          logAuthDebug("ui:signUp:awaiting_email_confirm", { userId: user.id, email: user.email ?? emailValue });
+          toast.success(t("cloud.confirmEmail"));
+        } else {
+          logAuthDebug("ui:signUp:no_user_returned");
+        }
       } else {
         const nextSession = await cloudSignIn(emailValue, passwordValue);
         acceptSession(nextSession);
         void refreshPolicyCredentials(nextSession).catch(() => undefined);
       }
-    } catch { showAccountError(); } finally {
+    } catch (error) {
+      logAuthDebug(signup ? "ui:signUp:failed" : "ui:signIn:failed", authErrorDebugInfo(error));
+      showAccountError(error);
+    } finally {
       if (password.current) password.current.value = "";
       setBusy(false);
     }
@@ -131,19 +153,19 @@ export function AccountSettings({ onOpenCloud = () => undefined, onAuthenticated
     if (!emailValue) { setAuthValidationError("cloud.authEmailRequired"); email.current?.focus(); return; }
     setBusy(true);
     try { await requestCloudPasswordReset(emailValue); toast.success(t("cloud.resetPasswordSent")); }
-    catch { showAccountError(); } finally { setBusy(false); }
+    catch (error) { showAccountError(error); } finally { setBusy(false); }
   };
 
   const signInWithProvider = async (authenticate: () => Promise<void>) => {
     setBusy(true); setAuthValidationError(null); setOAuthPending(false);
     try { await authenticate(); setOAuthPending(true); }
-    catch { showAccountError(); } finally { setBusy(false); }
+    catch (error) { showAccountError(error); } finally { setBusy(false); }
   };
 
   const signOut = async () => {
     setBusy(true);
     try { await lockCloudPolicy(); await cloudSignOut(); setSession(null); toast.success(t("cloud.signedOut")); }
-    catch { showAccountError(); } finally { setBusy(false); }
+    catch (error) { showAccountError(error); } finally { setBusy(false); }
   };
 
   if (!cloudConfigured) return <section className="settings-card"><h4>{t("cloud.accountTitle")}</h4><p>{t("cloud.accountUnavailable")}</p><p className="mt-3 text-xs text-[hsl(var(--muted))]">{t("cloud.localOnly")}</p></section>;

@@ -2,239 +2,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::connection::{
-    default_bastion_registry, AssetQuery, AuthChallengeResponse, AuthStepResult,
-    BastionConnectOptions, BastionConnectRequest, BastionContext, BastionCredential,
-    BastionEndpoint, BastionError, BastionPorts, BastionProtocol, BastionProvider, BastionTimeouts,
-    ConnectionContext, ConnectionRequest, ConnectionResolver, MockBastionProvider,
+    default_bastion_registry, ConnectionContext, ConnectionRequest, ConnectionResolver,
     ResolvedConnection, SessionIntent,
 };
 use crate::domain::ConnectionRoute;
-
-fn mock_endpoint() -> BastionEndpoint {
-    BastionEndpoint {
-        id: Uuid::new_v4(),
-        provider: "mock".into(),
-        name: "Mock Corp Bastion".into(),
-        host: "bastion.mock.local".into(),
-        ports: BastionPorts {
-            api: Some(443),
-            ssh: Some(2222),
-            web: Some(443),
-        },
-        tls: None,
-        provider_config: serde_json::json!({}),
-    }
-}
-
-fn password_credential() -> BastionCredential {
-    BastionCredential::password("alice", "secret")
-}
-
-async fn authenticate(provider: &MockBastionProvider) -> crate::connection::AuthSession {
-    let ctx = BastionContext {
-        endpoint: mock_endpoint(),
-        timeouts: BastionTimeouts::default(),
-    };
-    let step = provider
-        .start_auth(&ctx, &password_credential())
-        .await
-        .expect("start_auth");
-    let AuthStepResult::Challenge {
-        pending,
-        challenge,
-    } = step
-    else {
-        panic!("expected totp challenge");
-    };
-    let challenge_id = challenge.id().to_string();
-    let step = provider
-        .continue_auth(
-            &pending,
-            AuthChallengeResponse::Totp {
-                id: challenge_id,
-                code: "123456".into(),
-            },
-        )
-        .await
-        .expect("continue_auth");
-    match step {
-        AuthStepResult::Authenticated(session) => session,
-        other => panic!("expected authenticated session, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn mock_provider_contract_probe_auth_assets_connect_disconnect() {
-    let provider = MockBastionProvider::new();
-    assert_eq!(provider.id(), "mock");
-    assert!(provider
-        .capabilities()
-        .contains(crate::connection::BastionCapabilities::MFA));
-
-    let endpoint = mock_endpoint();
-    let probe = provider.probe(&endpoint).await.expect("probe");
-    assert!(probe.reachable);
-    assert_eq!(probe.api_version.as_deref(), Some("1.0.0"));
-
-    let session = authenticate(&provider).await;
-    assert_eq!(session.principal.username, "alice");
-
-    let page = provider
-        .list_assets(
-            &session,
-            AssetQuery {
-                search: Some("prod-db".into()),
-                node: None,
-                protocol: Some(BastionProtocol::Ssh),
-                page: 0,
-                page_size: 10,
-            },
-        )
-        .await
-        .expect("list_assets");
-    assert_eq!(page.items.len(), 1);
-    assert_eq!(page.items[0].remote_id, "asset-prod-db-01");
-    assert!(!page.has_more);
-
-    let accounts = provider
-        .list_accounts(&session, &page.items[0])
-        .await
-        .expect("list_accounts");
-    assert!(accounts
-        .iter()
-        .any(|account| account.username == "root" && account.secret_managed_by_bastion));
-
-    let connection = provider
-        .connect(
-            &session,
-            BastionConnectRequest {
-                asset: page.items[0].clone(),
-                account: accounts[0].clone(),
-                protocol: BastionProtocol::Ssh,
-                terminal: Some(crate::connection::TerminalOptions {
-                    term: "xterm-256color".into(),
-                    cols: 120,
-                    rows: 40,
-                }),
-                options: BastionConnectOptions::default(),
-            },
-        )
-        .await
-        .expect("connect");
-    assert_eq!(connection.metadata().provider, "mock");
-    assert_eq!(connection.metadata().asset_id, "asset-prod-db-01");
-    assert!(connection.metadata().recording);
-
-    provider.disconnect(&connection).await.expect("disconnect");
-}
-
-#[tokio::test]
-async fn mock_provider_rejects_invalid_totp_without_retryable_flag() {
-    let provider = MockBastionProvider::new();
-    let ctx = BastionContext {
-        endpoint: mock_endpoint(),
-        timeouts: BastionTimeouts::default(),
-    };
-    let step = provider
-        .start_auth(&ctx, &password_credential())
-        .await
-        .expect("start_auth");
-    let AuthStepResult::Challenge {
-        pending,
-        challenge,
-    } = step
-    else {
-        panic!("expected challenge");
-    };
-    let err = provider
-        .continue_auth(
-            &pending,
-            AuthChallengeResponse::Totp {
-                id: challenge.id().into(),
-                code: "000000".into(),
-            },
-        )
-        .await
-        .expect_err("bad totp");
-    assert_eq!(err, BastionError::AuthenticationFailed);
-    assert!(!err.is_retryable());
-}
-
-#[tokio::test]
-async fn mock_provider_paginates_assets() {
-    let provider = MockBastionProvider::new();
-    let session = authenticate(&provider).await;
-    let page0 = provider
-        .list_assets(
-            &session,
-            AssetQuery {
-                search: None,
-                node: None,
-                protocol: None,
-                page: 0,
-                page_size: 2,
-            },
-        )
-        .await
-        .expect("page0");
-    assert_eq!(page0.items.len(), 2);
-    assert!(page0.has_more);
-    let page1 = provider
-        .list_assets(
-            &session,
-            AssetQuery {
-                search: None,
-                node: None,
-                protocol: None,
-                page: 1,
-                page_size: 2,
-            },
-        )
-        .await
-        .expect("page1");
-    assert_eq!(page1.items.len(), 1);
-    assert!(!page1.has_more);
-}
-
-#[tokio::test]
-async fn mock_provider_blocks_port_forward_capability() {
-    let provider = MockBastionProvider::new();
-    let session = authenticate(&provider).await;
-    let assets = provider
-        .list_assets(
-            &session,
-            AssetQuery {
-                search: None,
-                node: None,
-                protocol: None,
-                page: 0,
-                page_size: 1,
-            },
-        )
-        .await
-        .expect("assets");
-    let accounts = provider
-        .list_accounts(&session, &assets.items[0])
-        .await
-        .expect("accounts");
-    let err = provider
-        .connect(
-            &session,
-            BastionConnectRequest {
-                asset: assets.items[0].clone(),
-                account: accounts[0].clone(),
-                protocol: BastionProtocol::Ssh,
-                terminal: None,
-                options: BastionConnectOptions {
-                    request_port_forward: true,
-                    ..BastionConnectOptions::default()
-                },
-            },
-        )
-        .await
-        .expect_err("port forward");
-    assert_eq!(err, BastionError::CapabilityUnavailable);
-}
 
 #[tokio::test]
 async fn connection_resolver_routes_bastion_through_registry() {
@@ -251,7 +22,7 @@ async fn connection_resolver_routes_bastion_through_registry() {
             ConnectionRequest {
                 route: ConnectionRoute::Bastion {
                     bastion_id,
-                    provider: "mock".into(),
+                    provider: "jumpserver".into(),
                     asset_id: "asset-prod-db-01".into(),
                     account_id: Some("root".into()),
                     api_base_url: None,
@@ -267,11 +38,9 @@ async fn connection_resolver_routes_bastion_through_registry() {
         .expect("resolve bastion");
     match resolved {
         ResolvedConnection::Bastion {
-            provider,
-            asset_id,
-            ..
+            provider, asset_id, ..
         } => {
-            assert_eq!(provider, "mock");
+            assert_eq!(provider, "jumpserver");
             assert_eq!(asset_id, "asset-prod-db-01");
         }
         other => panic!("unexpected resolution: {other:?}"),

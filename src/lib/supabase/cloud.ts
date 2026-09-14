@@ -2,6 +2,7 @@ import type { AuthChangeEvent, Session, SupabaseClient, User } from "@supabase/s
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AccessPolicy, AccessPolicyAction, AccessPolicyEffect, BillingPlan, BillingPlanCode, CloudAuditRecord, CloudDatabase, CloudEncryptedPayload, CloudUserProfile, CreditAccount, CreditLedgerEntry, MyOrganizationInvite, Organization, OrganizationInvite, OrganizationMember, OrganizationMemberDetails, OrganizationRole, OrganizationSubscription, SyncObject } from "../../types/cloud";
 import { cloudEndpoint, createCloudOAuthClient, supabase } from "./client";
+import { authDeepLinkDebugInfo, authErrorDebugInfo, logAuthDebug } from "./auth-debug";
 import { clearPersistedCloudSession, persistCloudSession } from "./session-persistence";
 
 const authWebBaseUrl = "https://runory.app";
@@ -19,12 +20,29 @@ export const cloudSession = async (): Promise<Session | null> => (await client()
 export const onCloudAuthStateChange = (callback: (event: AuthChangeEvent, session: Session | null) => void) =>
   client().auth.onAuthStateChange(callback).data.subscription;
 export const cloudSignUp = async (email: string, password: string): Promise<User | null> => {
+  const redirectTo = `${authWebBaseUrl}/auth/confirm`;
+  logAuthDebug("signUp:start", {
+    email,
+    redirectTo,
+    cloudEndpoint: cloudEndpoint ?? null,
+    cloudConfigured: Boolean(supabase),
+  });
   const { data, error } = await client().auth.signUp({
     email,
     password,
-    options: { emailRedirectTo: `${authWebBaseUrl}/auth/confirm` },
+    options: { emailRedirectTo: redirectTo },
   });
-  if (error) throw error;
+  if (error) {
+    logAuthDebug("signUp:error", authErrorDebugInfo(error));
+    throw error;
+  }
+  logAuthDebug("signUp:ok", {
+    userId: data.user?.id ?? null,
+    email: data.user?.email ?? email,
+    emailConfirmedAt: data.user?.email_confirmed_at ?? null,
+    identities: data.user?.identities?.length ?? 0,
+    hasSession: Boolean(data.session),
+  });
   return data.user;
 };
 export const cloudSignIn = async (email: string, password: string): Promise<Session> => {
@@ -69,6 +87,16 @@ export const isCloudOAuthRedirect = (value: string): boolean => {
   }
 };
 
+/** Tokens must stay in the fragment so they are not logged as query parameters. */
+export function buildCloudEmailConfirmDeepLink(accessToken: string, refreshToken: string): string {
+  const hash = new URLSearchParams({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    type: "email_confirm",
+  });
+  return `${cloudOAuthRedirectUrl}#${hash.toString()}`;
+}
+
 export const completeCloudOAuthRedirect = async (value: string): Promise<Session> => {
   if (!isCloudOAuthRedirect(value)) throw new Error("OAUTH_REDIRECT_INVALID");
   const oauth = pendingOAuthClient;
@@ -95,6 +123,54 @@ export const completeCloudOAuthRedirect = async (value: string): Promise<Session
   // Dropping the one-attempt client also drops its in-memory PKCE verifier and session.
   pendingOAuthClient = null;
   return applied.session;
+};
+
+/**
+ * Handles both OAuth PKCE (`?code=` with a pending attempt) and email-confirm
+ * handoff (`#access_token` + `#refresh_token` from runory.app after HTTPS confirm).
+ */
+export const completeCloudAuthDeepLink = async (value: string): Promise<Session> => {
+  logAuthDebug("deepLink:start", authDeepLinkDebugInfo(value));
+  if (!isCloudOAuthRedirect(value)) throw new Error("OAUTH_REDIRECT_INVALID");
+  const url = new URL(value);
+  const fragment = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  if (url.searchParams.has("error") || fragment.has("error")) {
+    pendingOAuthClient = null;
+    throw new Error("OAUTH_PROVIDER_REJECTED");
+  }
+  if (url.searchParams.has("access_token") || url.searchParams.has("refresh_token")) {
+    throw new Error("AUTH_DEEPLINK_TOKEN_IN_QUERY");
+  }
+
+  const code = url.searchParams.get("code");
+  if (pendingOAuthClient && code) {
+    logAuthDebug("deepLink:oauth-pkce");
+    return completeCloudOAuthRedirect(value);
+  }
+
+  const accessToken = fragment.get("access_token");
+  const refreshToken = fragment.get("refresh_token");
+  if (accessToken && refreshToken) {
+    logAuthDebug("deepLink:email-confirm-setSession", { type: fragment.get("type") });
+    const { data, error } = await client().auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    if (error || !data.session) {
+      if (error) logAuthDebug("deepLink:setSession-error", authErrorDebugInfo(error));
+      throw error ?? new Error("AUTH_DEEPLINK_SESSION_MISSING");
+    }
+    await persistCloudSession(data.session);
+    logAuthDebug("deepLink:email-confirm-ok", {
+      userId: data.session.user.id,
+      email: data.session.user.email ?? null,
+      emailConfirmedAt: data.session.user.email_confirmed_at ?? null,
+    });
+    return data.session;
+  }
+
+  if (code) throw new Error("OAUTH_ATTEMPT_MISSING");
+  throw new Error("AUTH_DEEPLINK_CREDENTIALS_MISSING");
 };
 export const cloudSignOut = async () => {
   const { error } = await client().auth.signOut();

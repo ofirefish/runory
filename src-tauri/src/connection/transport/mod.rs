@@ -163,7 +163,11 @@ impl TransportFactory {
 /// Errors that originate from transport opening (mapped to AppError).
 #[async_trait]
 pub trait TransportOpener: Send + Sync {
-    async fn open(&self, plan: &TransportPlan, ctx: &TransportContext) -> AppResult<OpenedTransport>;
+    async fn open(
+        &self,
+        plan: &TransportPlan,
+        ctx: &TransportContext,
+    ) -> AppResult<OpenedTransport>;
 }
 
 pub(crate) fn map_io_connect_error(error: std::io::Error) -> AppError {

@@ -1,3 +1,5 @@
+import type { ChangeSet, PolicyEvaluation, PolicySnapshot, RiskLevel } from "./agentic";
+
 export type AgentRunStateV2 =
   | "created"
   | "running"
@@ -116,6 +118,7 @@ export type FleetRunStateV2 =
   | "investigating"
   | "planning"
   | "awaiting_approval"
+  | "approved"
   | "executing"
   | "verifying"
   | "paused_for_review"
@@ -176,6 +179,157 @@ export type AgentV2FleetPlanDraftRequest = {
   stages: FleetStageDraftV2[];
   production: boolean;
   failurePolicy: FleetFailurePolicyV2;
+};
+
+export type AgentV2FleetPromptDraftRequest = {
+  targets: AgentV2FleetTargetRequest[];
+  goal: string;
+  production: boolean;
+  executionStrategy: FleetExecutionStrategyV2;
+  failurePolicy: FleetFailurePolicyV2;
+};
+
+export type FleetApprovalV2 = {
+  id: string;
+  fleetRunId: string;
+  fleetVersion: number;
+  graphDigest: string;
+  targets: AgentV2FleetTargetBinding[];
+  policyVersion: number;
+  policyHash: string;
+  state: "pending" | "granted" | "rejected" | "invalidated";
+  invalidationCode: string | null;
+  createdAtEpochMs: number;
+  decidedAtEpochMs: number | null;
+};
+
+export type FleetEventEnvelopeV2 = {
+  fleetRunId: string;
+  seq: number;
+  timestampMs: number;
+  kind:
+    | "draft_created"
+    | "approval_required"
+    | "approval_granted"
+    | "approval_rejected"
+    | "approval_invalidated"
+    | "child_claimed"
+    | "state_changed"
+    | "recovery_interrupted";
+  state: FleetRunStateV2;
+  approvalId: string | null;
+  code: string | null;
+};
+
+export type FleetFactView = {
+  targetId: string;
+  role: string | null;
+  key: string;
+  value: string;
+  evidenceId: string;
+  observedAtEpochMs: number;
+  expiresAtEpochMs: number;
+};
+
+export type FleetFactComparison = {
+  kind: "role" | "version" | "service" | "configuration_digest";
+  key: string;
+  status: "uniform" | "divergent" | "missing";
+  targets: Array<{
+    targetId: string;
+    role: string | null;
+    value: string | null;
+    evidenceId: string | null;
+  }>;
+};
+
+export type FleetInvestigationView = {
+  facts: FleetFactView[];
+  comparisons: FleetFactComparison[];
+};
+
+export type FleetChangeStepDraft =
+  | { tool: "file.patch"; path: string; expected: string; replacement: string }
+  | { tool: "service.restart"; service: string }
+  | { tool: "service.reload"; service: string }
+  | { tool: "nginx.reload" }
+  | { tool: "docker.restart"; container: string };
+
+export type FleetChangeSetDraftRequest = {
+  fleetRunId: string;
+  fleetRunVersion: number;
+  title: string;
+  targets: Array<{
+    profileId: string;
+    title: string;
+    steps: FleetChangeStepDraft[];
+  }>;
+  executionStrategy: "sequential" | "canary" | "rolling_batch" | "parallel";
+  batchSize: number;
+  canaryCount: number;
+  serviceVerification: string | null;
+  crossTargetVerification: boolean;
+};
+
+export type FleetMultiChangeSet = {
+  id: string;
+  agentRunId: string;
+  title: string;
+  version: number;
+  risk: RiskLevel;
+  executionStrategy: "sequential" | "parallel" | "canary" | "rolling-batch";
+  failurePolicy: "stop" | "pause-for-review" | "continue" | "rollback";
+  batchSize: number;
+  canaryCount: number;
+  production: boolean;
+  serviceVerification: string | null;
+  crossTargetVerification: boolean;
+  orchestrationBinding: {
+    fleetRunId: string;
+    fleetRunVersion: number;
+    graphDigest: string;
+    verificationContractDigest: string;
+    bindingDigest: string;
+    targets: AgentV2FleetTargetBinding[];
+  } | null;
+  targets: Array<{
+    targetId: string;
+    changeSetId: string;
+    changeSetVersion: number;
+    state: string;
+    localVerification: string;
+    serviceVerification: string;
+    rollbackState: string;
+    errorCode: string | null;
+    durationMs: number | null;
+  }>;
+  approvalState: "draft" | "approved" | "rejected" | "invalidated";
+  approval: unknown | null;
+  lastApproval: unknown | null;
+  executionState: string;
+  verification: { crossTarget: string; serviceLevel: string };
+  recoveryState: "live" | "metadata-only";
+  toolCallCount: number;
+  startedAtEpochMs: number | null;
+  completedAtEpochMs: number | null;
+  durationMs: number | null;
+  audit: Array<{ state: string; targetId: string | null; code: string; occurredAtEpochMs: number }>;
+  policyEvaluation: PolicyEvaluation | null;
+  policySnapshot: PolicySnapshot | null;
+};
+
+export type FleetChangeSetReview = {
+  fleetRunId: string;
+  fleetRunVersion: number;
+  graphDigest: string;
+  orchestrationBindingDigest: string;
+  execution: FleetMultiChangeSet;
+  targets: Array<{
+    profileId: string;
+    sessionId: string;
+    role: string | null;
+    changeSet: ChangeSet;
+  }>;
 };
 
 export type TimelineApproval = {

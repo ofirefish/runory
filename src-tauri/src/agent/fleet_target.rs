@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::{AppError, AppResult, SessionId};
+use crate::ssh::ServerSessionManager;
 
 const MIN_FLEET_TARGETS: usize = 2;
 pub const MAX_FLEET_TARGETS: usize = 10;
@@ -61,6 +62,20 @@ pub fn validate_fleet_target_shape(
         roles.push(normalized_role(target.role.as_deref())?);
     }
     Ok(roles)
+}
+
+/// Revalidates live Rust session ownership for every exact Fleet target. A
+/// missing session is never silently rebound to another connected tab.
+pub async fn validate_fleet_target_sessions(
+    targets: &[FleetTargetBinding],
+    sessions: &ServerSessionManager,
+) -> AppResult<()> {
+    for target in targets {
+        sessions
+            .validate_profile_session(target.session_id, target.profile_id)
+            .await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

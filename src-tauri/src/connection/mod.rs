@@ -31,9 +31,9 @@ pub use bastion::{
     BastionConnectOptions, BastionConnectRequest, BastionConnection, BastionContext,
     BastionCredential, BastionEndpoint, BastionError, BastionErrorDetail, BastionPorts,
     BastionPrincipal, BastionProbeResult, BastionProtocol, BastionProvider, BastionRegistry,
-    BastionSessionMetadata, BastionSessionState, BastionTimeouts, ExternalAuthAction,
-    JumpServerProvider, MockBastionProvider, NativeBastionSession, ProtectedProviderState,
-    ProviderLimits, SecretRef, TeleportProvider, TerminalOptions, TlsOptions, BoundaryProvider,
+    BastionSessionMetadata, BastionSessionState, BastionTimeouts, BoundaryProvider,
+    ExternalAuthAction, JumpServerProvider, ProtectedProviderState, ProviderLimits, SecretRef,
+    TeleportProvider, TerminalOptions, TlsOptions,
 };
 #[allow(unused_imports)]
 pub use errors::ConnectionError;
@@ -52,21 +52,20 @@ pub use resolver::ConnectionResolver;
 pub use route::{ConnectionRouteSummary, SessionIntent};
 pub use session_bridge::BastionSessionBridge;
 #[allow(unused_imports)]
+pub use transport::ssh_jump::{
+    open_resolved as open_ssh_jump_resolved, ResolvedJumpAuth, ResolvedJumpHop, SshJumpOpenRequest,
+};
+#[allow(unused_imports)]
 pub use transport::{
     CommandSpec, CredentialRef, JumpHop, LocalEndpointStrategy, OpenedTransport, TransportContext,
     TransportFactory, TransportPlan,
 };
-#[allow(unused_imports)]
-pub use transport::ssh_jump::{
-    open_resolved as open_ssh_jump_resolved, ResolvedJumpAuth, ResolvedJumpHop, SshJumpOpenRequest,
-};
 
 use std::sync::Arc;
 
-/// Build the default registry with Mock + JumpServer + Teleport + Boundary.
+/// Build the default registry with JumpServer + Teleport + Boundary.
 pub fn default_bastion_registry() -> BastionRegistry {
     let mut registry = BastionRegistry::new();
-    registry.register(Arc::new(MockBastionProvider::new()));
     registry.register(Arc::new(JumpServerProvider::new()));
     registry.register(Arc::new(TeleportProvider::new()));
     registry.register(Arc::new(BoundaryProvider::new()));

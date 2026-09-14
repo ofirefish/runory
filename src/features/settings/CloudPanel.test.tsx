@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "../../i18n";
 import type { Session } from "@supabase/supabase-js";
 import { toast } from "sonner";
-import { cloudSession, cloudSignIn, cloudSignInWithGitHub, cloudSignInWithGoogle, cloudSignUp, createOrganization, listOrganizations, loadEncryptedInventory, writeEncryptedInventory } from "../../lib/supabase/cloud";
+import { cloudSession, cloudSignIn, cloudSignInWithGitHub, cloudSignInWithGoogle, cloudSignUp, createOrganization, listOrganizations, loadEncryptedInventory, onCloudAuthStateChange, writeEncryptedInventory } from "../../lib/supabase/cloud";
 import { cloudSyncKeyStatus, discardCloudSync, exportCloudSync, previewCloudSync, rotateCloudRecoveryPassphrase } from "../../lib/tauri/cloud";
 import { refreshCloudPolicy } from "../../lib/tauri/cloud-policy";
 import { AccountSettings } from "./AccountSettings";
@@ -126,6 +126,37 @@ describe("cloud authentication controls", () => {
     await fill("cloud.password", "password-123");
     await act(async () => { button(key).click(); });
     expect(action).toHaveBeenCalledExactlyOnceWith("person@example.test", "password-123");
+  });
+
+  it("surfaces Auth rate limits instead of a generic network failure", async () => {
+    vi.mocked(cloudSignUp).mockRejectedValueOnce({ status: 429, message: "email rate limit exceeded" });
+    await fill("cloud.email", "person@example.test");
+    await fill("cloud.password", "password-123");
+    await act(async () => { button("cloud.signUp").click(); await Promise.resolve(); });
+    expect(toast.error).toHaveBeenCalledWith(i18n.t("cloud.authRateLimited"), { id: "cloud-account-error" });
+  });
+
+  it("toasts when email confirmation signs the desktop session in", async () => {
+    const session = {
+      access_token: "fixture-access-token",
+      expires_at: 4_102_444_800,
+      user: { id: "user-1", email: "person@example.test" },
+    } as unknown as Session;
+    let emit: ((event: string, next: Session | null) => void) | undefined;
+    vi.mocked(onCloudAuthStateChange).mockImplementationOnce((callback) => {
+      emit = callback as typeof emit;
+      return { id: "fixture-auth", callback, unsubscribe: vi.fn() };
+    });
+    vi.mocked(cloudSignUp).mockResolvedValueOnce({ id: "user-1", email: "person@example.test" } as never);
+    await act(async () => { root.unmount(); });
+    root = createRoot(container);
+    await act(async () => { root.render(<AccountSettings />); });
+    await fill("cloud.email", "person@example.test");
+    await fill("cloud.password", "password-123");
+    await act(async () => { button("cloud.signUp").click(); await Promise.resolve(); });
+    expect(toast.success).toHaveBeenCalledWith(i18n.t("cloud.confirmEmail"));
+    await act(async () => { emit?.("SIGNED_IN", session); await Promise.resolve(); });
+    expect(toast.success).toHaveBeenCalledWith(i18n.t("cloud.emailConfirmedSignedIn"));
   });
 
   it("notifies the standalone dialog after email authentication completes", async () => {

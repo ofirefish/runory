@@ -291,7 +291,7 @@ mod tests {
         let camel = serde_json::from_value::<ConnectionRoute>(serde_json::json!({
             "type": "bastion",
             "bastionId": bastion_id,
-            "provider": "mock",
+            "provider": "jumpserver",
             "assetId": "asset-1",
             "accountId": "root",
         }))
@@ -300,7 +300,7 @@ mod tests {
             camel,
             ConnectionRoute::Bastion {
                 bastion_id,
-                provider: "mock".into(),
+                provider: "jumpserver".into(),
                 asset_id: "asset-1".into(),
                 account_id: Some("root".into()),
                 api_base_url: None,
@@ -314,7 +314,7 @@ mod tests {
         let snake = serde_json::from_value::<ConnectionRoute>(serde_json::json!({
             "type": "bastion",
             "bastion_id": bastion_id,
-            "provider": "mock",
+            "provider": "jumpserver",
             "asset_id": "asset-1",
         }))
         .expect("deserialize snake_case bastion route");
@@ -322,7 +322,7 @@ mod tests {
             snake,
             ConnectionRoute::Bastion {
                 bastion_id,
-                provider: "mock".into(),
+                provider: "jumpserver".into(),
                 asset_id: "asset-1".into(),
                 account_id: None,
                 api_base_url: None,

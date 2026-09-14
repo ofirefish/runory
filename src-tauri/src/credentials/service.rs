@@ -291,6 +291,8 @@ impl CredentialService {
                 .await?;
             self.forget(profile_id, CredentialKind::BastionToken)
                 .await?;
+            self.forget(profile_id, CredentialKind::BastionAccessKey)
+                .await?;
             self.forget(profile_id, CredentialKind::BastionTargetPassword)
                 .await?;
         }

@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, KeyRound, LoaderCircle, LockKeyhole, Server, ShieldCheck, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -11,6 +11,8 @@ import { cancelHostVerification, credentialStatus, forgetCredential, initializeV
 import { vaultUnlockAction } from "../../lib/vault-unlock";
 import type { ServerProfile } from "../../types/domain";
 import type { CredentialInput, CredentialStatus, HostVerification } from "../../types/session";
+import { OsLogo } from "../profiles/OsLogo";
+import { osLogoDictionary } from "../profiles/os-logo-data";
 import { ConnectionAttemptProgress, type ConnectionProgressStage } from "./ConnectionAttemptProgress";
 import "./connection-dialog.css";
 import { connectionOutcome, type ConnectionAction } from "./connection-outcome";
@@ -159,11 +161,20 @@ export function ConnectionDialog({ profile, mode, onClose, onConnect, onTest }: 
   const connecting = busy && progressStage !== null;
   const dialogFocus = useConnectionDialogFocus(busy, close);
   const endpoint = `${profile.host.includes(":") && !profile.host.startsWith("[") ? `[${profile.host}]` : profile.host}:${profile.port}`;
+  const osLogo = profile.osDistribution ? osLogoDictionary[profile.osDistribution] : null;
 
   return <div {...dialogFocus} tabIndex={-1} className="connection-modal" role="dialog" aria-modal="true" aria-labelledby="connection-title">
     <div className="connection-card">
       <header className="connection-card-header">
-        <span className="connection-server-icon" aria-hidden="true"><Server size={22} strokeWidth={1.5} /></span>
+        <span
+          className={osLogo ? "connection-server-icon has-os-logo" : "connection-server-icon"}
+          style={osLogo ? { "--os-logo-color": osLogo.color } as CSSProperties : undefined}
+          aria-hidden="true"
+        >
+          {profile.osDistribution && osLogo
+            ? <OsLogo plain distribution={profile.osDistribution} state="idle" statusLabel={osLogo.label} />
+            : <Server size={22} strokeWidth={1.5} />}
+        </span>
         <div className="connection-card-title">
           <p>{t(verification && !connecting ? "connection.fingerprintTitle" : mode === "tunnel" ? "tunnels.connectTo" : "connection.title", { name: profile.name })}</p>
           <h2 id="connection-title">{profile.name}</h2>
@@ -177,7 +188,7 @@ export function ConnectionDialog({ profile, mode, onClose, onConnect, onTest }: 
           <div className="connection-target-auth"><dt><KeyRound size={13} aria-hidden="true" />{t("profile.authMethod")}</dt><dd>{t(profile.authMethod === "password" ? "connection.password" : "profile.privateKey")}</dd></div>
         </dl>
         {mode === "tunnel" && <p className="mb-4 text-xs text-[hsl(var(--secondary))]">{t("tunnels.backgroundHint")}</p>}
-        {connecting && <ConnectionAttemptProgress stage={progressStage} testing={pendingAction.current === "test"} />}
+        {connecting && <ConnectionAttemptProgress stage={progressStage} testing={pendingAction.current === "test"} osDistribution={profile.osDistribution} />}
         <div hidden={connecting}>
     {!verification ? <form className="connection-credential-form space-y-4" aria-busy={busy} onSubmit={submitEnteredCredential("connect")}>
       {vault?.vaultInitialized && !vault.vaultUnlocked && vault.platformUnlockConfigured && vault.platformUnlockAvailable && <div className="rounded-lg border p-3"><div className="flex items-center gap-2 text-sm font-medium"><LockKeyhole size={16} />{t("connection.vaultLocked")}</div><p className="mt-1 text-xs text-[hsl(var(--muted))]">{t("connection.platformUnlockHint")}</p><Button className="mt-3" type="button" variant="secondary" disabled={busy} onClick={() => void unlockOrInitialize()}>{t("connection.unlockVault")}</Button></div>}

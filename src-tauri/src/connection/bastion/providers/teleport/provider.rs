@@ -68,10 +68,11 @@ impl TeleportProvider {
         Ok(TshClient::new(binary))
     }
 
-    fn session_params(session: &AuthSession) -> Result<(TeleportSessionState, TeleportConnectParams), BastionError> {
-        let state = TeleportSessionState::decode(&session.provider_state).ok_or(
-            BastionError::AuthenticationExpired,
-        )?;
+    fn session_params(
+        session: &AuthSession,
+    ) -> Result<(TeleportSessionState, TeleportConnectParams), BastionError> {
+        let state = TeleportSessionState::decode(&session.provider_state)
+            .ok_or(BastionError::AuthenticationExpired)?;
         let mut params = state.connect_params();
         if params.cluster_name.is_none() {
             // Prefer cluster from principal display_name if stored there.
@@ -118,7 +119,8 @@ impl BastionProvider for TeleportProvider {
         if endpoint.provider != "teleport" {
             return Err(BastionError::ProviderUnavailable);
         }
-        let override_path = crate::connection::bastion::provider_cli_path(&endpoint.provider_config);
+        let override_path =
+            crate::connection::bastion::provider_cli_path(&endpoint.provider_config);
         let client = self.tsh_client(override_path.as_deref())?;
         let version = client.version_string().map_err(Self::map_helper)?;
         Ok(BastionProbeResult {

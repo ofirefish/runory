@@ -11,7 +11,7 @@ const dictionaries = {
     hero: {
       eyebrow: "LOCAL-FIRST INFRASTRUCTURE WORKSPACE",
       title: "让每一次远程运维，都清楚、可控、可追溯。",
-      description: "Runory 把 SSH、文件、服务、部署与受控 AI 操作放进一个跨平台工作区。服务器连接留在本地，云端只保存经过加密的同步数据。",
+      description: "Runory 把 SSH、跳板、隧道、文件、服务、Incident、部署与受控 AI 放进一个跨平台工作区。服务器连接留在本地，云端只保存经过加密的同步数据。",
       primary: "查看同步服务",
       secondary: "了解安全设计",
       privacy: "本地优先 · 强制主机验证 · 敏感操作逐项确认",
@@ -21,10 +21,10 @@ const dictionaries = {
     features: {
       eyebrow: "ONE CALM WORKSPACE",
       title: "不是给终端加一个聊天框。",
-      description: "从可靠的 SSH 会话出发，把高频运维工作组织成明确的上下文、动作与证据。",
+      description: "从可靠的接入路径出发，把高频运维工作组织成明确的上下文、动作与证据。",
       items: [
-        ["稳定连接", "SSH、跳板机、隧道、PTY 与强制 Host Key Verification。"],
-        ["文件与运维", "SFTP、服务、Docker、Nginx、日志和部署共用同一个 ServerSession。"],
+        ["可靠接入", "SSH、跳板机、本地隧道、堡垒接入与强制 Host Key Verification。"],
+        ["文件与运维", "SFTP、服务、Docker、Nginx、Incident 与部署共用同一个 ServerSession。"],
         ["受控 AI", "命令原样展示、用户审批、真实终端执行，再根据结果继续分析。"],
       ],
     },
@@ -45,6 +45,7 @@ const dictionaries = {
       signInTitle: "登录同步服务", signInDescription: "查看账号资料、组织与云端密文副本状态。", signUpTitle: "创建 Runory 账号", signUpDescription: "注册后请先完成邮箱确认，再在 Runory 中启用可选同步。", forgotTitle: "重置密码", forgotDescription: "我们会向你的邮箱发送一次性恢复链接。", updateTitle: "设置新密码", updateDescription: "完成后将返回账号中心。",
       displayName: "显示名称", email: "邮箱", password: "密码", newPassword: "新密码", passwordHint: "至少 8 位，最多 128 位", signIn: "登录", signUp: "创建账号", sendReset: "发送恢复邮件", updatePassword: "更新密码", forgot: "忘记密码", noAccount: "还没有账号？", haveAccount: "已有账号？", backToSignIn: "返回登录",
       asideTitle: "默认本地优先。", asideDescription: "云同步保持可选、加密，并与 SSH 凭据和终端数据流严格分离。", invalid: "请检查输入内容。", authFailed: "操作未完成，请检查账号信息或稍后重试。", configuration: "同步服务尚未配置。", confirmationSent: "确认邮件已发送，请完成邮箱验证。", resetSent: "恢复邮件已发送，请检查收件箱。", updated: "已保存。", confirmFailed: "确认链接无效或已过期。",
+      openAppTitle: "邮箱已确认", openAppDescription: "正在打开 Runory 桌面应用并完成登录。如果没有自动打开，请点击下方按钮。", openAppOpening: "正在打开 Runory…", openAppButton: "打开 Runory", openAppAccount: "继续使用网页账号中心", openAppMissing: "当前没有可用的登录会话，请重新登录。",
     },
     portal: {
       navOverview: "同步概览", navAdmin: "运营后台", eyebrow: "ACCOUNT & SYNC", title: "你的 Runory 云端空间", description: "这里只展示账号和加密同步元数据。服务器资料不会在网页中解密。", profileTitle: "账号资料", displayName: "显示名称", email: "登录邮箱", save: "保存资料", workspaces: "空间", personalWorkspace: "个人空间", teamWorkspace: "团队空间", lastSync: "云端副本更新", revision: "Revision", noSync: "尚无云端副本", encrypted: "仅密文", privacyTitle: "数据边界", privacyDescription: "密码、Passphrase、私钥、Known Hosts 与终端输出不会出现在这个门户。", noWorkspace: "尚未创建空间", openAdmin: "打开运营后台",
@@ -59,7 +60,7 @@ const dictionaries = {
     hero: {
       eyebrow: "LOCAL-FIRST INFRASTRUCTURE WORKSPACE",
       title: "Make every remote operation clear, controlled, and reviewable.",
-      description: "Runory brings SSH, files, services, deployment, and controlled AI operations into one cross-platform workspace. Connections stay local; the cloud stores encrypted sync data only.",
+      description: "Runory brings SSH, jump hosts, tunnels, files, services, Incident workflows, deployment, and controlled AI into one cross-platform workspace. Connections stay local; the cloud stores encrypted sync data only.",
       primary: "Explore cloud sync",
       secondary: "See the security model",
       privacy: "Local-first · Mandatory host verification · Explicit approval",
@@ -69,10 +70,10 @@ const dictionaries = {
     features: {
       eyebrow: "ONE CALM WORKSPACE",
       title: "More than a chat box beside a terminal.",
-      description: "Runory starts with a reliable SSH session and turns operations into clear context, actions, and evidence.",
+      description: "Runory starts with reliable access paths and turns operations into clear context, actions, and evidence.",
       items: [
-        ["Reliable access", "SSH, jump hosts, tunnels, PTY, and mandatory host-key verification."],
-        ["Files and operations", "SFTP, services, Docker, Nginx, logs, and deployment share one ServerSession."],
+        ["Reliable access", "SSH, jump hosts, local tunnels, bastion access, and mandatory host-key verification."],
+        ["Files and operations", "SFTP, services, Docker, Nginx, Incident, and deployment share one ServerSession."],
         ["Controlled AI", "Commands are shown exactly, approved by you, run in the real terminal, and reviewed from evidence."],
       ],
     },
@@ -93,6 +94,7 @@ const dictionaries = {
       signInTitle: "Sign in to cloud sync", signInDescription: "Review your account, organizations, and encrypted cloud-copy status.", signUpTitle: "Create a Runory account", signUpDescription: "Confirm your email, then opt into sync from Runory.", forgotTitle: "Reset your password", forgotDescription: "We will send a one-time recovery link to your email.", updateTitle: "Set a new password", updateDescription: "You will return to your account when it is complete.",
       displayName: "Display name", email: "Email", password: "Password", newPassword: "New password", passwordHint: "8–128 characters", signIn: "Sign in", signUp: "Create account", sendReset: "Send recovery email", updatePassword: "Update password", forgot: "Forgot password", noAccount: "New to Runory?", haveAccount: "Already have an account?", backToSignIn: "Back to sign in",
       asideTitle: "Local-first by default.", asideDescription: "Cloud sync remains optional, encrypted, and separate from SSH credentials and terminal streams.", invalid: "Check the information you entered.", authFailed: "The operation could not be completed. Check your account details or try again.", configuration: "Cloud sync is not configured.", confirmationSent: "Confirmation sent. Verify your email to continue.", resetSent: "Recovery email sent. Check your inbox.", updated: "Saved.", confirmFailed: "The confirmation link is invalid or expired.",
+      openAppTitle: "Email confirmed", openAppDescription: "Opening the Runory desktop app to finish signing in. If nothing happens, use the button below.", openAppOpening: "Opening Runory…", openAppButton: "Open Runory", openAppAccount: "Continue in the web account portal", openAppMissing: "No signed-in session is available. Sign in again.",
     },
     portal: {
       navOverview: "Sync overview", navAdmin: "Operations", eyebrow: "ACCOUNT & SYNC", title: "Your Runory cloud space", description: "This portal only shows account and encrypted-sync metadata. Server profiles are never decrypted here.", profileTitle: "Account profile", displayName: "Display name", email: "Sign-in email", save: "Save profile", workspaces: "Spaces", personalWorkspace: "Personal space", teamWorkspace: "Team space", lastSync: "Cloud copy updated", revision: "Revision", noSync: "No cloud copy yet", encrypted: "Ciphertext only", privacyTitle: "Data boundary", privacyDescription: "Passwords, passphrases, private keys, known hosts, and terminal output never appear in this portal.", noWorkspace: "No space created yet", openAdmin: "Open operations console",

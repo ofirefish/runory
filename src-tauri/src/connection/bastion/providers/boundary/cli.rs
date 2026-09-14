@@ -72,9 +72,9 @@ impl BoundaryCli {
         })?;
         let credentials = value.get("credentials")?.as_array()?;
         for item in credentials {
-            let credential = item.get("credential").or_else(|| {
-                item.pointer("/secret/decoded")
-            })?;
+            let credential = item
+                .get("credential")
+                .or_else(|| item.pointer("/secret/decoded"))?;
             let username = credential
                 .get("username")
                 .and_then(|v| v.as_str())
@@ -85,7 +85,10 @@ impl BoundaryCli {
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|v| !v.is_empty())?;
-            return Some((username.to_string(), zeroize::Zeroizing::new(password.to_string())));
+            return Some((
+                username.to_string(),
+                zeroize::Zeroizing::new(password.to_string()),
+            ));
         }
         None
     }
@@ -205,7 +208,8 @@ mod tests {
 
     #[test]
     fn parses_wrapped_and_raw_target_arrays() {
-        let wrapped = r#"{"items":[{"id":"ttcp_1","name":"web","attributes":{"default_port":22}}]}"#;
+        let wrapped =
+            r#"{"items":[{"id":"ttcp_1","name":"web","attributes":{"default_port":22}}]}"#;
         let assets = parse_targets_json(wrapped);
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].remote_id, "ttcp_1");

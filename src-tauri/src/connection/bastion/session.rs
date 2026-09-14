@@ -144,12 +144,6 @@ pub struct BastionSessionMetadata {
     pub started_at: i64,
 }
 
-/// Opaque native session owned by a provider (WebSocket PTY, proprietary, …).
-pub trait NativeBastionSession: Send + Sync {
-    fn connection_id(&self) -> &str;
-    fn metadata(&self) -> &BastionSessionMetadata;
-}
-
 /// Interactive SSH-backed bastion session (e.g. JumpServer KoKo, Teleport tsh).
 pub struct BastionSshSession {
     pub connection_id: String,
@@ -163,21 +157,13 @@ pub struct BastionSshSession {
 
 /// Vendor-agnostic connection handle. Not required to be a raw TCP stream.
 pub enum BastionConnection {
-    /// Provider returns a native handle (used by Mock and proprietary protocols).
-    Native {
-        handle: Box<dyn NativeBastionSession>,
-        metadata: BastionSessionMetadata,
-    },
     /// Interactive SSH PTY owned by a bastion gateway (KoKo, tsh, boundary proxy, …).
-    SshInteractive {
-        session: BastionSshSession,
-    },
+    SshInteractive { session: BastionSshSession },
 }
 
 impl BastionConnection {
     pub fn metadata(&self) -> &BastionSessionMetadata {
         match self {
-            Self::Native { metadata, .. } => metadata,
             Self::SshInteractive { session } => &session.metadata,
         }
     }
@@ -190,10 +176,6 @@ impl BastionConnection {
 impl std::fmt::Debug for BastionConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Native { metadata, .. } => f
-                .debug_struct("BastionConnection::Native")
-                .field("metadata", metadata)
-                .finish(),
             Self::SshInteractive { session } => f
                 .debug_struct("BastionConnection::SshInteractive")
                 .field("connection_id", &session.connection_id)

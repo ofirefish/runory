@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use super::changes::ChangeStepState;
 use super::{ApprovalState, ChangeSet, ChangeSetService, ExecutionState};
 use crate::domain::{AppError, AppResult, ServiceStatus};
 use crate::policy::AgentPolicyService;
@@ -45,6 +46,8 @@ struct PersistedFleetRun {
     production: bool,
     service_verification: Option<String>,
     cross_target_verification: bool,
+    #[serde(default)]
+    orchestration_binding: Option<FleetOrchestrationBinding>,
     targets: Vec<FleetTargetExecution>,
     #[serde(default)]
     last_approval: Option<FleetApprovalBinding>,
@@ -101,6 +104,38 @@ impl FleetExecutionService {
         changes: &ChangeSetService,
         request: MultiChangeSetDraftRequest,
     ) -> AppResult<MultiChangeSet> {
+        self.draft_inner(changes, request, None).await
+    }
+
+    pub(crate) async fn draft_bound(
+        &self,
+        changes: &ChangeSetService,
+        request: MultiChangeSetDraftRequest,
+        orchestration_binding: FleetOrchestrationBinding,
+    ) -> AppResult<MultiChangeSet> {
+        if !valid_digest(&orchestration_binding.binding_digest)
+            || !valid_digest(&orchestration_binding.graph_digest)
+            || !valid_digest(&orchestration_binding.verification_contract_digest)
+            || orchestration_binding.targets.len() != request.targets.len()
+            || request.targets.iter().any(|target| {
+                !orchestration_binding
+                    .targets
+                    .iter()
+                    .any(|binding| binding.session_id == target.session_id)
+            })
+        {
+            return Err(AppError::InvalidOperation);
+        }
+        self.draft_inner(changes, request, Some(orchestration_binding))
+            .await
+    }
+
+    async fn draft_inner(
+        &self,
+        changes: &ChangeSetService,
+        request: MultiChangeSetDraftRequest,
+        orchestration_binding: Option<FleetOrchestrationBinding>,
+    ) -> AppResult<MultiChangeSet> {
         validate_request(&request)?;
         let mut sessions = BTreeSet::new();
         if request
@@ -137,6 +172,7 @@ impl FleetExecutionService {
             production: request.production,
             service_verification: request.service_verification,
             cross_target_verification: request.cross_target_verification,
+            orchestration_binding,
             targets: change_sets.iter().map(fleet_target).collect(),
             approval_state: ApprovalState::Draft,
             approval: None,
@@ -232,6 +268,15 @@ impl FleetExecutionService {
                 target_id: current.session_id,
                 change_set_id: current.id,
                 change_set_version: current.version,
+                precondition_digest: if cfg!(test) && current.preconditions.is_empty() {
+                    None
+                } else {
+                    Some(
+                        changes
+                            .precondition_binding_digest(current.id, current.version)
+                            .await?,
+                    )
+                },
             });
         }
         for binding in &bindings {
@@ -248,6 +293,10 @@ impl FleetExecutionService {
             fleet_version: version,
             target_ids: run.targets.iter().map(|item| item.target_id).collect(),
             targets: bindings,
+            orchestration_binding_digest: run
+                .orchestration_binding
+                .as_ref()
+                .map(|binding| binding.binding_digest.clone()),
             approved_at_epoch_ms: now_epoch_ms(),
         };
         run.approval = Some(approval.clone());
@@ -416,6 +465,55 @@ impl FleetExecutionService {
         Ok(output)
     }
 
+    /// Explicit user rollback for a live, version-bound Fleet ChangeSet. It is
+    /// available only when at least one completed target exposes a real
+    /// rollback implementation; unsupported steps remain truthfully failed.
+    pub(crate) async fn rollback_explicit(
+        &self,
+        changes: &ChangeSetService,
+        sessions: &ServerSessionManager,
+        tools: &NativeToolExecutionService,
+        id: Uuid,
+        version: u64,
+    ) -> AppResult<MultiChangeSet> {
+        let snapshot = self.get(id).await?;
+        validate_live_version(&snapshot, version)?;
+        if !matches!(
+            snapshot.execution_state,
+            FleetExecutionState::PausedForReview
+                | FleetExecutionState::Failed
+                | FleetExecutionState::Succeeded
+        ) {
+            return Err(AppError::InvalidOperation);
+        }
+        let completed = snapshot
+            .targets
+            .iter()
+            .filter(|target| target.state == FleetTargetState::Succeeded)
+            .collect::<Vec<_>>();
+        if completed.is_empty() {
+            return Err(AppError::InvalidOperation);
+        }
+        let mut has_real_rollback = false;
+        for target in completed {
+            let change = changes.get(target.change_set_id).await?;
+            if change.session_id != target.target_id || change.version != target.change_set_version
+            {
+                return Err(AppError::InvalidOperation);
+            }
+            has_real_rollback |= change.steps.iter().any(|step| {
+                step.state == ChangeStepState::Succeeded
+                    && step.rollback_capability != "not-supported"
+            });
+        }
+        if !has_real_rollback {
+            return Err(AppError::InvalidOperation);
+        }
+        self.rollback_completed(id, changes, sessions, tools)
+            .await?;
+        self.get(id).await
+    }
+
     async fn claim_execution(
         &self,
         changes: &ChangeSetService,
@@ -434,15 +532,33 @@ impl FleetExecutionService {
         ) || snapshot.approval_state != ApprovalState::Approved
             || approval.fleet_version != version
             || !exact_targets_match(&snapshot.targets, &approval.target_ids)
+            || approval.orchestration_binding_digest
+                != snapshot
+                    .orchestration_binding
+                    .as_ref()
+                    .map(|binding| binding.binding_digest.clone())
         {
             return Err(AppError::InvalidOperation);
         }
         for binding in &approval.targets {
             let current = changes.get(binding.change_set_id).await?;
+            let current_preconditions = if binding.precondition_digest.is_some() {
+                Some(
+                    changes
+                        .precondition_binding_digest(
+                            binding.change_set_id,
+                            binding.change_set_version,
+                        )
+                        .await?,
+                )
+            } else {
+                None
+            };
             if current.session_id != binding.target_id
                 || current.version != binding.change_set_version
                 || current.approved_version != Some(binding.change_set_version)
                 || current.approval_state != ApprovalState::Approved
+                || current_preconditions != binding.precondition_digest
             {
                 self.invalidate(id, "FLEET_APPROVAL_BINDING_CHANGED")
                     .await?;
@@ -848,6 +964,10 @@ impl FleetExecutionService {
         }
         repository.save_atomic(&records).await
     }
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 #[cfg(test)]

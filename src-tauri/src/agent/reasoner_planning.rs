@@ -177,6 +177,11 @@ fn command_history(
         "Goal: {}\nThis is reasoning round {}. Propose only the next necessary command.",
         input.goal, input.round
     );
+    if input.verification_required {
+        content.push_str(
+            "\nRUNTIME REQUIREMENT: A mutating or unknown command was executed. You MUST propose a single read-oriented verification command next (action propose). Do not answer/final until that verification command succeeds.",
+        );
+    }
     if let Some(context) = host_context {
         content.push_str(&format!(
             "\nKnown session hints (non-authoritative; verify with commands when needed; never ask the user for these): OS={}, user={}, directory={}",
@@ -213,6 +218,29 @@ fn command_history(
 }
 
 fn local_command_decision(input: &ReasonerInput<'_>) -> AgentDecision {
+    if input.verification_required {
+        let chinese = input
+            .goal
+            .chars()
+            .any(|character| ('\u{4e00}'..='\u{9fff}').contains(&character));
+        return AgentDecision::CommandProposal(CommandProposalRequest {
+            command: "uname -a".into(),
+            reason_summary: if chinese {
+                "用只读命令确认上一命令后的主机状态，满足完成前的验证要求"
+            } else {
+                "Run a read-only check to satisfy the required follow-up verification before completion"
+            }
+            .into(),
+            observation_analysis: Some(
+                if chinese {
+                    "上一命令被判定为写入或未知，需先完成一次成功的只读验证才能结束。"
+                } else {
+                    "The previous command was mutating or unknown; a successful read verification is required before completion."
+                }
+                .into(),
+            ),
+        });
+    }
     if let Some(last) = input.observations.last() {
         return AgentDecision::Final {
             summary: summarize_local_observation(last),
@@ -255,12 +283,14 @@ fn local_command_decision(input: &ReasonerInput<'_>) -> AgentDecision {
             "Locate readable Nginx error logs before inspecting their contents",
         )
     } else if needs_runtime_or_package_discovery(&lower, input.goal) {
+        // Single read command only: `;` / `&&` would classify as Unknown and
+        // force a verification loop the local reasoner used to Final through.
         (
-            "cat /etc/os-release 2>/dev/null; uname -a; command -v node npm npx pm2 2>/dev/null; node -v 2>/dev/null; npm -v 2>/dev/null; pm2 -v 2>/dev/null",
+            "cat /etc/os-release",
             if chinese {
-                "先读取发行版与 Node/npm/PM2 是否已安装，再决定安装步骤"
+                "先读取发行版信息，再决定后续安装或运行时检查步骤"
             } else {
-                "Inspect OS release and whether Node/npm/PM2 are already installed before choosing install steps"
+                "Inspect OS release before choosing install or runtime discovery steps"
             },
         )
     } else {
@@ -369,6 +399,7 @@ mod tests {
                 elapsed_ms: 0,
                 time_budget_ms: 60_000,
             },
+            verification_required: false,
             context,
         }
     }
@@ -452,7 +483,44 @@ mod tests {
             panic!("expected discovery command, not AskUser");
         };
         assert!(proposal.command.contains("/etc/os-release"));
-        assert!(proposal.command.contains("command -v node npm npx pm2"));
+        assert!(!proposal.command.contains(';'));
+        assert!(!proposal.command.contains("command -v"));
+    }
+
+    #[tokio::test]
+    async fn local_reasoner_proposes_verification_when_required() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let gateway =
+            Arc::new(ModelGateway::at_path(&directory.path().join("model.json")).expect("gateway"));
+        let reasoner = PlanningReasoner::new(gateway, PlanningHints::default(), None);
+        let context = snapshot(Vec::new(), ContextBudget::default(), 1);
+        let observations = [Observation {
+            tool_call_id: None,
+            tool_name: Some("agent.command".into()),
+            success: true,
+            error_code: None,
+            summary: "Command completed".into(),
+            detail: Some("Command: systemctl restart nginx".into()),
+        }];
+        let mut input = sample_input("Restart nginx", &observations, &context);
+        input.verification_required = true;
+        let decision = reasoner.decide(&input).await.expect("decision");
+        let AgentDecision::CommandProposal(proposal) = decision else {
+            panic!("expected verification command proposal, not Final");
+        };
+        assert_eq!(proposal.command, "uname -a");
+        assert!(proposal.observation_analysis.is_some());
+    }
+
+    #[test]
+    fn command_history_mentions_verification_requirement() {
+        let context = snapshot(Vec::new(), ContextBudget::default(), 1);
+        let mut input = sample_input("Restart nginx", &[], &context);
+        input.verification_required = true;
+        let history = command_history(&input, None);
+        let content = history[0]["content"].as_str().expect("content");
+        assert!(content.contains("RUNTIME REQUIREMENT"));
+        assert!(content.contains("verification command"));
     }
 
     #[test]

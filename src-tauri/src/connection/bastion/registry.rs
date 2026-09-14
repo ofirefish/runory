@@ -15,8 +15,7 @@ impl BastionRegistry {
     }
 
     pub fn register(&mut self, provider: Arc<dyn BastionProvider>) {
-        self.providers
-            .insert(provider.id().to_string(), provider);
+        self.providers.insert(provider.id().to_string(), provider);
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<dyn BastionProvider>> {

@@ -25,6 +25,9 @@
 
 .connection-card-header { display: flex; align-items: center; gap: 13px; padding: 24px 24px 20px; }
 .connection-server-icon { display: grid; width: 46px; height: 46px; flex: 0 0 46px; place-items: center; border: 1px solid hsl(var(--primary) / .22); border-radius: 12px; background: hsl(var(--primary) / .08); color: hsl(var(--primary)); }
+.connection-server-icon.has-os-logo { border-color: color-mix(in srgb, var(--os-logo-color) 42%, transparent); background: color-mix(in srgb, var(--os-logo-color) 12%, transparent); color: var(--os-logo-color); }
+.connection-server-icon .host-os-logo.plain { width: 24px; height: 24px; flex-basis: 24px; }
+.connection-server-icon .host-os-logo.plain .host-os-glyph { width: 22px; height: 22px; }
 .connection-card-title { min-width: 0; flex: 1; }
 .connection-card-title p { margin-bottom: 4px; color: hsl(var(--secondary)); font-size: 11px; font-weight: 500; }
 .connection-card-title h2 { overflow-wrap: anywhere; font-size: 20px; font-weight: 600; letter-spacing: -.025em; line-height: 1.3; }
@@ -40,6 +43,9 @@
 .connection-route-visual { display: flex; align-items: center; justify-content: center; padding: 4px 25px 23px; }
 .connection-route-endpoint { display: grid; width: 46px; height: 46px; flex: 0 0 46px; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 12px; color: hsl(var(--secondary)); background: hsl(var(--elevated) / .5); }
 .connection-route-endpoint.remote { border-color: hsl(var(--primary) / .3); background: hsl(var(--primary) / .08); color: hsl(var(--primary)); }
+.connection-route-endpoint.remote.has-os-logo { border-color: color-mix(in srgb, var(--os-logo-color) 42%, transparent); background: color-mix(in srgb, var(--os-logo-color) 12%, transparent); color: var(--os-logo-color); }
+.connection-route-endpoint .host-os-logo.plain { width: 22px; height: 22px; flex-basis: 22px; }
+.connection-route-endpoint .host-os-logo.plain .host-os-glyph { width: 20px; height: 20px; }
 .connection-route-shield { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 50%; color: hsl(var(--secondary)); }
 .connection-route-line { position: relative; height: 1px; flex: 1; overflow: hidden; background: hsl(var(--border)); }
 .connection-route-line i { position: absolute; width: 24px; height: 1px; background: hsl(var(--primary)); animation: connection-route-travel 1.8s ease-in-out infinite; }

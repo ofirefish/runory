@@ -37,7 +37,10 @@ impl BoundarySessionState {
 }
 
 /// Resolve Controller URL for Boundary CLI (`BOUNDARY_ADDR` / `-addr`).
-pub fn resolve_controller_addr(endpoint: &BastionEndpoint) -> String {
+///
+/// Fail-closed when neither `apiBaseUrl` nor a usable host is configured — never
+/// silently fall back to a loopback lab default.
+pub fn resolve_controller_addr(endpoint: &BastionEndpoint) -> Result<String, BastionError> {
     if let Some(base) = endpoint
         .provider_config
         .get("apiBaseUrl")
@@ -46,14 +49,14 @@ pub fn resolve_controller_addr(endpoint: &BastionEndpoint) -> String {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return base.trim_end_matches('/').to_string();
+        return Ok(base.trim_end_matches('/').to_string());
     }
     let host = endpoint.host.trim();
     if host.is_empty() {
-        return "http://127.0.0.1:9200".into();
+        return Err(BastionError::ProviderUnavailable);
     }
     if host.contains("://") {
-        return host.trim_end_matches('/').to_string();
+        return Ok(host.trim_end_matches('/').to_string());
     }
     let port = endpoint
         .ports
@@ -63,7 +66,7 @@ pub fn resolve_controller_addr(endpoint: &BastionEndpoint) -> String {
         .unwrap_or(9200);
     // Boundary CLI defaults to HTTPS; many lab Controllers speak plain HTTP.
     let scheme = if port == 443 { "https" } else { "http" };
-    format!("{scheme}://{host}:{port}")
+    Ok(format!("{scheme}://{host}:{port}"))
 }
 
 pub async fn start_auth(
@@ -79,19 +82,19 @@ pub async fn start_auth(
         .check_version(&binary, &VersionConstraint::at_least(0, 15))
         .map_err(map_helper)?;
 
-    let addr = resolve_controller_addr(&ctx.endpoint);
+    let addr = resolve_controller_addr(&ctx.endpoint)?;
     let username = match credential {
         BastionCredential::Token {
             username_hint: Some(hint),
             ..
         } if !hint.trim().is_empty() => hint.trim().to_string(),
-        BastionCredential::Token { .. } => "boundary".to_string(),
+        BastionCredential::Token { .. } => String::new(),
         BastionCredential::Password { username, .. } => username.clone(),
-        BastionCredential::BrowserSso { username_hint } => username_hint
-            .clone()
-            .unwrap_or_else(|| "boundary".into()),
+        BastionCredential::BrowserSso { username_hint } => {
+            username_hint.clone().unwrap_or_default()
+        }
         BastionCredential::ExternalAgent { username } => username.clone(),
-        _ => "boundary".into(),
+        _ => String::new(),
     };
 
     match credential {
@@ -182,8 +185,29 @@ mod tests {
             }),
         };
         assert_eq!(
-            resolve_controller_addr(&endpoint),
+            resolve_controller_addr(&endpoint).expect("addr"),
             "http://192.168.133.231:9200"
         );
+    }
+
+    #[test]
+    fn resolve_fails_closed_without_controller_address() {
+        let endpoint = BastionEndpoint {
+            id: Uuid::new_v4(),
+            provider: "boundary".into(),
+            name: "lab".into(),
+            host: String::new(),
+            ports: BastionPorts {
+                api: None,
+                ssh: None,
+                web: None,
+            },
+            tls: None,
+            provider_config: serde_json::json!({}),
+        };
+        assert!(matches!(
+            resolve_controller_addr(&endpoint),
+            Err(BastionError::ProviderUnavailable)
+        ));
     }
 }
