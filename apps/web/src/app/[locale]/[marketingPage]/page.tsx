@@ -15,6 +15,8 @@ import "../landing.css";
 const pageIcons = { product: Network, ssh: Terminal, operations: GitBranch, ai: Bot, security: ShieldCheck, pricing: CreditCard, download: Download } satisfies Record<MarketingSlug, typeof Server>;
 type PageProps = { params: Promise<{ locale: string; marketingPage: string }> };
 
+export const revalidate = 60;
+
 export function generateStaticParams() {
   return locales.flatMap(locale => marketingSlugs.map(marketingPage => ({ locale, marketingPage })));
 }

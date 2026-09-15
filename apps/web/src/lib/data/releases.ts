@@ -255,6 +255,23 @@ export async function setReleaseStatus(releaseId: string, status: ReleaseStatus)
 
   const { error } = await context.admin.from("app_releases").update(patch).eq("id", releaseId);
   if (error) return { status: "unavailable" } as const;
+
+  // Publishing promotes this release to the download-page catalog.
+  if (status === "published") {
+    const { error: clearError } = await context.admin
+      .from("app_releases")
+      .update({ is_latest: false, updated_by: context.actorId, updated_at: new Date().toISOString() })
+      .eq("is_latest", true)
+      .neq("id", releaseId);
+    if (clearError) return { status: "unavailable" } as const;
+    const { error: latestError } = await context.admin
+      .from("app_releases")
+      .update({ is_latest: true, updated_by: context.actorId, updated_at: new Date().toISOString() })
+      .eq("id", releaseId)
+      .eq("status", "published");
+    if (latestError) return { status: "unavailable" } as const;
+  }
+
   await context.admin.from("platform_admin_audit").insert({
     actor_id: context.actorId,
     action: status === "published" ? "releases.publish" : status === "archived" ? "releases.archive" : "releases.draft",
@@ -300,13 +317,31 @@ export async function getPublishedLatestDownloads(): Promise<LatestReleaseDownlo
   const supabase = await createSupabaseServerClient();
   if (!supabase) return null;
 
-  const { data: release, error } = await supabase
+  let release:
+    | { id: string; version: string; release_page_url: string | null }
+    | null = null;
+
+  const latest = await supabase
     .from("app_releases")
     .select("id,version,release_page_url")
     .eq("status", "published")
     .eq("is_latest", true)
     .maybeSingle();
-  if (error || !release) return null;
+  if (!latest.error && latest.data) {
+    release = latest.data;
+  } else {
+    // Fallback for published releases that were never marked latest.
+    const newest = await supabase
+      .from("app_releases")
+      .select("id,version,release_page_url")
+      .eq("status", "published")
+      .order("published_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (newest.error || !newest.data) return null;
+    release = newest.data;
+  }
 
   const { data: assets, error: assetsError } = await supabase
     .from("app_release_assets")

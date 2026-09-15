@@ -17,6 +17,8 @@ const securityIcons = [LockKeyhole, Fingerprint, ShieldCheck];
 const sourceUrl = "https://github.com/ofirefish/runory";
 type PageProps = { params: Promise<{ locale: string }> };
 
+export const revalidate = 60;
+
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { locale } = await params;
   if (!isLocale(locale)) return {};

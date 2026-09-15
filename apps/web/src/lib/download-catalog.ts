@@ -1,7 +1,5 @@
 import "server-only";
 
-import "server-only";
-
 import { fetchLatestReleaseDownloads, type LatestReleaseDownloads } from "./github-releases";
 import { getPublishedLatestDownloads } from "./data/releases";
 
