@@ -39,6 +39,17 @@ const tab = (id: string): SessionTab => ({
 });
 async function render(visible = true) {
   await act(async () => { root.render(<Workspace visible={visible} onSelectServer={() => undefined} titlebarTabsHost={tabsHost} onShowSessions={() => undefined} />); });
+  await waitFor(() => container.querySelector('[data-testid="terminal"]') !== null, "terminal");
+}
+async function waitFor(predicate: () => boolean, label: string) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    });
+  }
+  throw new Error(`Timed out waiting for ${label}`);
 }
 async function selectSession(id: string) {
   const button = tabsHost.querySelector<HTMLButtonElement>(`.workspace-tab-select[title="${id}"]`)!;
@@ -49,6 +60,10 @@ async function selectView(labelKey: string) {
     .find((element) => element.textContent === i18n.t(labelKey));
   expect(button).toBeDefined();
   await act(async () => { button?.click(); });
+  await waitFor(() => {
+    const current = container.querySelector('.session-workspace.active .dock-tabs [aria-current="page"]')?.textContent;
+    return current === i18n.t(labelKey) || container.querySelector(`[data-testid="${labelKey.split(".")[0]}"]`) !== null || labelKey === "terminal.title";
+  }, labelKey);
 }
 const activeView = () => container.querySelector('.session-workspace.active .dock-tabs [aria-current="page"]')?.textContent;
 

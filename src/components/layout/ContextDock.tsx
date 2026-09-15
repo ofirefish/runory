@@ -1,12 +1,18 @@
-import { FolderClosed, LayoutDashboard, PanelRightOpen, Rocket, ServerCog, SquareTerminal } from "lucide-react";
-import { useState, type ReactNode } from "react";
+﻿import { FolderClosed, LayoutDashboard, PanelRightOpen, Rocket, ServerCog, SquareTerminal } from "lucide-react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { DashboardView } from "../../features/dashboard/DashboardView";
-import { DeploymentView } from "../../features/deployment/DeploymentView";
-import { FilesView } from "../../features/files/FilesView";
-import { OperationsView } from "../../features/operations/OperationsView";
 import { useContextPanelStore } from "../context-panel/context-panel-store";
 import type { WorkspaceView } from "./workspace-view";
+
+const FilesView = lazy(() => import("../../features/files/FilesView").then((module) => ({ default: module.FilesView })));
+const DashboardView = lazy(() => import("../../features/dashboard/DashboardView").then((module) => ({ default: module.DashboardView })));
+const OperationsView = lazy(() => import("../../features/operations/OperationsView").then((module) => ({ default: module.OperationsView })));
+const DeploymentView = lazy(() => import("../../features/deployment/DeploymentView").then((module) => ({ default: module.DeploymentView })));
+
+function DockViewFallback() {
+  const { t } = useTranslation();
+  return <p className="p-4 text-[hsl(var(--muted))]" role="status">{t("common.loading")}</p>;
+}
 
 export function ContextDock({ view, terminalContent, sessionId, profileId, active, onViewChange }: {
   view: WorkspaceView;
@@ -35,12 +41,15 @@ export function ContextDock({ view, terminalContent, sessionId, profileId, activ
         <div ref={setTerminalToolbarHost} hidden={!active || view !== "terminal"} />
       </div>
     </header>
-    <div className="dock-content">
-      <div className={view === "terminal" ? "h-full" : "hidden"} aria-hidden={view !== "terminal"}>{terminalContent(terminalToolbarHost)}</div>
-      {view === "files" && <FilesView sessionId={sessionId} profileId={profileId} active={active && view === "files"} />}
-      {view === "dashboard" && <DashboardView sessionId={sessionId} active={active && view === "dashboard"} />}
-      {view === "operations" && <OperationsView sessionId={sessionId} active={active && view === "operations"} />}
-      {view === "deployment" && <DeploymentView sessionId={sessionId} profileId={profileId} />}
+    <div className="dock-content relative">
+      {/* Never use display:none on the terminal host — xterm must keep a measurable box. */}
+      <div className={view === "terminal" ? "h-full min-h-0" : "pointer-events-none absolute inset-0 -z-10 invisible"} aria-hidden={view !== "terminal"}>{terminalContent(terminalToolbarHost)}</div>
+      <Suspense fallback={<DockViewFallback />}>
+        {view === "files" && <FilesView sessionId={sessionId} profileId={profileId} active={active && view === "files"} />}
+        {view === "dashboard" && <DashboardView sessionId={sessionId} active={active && view === "dashboard"} />}
+        {view === "operations" && <OperationsView sessionId={sessionId} active={active && view === "operations"} />}
+        {view === "deployment" && <DeploymentView sessionId={sessionId} profileId={profileId} />}
+      </Suspense>
     </div>
   </section>;
 }

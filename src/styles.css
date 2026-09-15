@@ -1,3 +1,8 @@
+@import "@xterm/xterm/css/xterm.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -11,7 +16,7 @@ html[data-privacy="locked"] body::after {
 }
 
 :root { color-scheme: light; --background: 216 33% 97%; --sidebar: 0 0% 100%; --surface: 0 0% 100%; --elevated: 210 40% 96%; --border: 214 29% 89%; --border-soft: 214 33% 94%; --foreground: 222 47% 11%; --secondary: 215 25% 27%; --muted: 215 20% 65%; --primary: 239 84% 67%; --success: 142 71% 45%; --jump-route: 189 94% 37%; --topbar: 216 33% 93%; --tabbar: 216 33% 97%; --terminal: 210 40% 98%; --rail: 210 40% 98%; --workspace: 210 40% 98%; --explorer-width: 260px; }
-.dark { color-scheme: dark; --background: 216 45% 11%; --sidebar: 216 40% 15%; --surface: 216 45% 11%; --elevated: 216 40% 17%; --border: 215 32% 24%; --border-soft: 216 35% 17%; --foreground: 213 37% 97%; --secondary: 216 20% 72%; --muted: 215 15% 55%; --primary: 239 84% 67%; --success: 142 71% 45%; --jump-route: 189 94% 43%; --topbar: 216 40% 20%; --tabbar: 216 40% 20%; --terminal: 216 45% 11%; --rail: 216 40% 15%; --workspace: 216 45% 11%; }
+.dark { color-scheme: dark; --background: 216 45% 11%; --sidebar: 216 40% 15%; --surface: 216 45% 11%; --elevated: 216 40% 17%; --border: 215 32% 24%; --border-soft: 216 35% 17%; --foreground: 213 37% 97%; --secondary: 216 20% 72%; --muted: 215 15% 55%; --primary: 239 84% 67%; --success: 142 71% 45%; --jump-route: 189 94% 43%; --topbar: 216 40% 20%; --tabbar: 216 40% 20%; --terminal: 216 53% 9%; --rail: 216 40% 15%; --workspace: 216 45% 11%; }
 * { border-color: hsl(var(--border)); }
 html, body, #root { height: 100%; margin: 0; }
 body { overflow: hidden; background: hsl(var(--background)); color: hsl(var(--foreground)); font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 13px; }
@@ -284,6 +289,8 @@ button, input, select, textarea { font: inherit; }
   .server-catalog-list .host-menu { grid-column: 2; }
 }
 .workspace-shell { background: hsl(var(--workspace)); }
+/* Page switch must fully remove the session shell from flex layout (not visibility). */
+.workspace-shell[aria-hidden="true"] { display: none !important; }
 .workspace-tabs { display: flex; min-width: 0; align-items: flex-end; padding-top: 9px; }
 /* Reserve both outer corners inside the scrollport, including the last tab's right curve. */
 .workspace-tab-strip { display: flex; min-width: 0; align-items: flex-end; gap: 0; padding-inline: 12px; overflow-x: auto; overflow-y: hidden; scroll-padding-inline: 12px; scrollbar-width: none; }
@@ -313,12 +320,27 @@ button, input, select, textarea { font: inherit; }
 .workspace-tab-menu button:hover,.workspace-tab-menu button:focus-visible { outline: 0; color: hsl(var(--foreground)); background: hsl(var(--elevated)); }
 .workspace-tab-menu-separator { height: 1px; margin: 3px 5px; background: hsl(var(--border-soft)); }
 .workspace-stage { position: relative; display: flex; min-height: 0; flex: 1; }
-.workspace-main-column { position: relative; min-width: 0; flex: 1; overflow: hidden; background: hsl(var(--terminal)); }
-.session-workspace { position: absolute; inset: 0; display: none; min-height: 0; flex-direction: column; overflow: hidden; }
-.session-workspace.active { display: flex; }
-.terminal-panel { display: flex; min-height: 0; height: 100%; flex: 1; flex-direction: column; overflow: hidden; background: hsl(var(--terminal)); }
+.workspace-main-column { position: relative; min-width: 0; flex: 1; overflow: hidden; background: var(--terminal-surface, hsl(var(--terminal))); }
+.session-workspace {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  /* Keep inactive sessions laid out so xterm can measure; hide without display:none. */
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.session-workspace.active {
+  visibility: visible;
+  pointer-events: auto;
+  z-index: 1;
+}
+.terminal-panel { display: flex; min-height: 0; height: 100%; flex: 1; flex-direction: column; overflow: hidden; background: var(--terminal-surface, hsl(var(--terminal))); }
 .terminal-panel-content { min-height: 0; flex: 1; }
-.terminal-view { background: hsl(var(--terminal)); }
+.terminal-view { background: var(--terminal-surface, hsl(var(--terminal))); }
 .terminal-extra-keys { border-top: 1px solid hsl(var(--border)); background: hsl(var(--elevated)); }
 .terminal-extra-keys button { border: 1px solid hsl(var(--border)); color: hsl(var(--foreground)); background: hsl(var(--surface)); }
 .terminal-extra-keys button:active { background: hsl(var(--border)); }
@@ -745,8 +767,45 @@ button, input, select, textarea { font: inherit; }
 .empty-workspace { display: flex; height: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 9px; color: hsl(var(--muted)); text-align: center; }
 .empty-workspace strong { color: hsl(var(--foreground)); font-size: 15px; }
 .empty-terminal-icon { display: grid; width: 48px; height: 48px; place-items: center; margin-bottom: 4px; border: 1px solid hsl(var(--border)); border-radius: 10px; background: hsl(var(--surface)); color: hsl(var(--primary)); }
-.xterm { height: 100%; padding: 16px; }
+.terminal-xterm-host { height: 100%; min-height: 0; padding: 16px; box-sizing: border-box; }
+/* Never pad .xterm itself — padding breaks FitAddon / canvas metrics. */
+.xterm { height: 100%; }
 .xterm-viewport { scrollbar-color: hsl(var(--border)) transparent; }
+.xterm canvas {
+  display: block !important;
+  max-width: none !important;
+}
+/* a11y DOM must stay hidden — WebView2 can ignore transparent text under custom protocol. */
+.xterm .xterm-accessibility,
+.xterm .xterm-accessibility-tree,
+.xterm .xterm-message {
+  display: none !important;
+}
+.xterm .xterm-helpers {
+  position: absolute;
+  top: 0;
+  z-index: 5;
+}
+.xterm .xterm-helper-textarea {
+  position: absolute;
+  opacity: 0;
+  left: -9999em;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: -5;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  resize: none;
+  overflow: hidden;
+}
+.xterm .xterm-screen canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+}
 
 /* Settings center */
 .settings-dialog-panel { position: relative; display: flex; height: min(720px, 92dvh); flex-direction: column; overflow: hidden; }

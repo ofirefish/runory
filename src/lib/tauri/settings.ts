@@ -2,10 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type AppTheme = "system" | "light" | "dark";
 export type AppLanguage = "en-US" | "zh-CN";
+export type TerminalThemeId = "runory" | "oneDark" | "tokyoNight" | "catppuccin" | "solarized";
 
 export type AppSettings = {
   theme: AppTheme;
   language: AppLanguage;
+  terminalTheme: TerminalThemeId;
   boundaryCliPath?: string | null;
   teleportCliPath?: string | null;
 };

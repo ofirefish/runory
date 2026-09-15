@@ -4,18 +4,19 @@ import { ServerManagement } from "../components/layout/ServerManagement";
 import { Workspace } from "../components/layout/Workspace";
 import { GlobalTopBar } from "../components/layout/GlobalTopBar";
 import { PrimaryNavigationRail } from "../components/layout/PrimaryNavigationRail";
-import { SettingsPanel, type SettingsSection } from "../features/settings/SettingsPanel";
+import type { SettingsSection } from "../features/settings/SettingsPanel";
 import { DesktopUpdateController } from "../features/settings/DesktopUpdateController";
 import { MobilePrivacyGuard } from "../features/mobile/MobilePrivacyGuard";
 import { useLanguage } from "../hooks/use-language";
 import { useTheme } from "../hooks/use-theme";
 import { useCatalogStore } from "../stores/catalog-store";
 import { useSessionStore } from "../stores/session-store";
-import { TunnelsPage } from "../features/tunnels/TunnelsPage";
 import { Toaster } from "../components/ui/sonner";
 
 const AuthDialog = lazy(() => import("../features/auth/AuthDialog").then((module) => ({ default: module.AuthDialog })));
 const PricingDialog = lazy(() => import("../features/settings/PricingDialog").then((module) => ({ default: module.PricingDialog })));
+const SettingsPanel = lazy(() => import("../features/settings/SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
+const TunnelsPage = lazy(() => import("../features/tunnels/TunnelsPage").then((module) => ({ default: module.TunnelsPage })));
 
 export function App() {
   const { t } = useTranslation();
@@ -65,11 +66,11 @@ export function App() {
       {mobileNavigationOpen && <button type="button" className="mobile-navigation-backdrop" aria-label={t("mobile.closeNavigation")} onClick={() => setMobileNavigationOpen(false)} />}
       <PrimaryNavigationRail active={activeNavigation} onSelect={selectNavigation} onOpenAccount={() => { setMobileNavigationOpen(false); setSettingsSection("account"); setSettingsOpen(true); }} onOpenAuth={() => { setMobileNavigationOpen(false); setAuthOpen(true); }} onOpenPricing={() => { setMobileNavigationOpen(false); setPricingOpen(true); }} mobileOpen={mobileNavigationOpen} />
       {activeNavigation === "servers" && <ServerManagement query={query} onQueryChange={setQuery} onConnectProfile={connectProfile} onOpenSync={() => { setSettingsSection("cloud"); setSettingsOpen(true); }} onOpenAuth={() => setAuthOpen(true)} onCreateTunnel={(profileId) => { setTunnelProfileId(profileId); setActiveNavigation("tunnels"); }} />}
-      {activeNavigation === "tunnels" && <TunnelsPage initialProfileId={tunnelProfileId} onConnectProfile={connectProfile} onShowSession={(tabId) => { useSessionStore.getState().setActive(tabId); setActiveNavigation("sessions"); }} />}
+      {activeNavigation === "tunnels" && <Suspense fallback={null}><TunnelsPage initialProfileId={tunnelProfileId} onConnectProfile={connectProfile} onShowSession={(tabId) => { useSessionStore.getState().setActive(tabId); setActiveNavigation("sessions"); }} /></Suspense>}
       {/* Keep terminal instances and channel bindings alive across page changes. */}
       <Workspace visible={activeNavigation === "sessions"} onSelectServer={() => selectNavigation("servers")} titlebarTabsHost={titlebarTabsHost} onShowSessions={() => selectNavigation("sessions")} connectProfileRequest={connectProfileRequest} />
     </div>
-    {settingsOpen && <SettingsPanel initialSection={settingsSection} onClose={() => setSettingsOpen(false)} />}
+    {settingsOpen && <Suspense fallback={null}><SettingsPanel initialSection={settingsSection} onClose={() => setSettingsOpen(false)} /></Suspense>}
     {pricingOpen && <Suspense fallback={null}><PricingDialog onClose={() => setPricingOpen(false)} onOpenAuth={() => { setPricingOpen(false); setAuthOpen(true); }} /></Suspense>}
     {authOpen && <Suspense fallback={null}><AuthDialog onClose={() => setAuthOpen(false)} /></Suspense>}
     <DesktopUpdateController onOpenSettings={() => { setSettingsSection("general"); setSettingsOpen(true); }} />

@@ -1,12 +1,20 @@
 import { create } from "zustand";
-import { getSettings, updateSettings, type AppLanguage, type AppTheme } from "../lib/tauri/settings";
+import {
+  getSettings,
+  updateSettings,
+  type AppLanguage,
+  type AppTheme,
+  type TerminalThemeId,
+} from "../lib/tauri/settings";
 
 export type ThemeMode = AppTheme;
 export type Language = AppLanguage;
+export type { TerminalThemeId };
 
 type SettingsState = {
   theme: ThemeMode;
   language: Language;
+  terminalTheme: TerminalThemeId;
   boundaryCliPath: string;
   teleportCliPath: string;
   hydrated: boolean;
@@ -16,9 +24,17 @@ type SettingsState = {
   hydrate: () => Promise<void>;
   setTheme: (theme: ThemeMode) => Promise<void>;
   setLanguage: (language: Language) => Promise<void>;
+  setTerminalTheme: (terminalTheme: TerminalThemeId) => Promise<void>;
   setBoundaryCliPath: (path: string) => Promise<void>;
   setTeleportCliPath: (path: string) => Promise<void>;
 };
+
+const DEFAULT_TERMINAL_THEME: TerminalThemeId = "runory";
+
+function normalizeTerminalTheme(value: unknown): TerminalThemeId {
+  const allowed: TerminalThemeId[] = ["runory", "oneDark", "tokyoNight", "catppuccin", "solarized"];
+  return allowed.includes(value as TerminalThemeId) ? (value as TerminalThemeId) : DEFAULT_TERMINAL_THEME;
+}
 
 export const useSettingsStore = create<SettingsState>((set) => {
   let writeQueue: Promise<void> = Promise.resolve();
@@ -27,6 +43,7 @@ export const useSettingsStore = create<SettingsState>((set) => {
   const applySaved = (saved: Awaited<ReturnType<typeof updateSettings>>) => ({
     theme: saved.theme,
     language: saved.language,
+    terminalTheme: normalizeTerminalTheme(saved.terminalTheme),
     boundaryCliPath: saved.boundaryCliPath?.trim() || "",
     teleportCliPath: saved.teleportCliPath?.trim() || "",
   });
@@ -34,6 +51,7 @@ export const useSettingsStore = create<SettingsState>((set) => {
   const persist = (patch: Partial<{
     theme: ThemeMode;
     language: Language;
+    terminalTheme: TerminalThemeId;
     boundaryCliPath: string;
     teleportCliPath: string;
   }>) => {
@@ -61,6 +79,7 @@ export const useSettingsStore = create<SettingsState>((set) => {
   return {
     theme: "system",
     language: "en-US",
+    terminalTheme: DEFAULT_TERMINAL_THEME,
     boundaryCliPath: "",
     teleportCliPath: "",
     hydrated: false,
@@ -81,6 +100,10 @@ export const useSettingsStore = create<SettingsState>((set) => {
     setLanguage: (language) => {
       set({ language });
       return persist({ language });
+    },
+    setTerminalTheme: (terminalTheme) => {
+      set({ terminalTheme });
+      return persist({ terminalTheme });
     },
     setBoundaryCliPath: (path) => {
       const boundaryCliPath = path.trim();

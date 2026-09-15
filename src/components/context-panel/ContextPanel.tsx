@@ -1,12 +1,13 @@
 import { Bot, PanelRightClose, PanelRightOpen } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ServerProfile } from "../../types/domain";
 import type { SessionState } from "../../types/session";
-import { AgentPanel } from "./agent/AgentPanel";
 import { ContextPanelTabs, type ContextTab } from "./ContextPanelTabs";
 import { InspectorPanel } from "./inspector/InspectorPanel";
 import { useContextPanelStore } from "./context-panel-store";
+
+const AgentPanel = lazy(() => import("./agent/AgentPanel").then((module) => ({ default: module.AgentPanel })));
 
 const MIN_WIDTH = 360;
 const MAX_WIDTH = 600;
@@ -111,7 +112,9 @@ export function ContextPanel({ profile, jumpProfile, sessionId, state, connected
       <div className="context-panel-content" id="context-panel-content">
         {tab === "inspector"
           ? <InspectorPanel profile={profile} jumpProfile={jumpProfile} state={state} connected={connected} onNewTerminal={onNewTerminal} onDisconnect={onDisconnect} onEdit={onEdit} />
-          : <AgentPanel profile={profile} sessionId={sessionId} state={state} connected={connected} onNewTerminal={onNewTerminal} onSelectServer={onSelectServer} />}
+          : <Suspense fallback={<p className="p-4 text-[hsl(var(--muted))]" role="status">{t("common.loading")}</p>}>
+              <AgentPanel profile={profile} sessionId={sessionId} state={state} connected={connected} onNewTerminal={onNewTerminal} onSelectServer={onSelectServer} />
+            </Suspense>}
       </div>
     </aside>
   ) : (

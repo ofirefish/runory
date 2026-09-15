@@ -5,7 +5,18 @@
   "identifier": "com.runory.app",
   "build": { "beforeDevCommand": "pnpm dev", "devUrl": "http://localhost:1420", "beforeBuildCommand": "pnpm build", "frontendDist": "../dist" },
   "app": {
-    "windows": [{ "title": "Runory", "width": 1440, "height": 900, "minWidth": 1024, "minHeight": 680, "decorations": false, "shadow": true }],
+    "windows": [{
+      "label": "main",
+      "title": "Runory",
+      "width": 1440,
+      "height": 900,
+      "minWidth": 1024,
+      "minHeight": 680,
+      "decorations": false,
+      "shadow": true,
+      "visible": false,
+      "backgroundColor": "#0f1a29"
+    }],
     "security": { "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost https://*.supabase.co" }
   },
   "bundle": {

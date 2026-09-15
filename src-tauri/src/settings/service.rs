@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::domain::{AppResult, AppSettings, Language, Theme};
+use crate::domain::{AppResult, AppSettings, Language, TerminalTheme, Theme};
 
 use super::SettingsRepository;
 
@@ -39,6 +39,9 @@ impl SettingsService {
         if let Some(language) = patch.language {
             settings.language = language;
         }
+        if let Some(terminal_theme) = patch.terminal_theme {
+            settings.terminal_theme = terminal_theme;
+        }
         if let Some(path) = patch.boundary_cli_path {
             settings.boundary_cli_path = normalize_optional_path(path);
         }
@@ -65,6 +68,7 @@ fn normalize_optional_path(path: String) -> Option<String> {
 pub struct AppSettingsPatch {
     pub theme: Option<Theme>,
     pub language: Option<Language>,
+    pub terminal_theme: Option<TerminalTheme>,
     /// `Some("")` clears the stored path; `None` leaves it unchanged.
     pub boundary_cli_path: Option<String>,
     pub teleport_cli_path: Option<String>,
@@ -86,6 +90,7 @@ mod tests {
         let initial = service.get().await.expect("default settings");
         assert_eq!(initial.theme, Theme::System);
         assert_eq!(initial.language, Language::EnUs);
+        assert_eq!(initial.terminal_theme, TerminalTheme::Runory);
         assert_eq!(initial.boundary_cli_path, None);
         assert_eq!(initial.teleport_cli_path, None);
 
@@ -93,6 +98,7 @@ mod tests {
             .update(AppSettingsPatch {
                 theme: Some(Theme::Dark),
                 language: Some(Language::ZhCn),
+                terminal_theme: Some(TerminalTheme::TokyoNight),
                 boundary_cli_path: Some(r"C:\Tools\boundary.exe".into()),
                 teleport_cli_path: Some(r"C:\Tools\tsh.exe".into()),
             })
@@ -101,6 +107,7 @@ mod tests {
 
         assert_eq!(updated.theme, Theme::Dark);
         assert_eq!(updated.language, Language::ZhCn);
+        assert_eq!(updated.terminal_theme, TerminalTheme::TokyoNight);
         assert_eq!(
             updated.boundary_cli_path.as_deref(),
             Some(r"C:\Tools\boundary.exe")
@@ -132,6 +139,7 @@ mod tests {
         .expect("reload persisted settings");
         assert_eq!(reloaded.theme, Theme::Dark);
         assert_eq!(reloaded.language, Language::ZhCn);
+        assert_eq!(reloaded.terminal_theme, TerminalTheme::TokyoNight);
         assert_eq!(reloaded.boundary_cli_path, None);
         assert_eq!(
             reloaded.teleport_cli_path.as_deref(),

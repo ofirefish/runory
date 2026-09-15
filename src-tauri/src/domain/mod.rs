@@ -59,7 +59,7 @@ pub use session::{
     SessionId, SessionRequest, SessionState, SshAuthentication, SshConnectionRequest,
     TerminalEvent, TestConnectionProfileRequest, TestConnectionResponse, WriteRequest,
 };
-pub use settings::{AppSettings, Language, Theme};
+pub use settings::{AppSettings, Language, TerminalTheme, Theme};
 pub use sftp::{
     LocalFileSelection, RemoteImagePreview, RemoteTextPreview, RetryTransferRequest,
     SelectDownloadTargetRequest, SelectUploadFilesRequest, SftpCreateDirectoryRequest,

@@ -78,6 +78,7 @@ beforeEach(() => {
       return {
         theme: state.theme,
         language: state.language,
+        terminalTheme: state.terminalTheme,
         boundaryCliPath: state.boundaryCliPath || null,
         teleportCliPath: state.teleportCliPath || null,
       };
@@ -87,6 +88,7 @@ beforeEach(() => {
       return {
         theme: state.theme,
         language: state.language,
+        terminalTheme: state.terminalTheme,
         boundaryCliPath: state.boundaryCliPath || null,
         teleportCliPath: state.teleportCliPath || null,
         ...(args as { request: object }).request,
@@ -121,6 +123,7 @@ describe.each(["en-US", "zh-CN"])("settings controls (%s)", (language) => {
     useSettingsStore.setState({
       theme: "system",
       language: language as "en-US" | "zh-CN",
+      terminalTheme: "runory",
       boundaryCliPath: "",
       teleportCliPath: "",
       saving: false,
@@ -136,11 +139,27 @@ describe.each(["en-US", "zh-CN"])("settings controls (%s)", (language) => {
     expect(useSettingsStore.getState().language).toBe(language === "en-US" ? "zh-CN" : "en-US");
     expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === "settings_update")).toHaveLength(2);
   });
+  it("persists terminal color presets", async () => {
+    await render(<SettingsPanel onClose={() => {}} />);
+    await choose(
+      "settings.terminalTheme",
+      "settings.terminalTheme.tokyoNight",
+      [
+        "settings.terminalTheme.runory",
+        "settings.terminalTheme.oneDark",
+        "settings.terminalTheme.tokyoNight",
+        "settings.terminalTheme.catppuccin",
+        "settings.terminalTheme.solarized",
+      ],
+    );
+    expect(useSettingsStore.getState().terminalTheme).toBe("tokyoNight");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("settings_update", { request: { terminalTheme: "tokyoNight" } });
+  });
   it("restores persisted settings and reports a failed write", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "known_host_list") return [];
       if (command === "credential_status") return { vaultInitialized: true, vaultUnlocked: false, platformUnlockConfigured: false, platformUnlockAvailable: false };
-      if (command === "settings_get") return { theme: "system", language };
+      if (command === "settings_get") return { theme: "system", language, terminalTheme: "runory" };
       if (command === "settings_update") throw new Error("STORAGE_ERROR");
       return { enabled: false, authenticated: false };
     });

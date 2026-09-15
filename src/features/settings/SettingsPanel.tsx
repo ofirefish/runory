@@ -30,7 +30,7 @@ const sections: { id: SettingsSection; icon: LucideIcon; label: string }[] = [
 
 export function SettingsPanel({ onClose, initialSection = "general" }: { onClose: () => void; initialSection?: SettingsSection }) {
   const { t } = useTranslation();
-  const { theme, language, saving, persistenceError, setTheme, setLanguage } = useSettingsStore();
+  const { theme, language, terminalTheme, saving, persistenceError, setTheme, setLanguage, setTerminalTheme } = useSettingsStore();
   const [knownHosts, setKnownHosts] = useState<KnownHost[]>([]);
   const [vault, setVault] = useState<CredentialStatus | null>(null);
   const [vaultFailure, setVaultFailure] = useState(false);
@@ -56,6 +56,7 @@ export function SettingsPanel({ onClose, initialSection = "general" }: { onClose
       <header className="settings-content-header"><h3>{heading}</h3><p>{t(`settings.section.${activeSection}Hint`)}</p></header>
       {activeSection === "general" && <div className="settings-group">
         <SettingsSelectField className="settings-field" label={t("settings.theme")} value={theme} onValueChange={(value) => void setTheme(value)} options={(["system", "light", "dark"] as const).map((value) => ({ value, label: t(`settings.${value}`) }))} />
+        <SettingsSelectField className="settings-field" label={t("settings.terminalTheme")} value={terminalTheme} onValueChange={(value) => void setTerminalTheme(value)} options={(["runory", "oneDark", "tokyoNight", "catppuccin", "solarized"] as const).map((value) => ({ value, label: t(`settings.terminalTheme.${value}`) }))} />
         <SettingsSelectField className="settings-field" label={t("settings.language")} value={language} onValueChange={(value) => void setLanguage(value)} options={[{ value: "en-US", label: t("settings.english") }, { value: "zh-CN", label: t("settings.chinese") }]} />
         {saving && <p role="status" className="text-xs text-[hsl(var(--muted))]">{t("settings.saving")}</p>}
         {persistenceError && <p role="alert" className="text-xs text-red-500">{t("settings.persistenceError")}</p>}

@@ -1,11 +1,9 @@
 import { CirclePlus, SquareTerminal } from "lucide-react";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, type MouseEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { BastionConnectionDialog } from "../../features/sessions/BastionConnectionDialog";
-import { ConnectionDialog } from "../../features/sessions/ConnectionDialog";
-import { JumpConnectionDialog } from "../../features/sessions/JumpConnectionDialog";
-import { TerminalView, type TerminalHandle } from "../../features/terminal/TerminalView";
+import type { TerminalHandle } from "../../features/terminal/TerminalView";
+import { TerminalView } from "../../features/terminal/TerminalView";
 import { bastionConnectFlow } from "../../lib/tauri/bastion";
 import { connectSsh, disconnectSsh, reconnectSsh, testSsh } from "../../lib/tauri/ssh";
 import { useCatalogStore } from "../../stores/catalog-store";
@@ -16,11 +14,15 @@ import { ContextDock } from "./ContextDock";
 import { restoreWorkspaceView } from "./workspace-view";
 import { ContextPanel } from "../context-panel/ContextPanel";
 import { useContextPanelStore } from "../context-panel/context-panel-store";
-import { ProfileDialog } from "../../features/profiles/ProfileDialog";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 import { RenameWorkspaceTabDialog } from "./RenameWorkspaceTabDialog";
 import { WorkspaceTabMenu, type WorkspaceTabMenuState } from "./WorkspaceTabMenu";
 import { useTunnelDisconnect } from "../../features/tunnels/use-tunnel-disconnect";
+
+const BastionConnectionDialog = lazy(() => import("../../features/sessions/BastionConnectionDialog").then((module) => ({ default: module.BastionConnectionDialog })));
+const ConnectionDialog = lazy(() => import("../../features/sessions/ConnectionDialog").then((module) => ({ default: module.ConnectionDialog })));
+const JumpConnectionDialog = lazy(() => import("../../features/sessions/JumpConnectionDialog").then((module) => ({ default: module.JumpConnectionDialog })));
+const ProfileDialog = lazy(() => import("../../features/profiles/ProfileDialog").then((module) => ({ default: module.ProfileDialog })));
 
 type DialogState = { mode: "connect" | "reconnect"; profileId: string; tabId?: string; title?: string };
 const statusColor = (state: SessionState) => state === "connected" ? "bg-emerald-500" : state === "error" ? "bg-red-500" : ["connecting", "verifying-host", "authenticating", "opening-shell"].includes(state) ? "bg-blue-500" : "bg-slate-500";
@@ -127,7 +129,7 @@ export function Workspace({ visible = true, onSelectServer, titlebarTabsHost, on
     <footer className="terminal-status-bar" aria-label={t("a11y.connectionStatus")}><span><i className={statusColor(activeTab?.state ?? "idle")} />{t(`status.${activeTab?.state ?? "idle"}`)}</span><span>SSH</span><span>UTF-8</span><span className="status-spacer" /><span>{activeProfile?.name ?? t("terminal.noActiveSession")}</span><span className="font-mono">xterm-256color</span></footer>
     {tabMenu && <WorkspaceTabMenu menu={tabMenu} onClose={() => setTabMenu(null)} onCopy={() => { const tab = tabs.find((candidate) => candidate.id === tabMenu.tabId); setTabMenu(null); if (tab) setDialog({ mode: "connect", profileId: tab.profileId, title: tab.title }); }} onRename={() => { setRenamingTabId(tabMenu.tabId); setTabMenu(null); }} onCloseTab={() => { const tabId = tabMenu.tabId; setTabMenu(null); void closeTab(tabId); }} />}
     {renamingTabId && (() => { const tab = tabs.find((candidate) => candidate.id === renamingTabId); if (!tab) return null; const profile = profiles.find((candidate) => candidate.id === tab.profileId); return <RenameWorkspaceTabDialog initialTitle={tab.title ?? profile?.name ?? t("terminal.unknownProfile")} onClose={() => setRenamingTabId(null)} onSave={(title) => { renameTab(tab.id, title); setRenamingTabId(null); }} />; })()}
-    {dialog && dialogProfile && (dialogProfile.connectionRoute.type === "bastion"
+    {dialog && dialogProfile && <Suspense fallback={null}>{dialogProfile.connectionRoute.type === "bastion"
       ? <BastionConnectionDialog
           key={dialogProfile.id}
           profile={dialogProfile}
@@ -166,7 +168,7 @@ export function Workspace({ visible = true, onSelectServer, titlebarTabsHost, on
         />
       : dialogProfile.connectionRoute.type === "jumpHost" && dialogJumpProfile
       ? <JumpConnectionDialog key={`${dialogProfile.id}:${dialogJumpProfile.id}`} profile={dialogProfile} jumpProfile={dialogJumpProfile} mode={dialog.mode} onClose={() => setDialog(null)} onConnect={(values) => { const tabId = dialog.tabId ?? crypto.randomUUID(); if (!dialog.tabId) setDialog({ ...dialog, tabId }); return openSession(values, tabId, dialog.mode === "reconnect", dialog.title); }} onTest={test} />
-      : <ConnectionDialog key={dialogProfile.id} profile={dialogProfile} mode={dialog.mode} onClose={() => setDialog(null)} onConnect={(values) => { const tabId = dialog.tabId ?? crypto.randomUUID(); if (!dialog.tabId) setDialog({ ...dialog, tabId }); return openSession(values, tabId, dialog.mode === "reconnect", dialog.title); }} onTest={test} />)}
-    {editProfile && (activeProfile ?? selectedProfile) && <ProfileDialog profile={activeProfile ?? selectedProfile ?? undefined} onClose={() => setEditProfile(false)} />}
+      : <ConnectionDialog key={dialogProfile.id} profile={dialogProfile} mode={dialog.mode} onClose={() => setDialog(null)} onConnect={(values) => { const tabId = dialog.tabId ?? crypto.randomUUID(); if (!dialog.tabId) setDialog({ ...dialog, tabId }); return openSession(values, tabId, dialog.mode === "reconnect", dialog.title); }} onTest={test} />}</Suspense>}
+    {editProfile && (activeProfile ?? selectedProfile) && <Suspense fallback={null}><ProfileDialog profile={activeProfile ?? selectedProfile ?? undefined} onClose={() => setEditProfile(false)} /></Suspense>}
   </main>;
 }

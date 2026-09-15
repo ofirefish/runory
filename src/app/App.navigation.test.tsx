@@ -36,7 +36,20 @@ vi.mock("../features/terminal/TerminalView", async () => {
 vi.mock("../features/sessions/ConnectionDialog", () => ({ ConnectionDialog: ({ profile, onConnect, onClose }: ComponentProps<typeof ConnectionDialog>) => <div role="dialog" aria-label="connection"><span>{profile.name}</span><button onClick={() => void onConnect({ profileId: profile.id, verificationAttemptId: "fixture-verification", credential: { mode: "session-only", secret: "" } }).then(onClose)}>connect fixture</button></div> }));
 vi.mock("../features/settings/SettingsPanel", () => ({ SettingsPanel: ({ onClose, initialSection }: { onClose: () => void; initialSection?: string }) => <div role="dialog" aria-label="settings" data-section={initialSection}><button onClick={onClose}>close settings</button></div> }));
 vi.mock("../features/settings/PricingDialog", () => ({ PricingDialog: ({ onClose }: { onClose: () => void }) => <div role="dialog" aria-label="pricing"><button onClick={onClose}>close pricing</button></div> }));
-vi.mock("../features/auth/AuthDialog", () => ({ AuthDialog: ({ onClose }: { onClose: () => void }) => <div role="dialog" aria-label="auth"><button onClick={onClose}>close auth</button></div> }));vi.mock("../features/profiles/ProfileDialog", () => ({ ProfileDialog: ({ onClose }: { onClose: () => void }) => <div role="dialog" aria-label="profile"><button onClick={onClose}>close profile</button></div> }));
+vi.mock("../features/auth/AuthDialog", () => ({ AuthDialog: ({ onClose }: { onClose: () => void }) => <div role="dialog" aria-label="auth"><button onClick={onClose}>close auth</button></div> }));
+vi.mock("../features/profiles/ProfileDialog", () => ({ ProfileDialog: ({ onClose }: { onClose: () => void }) => <div role="dialog" aria-label="profile"><button onClick={onClose}>close profile</button></div> }));
+vi.mock("../features/tunnels/TunnelsPage", () => ({
+  TunnelsPage: ({ initialProfileId }: { initialProfileId?: string }) => (
+    <main className="tunnels-page">
+      {initialProfileId ? (
+        <div role="dialog">
+          <span>New forwarding</span>
+          <span id="tunnel-profile">{initialProfileId}</span>
+        </div>
+      ) : null}
+    </main>
+  ),
+}));
 vi.mock("../lib/tauri/ssh", () => ({ connectSsh: vi.fn(), disconnectSsh: vi.fn(), reconnectSsh: vi.fn(), testSsh: vi.fn() }));
 vi.mock("../lib/tauri/tunnels", () => ({ listTunnels: vi.fn().mockResolvedValue([]), sessionTunnelImpact: vi.fn().mockResolvedValue([]) }));
 
@@ -47,6 +60,12 @@ async function click(selector: string) {
   const element = container.querySelector<HTMLButtonElement>(selector);
   expect(element).not.toBeNull();
   await act(async () => { element?.click(); });
+}
+/** Resolve React.lazy() boundaries that navigate into code-split pages. */
+async function flushLazy() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 const nav = (key: string) => `.primary-rail button[title="${i18n.t(key)}"]`;
 const workspace = () => container.querySelector<HTMLElement>(".workspace-shell")!;
@@ -72,6 +91,7 @@ beforeEach(async () => {
   document.body.append(container);
   root = createRoot(container);
   await act(async () => { root.render(<App />); });
+  await flushLazy();
 });
 afterEach(async () => {
   await act(async () => { root.unmount(); });
@@ -87,6 +107,7 @@ describe("server management and session navigation", () => {
     await click('[aria-label="connection"] button');
     const instance = container.querySelector('[data-testid="terminal"]');
     await click(nav("tunnels.nav"));
+    await flushLazy();
     expect(container.querySelector(".tunnels-page")).not.toBeNull();
     expect(container.querySelector('[data-testid="terminal"]')).toBe(instance);
     expect(terminal.disposed).not.toHaveBeenCalled();
@@ -95,6 +116,7 @@ describe("server management and session navigation", () => {
     expect(container.querySelector(".host-menu .lucide-cable")).not.toBeNull();
     const shortcut = [...container.querySelectorAll<HTMLButtonElement>(".server-profile-actions button")].find((button) => button.textContent === i18n.t("tunnels.create"))!;
     await act(async () => shortcut.click());
+    await flushLazy();
     expect(container.querySelector(".tunnels-page")).not.toBeNull();
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain(i18n.t("tunnels.create"));
     expect(document.querySelector("#tunnel-profile")?.textContent).toContain("alpha");
@@ -119,6 +141,9 @@ describe("server management and session navigation", () => {
     expect(terminal.mounted).toHaveBeenCalledTimes(1);
     expect(instance?.getAttribute("data-active")).toBe("true");
     await click(nav("sidebar.servers"));
+    expect(workspace().style.display).toBe("none");
+    expect(workspace().getAttribute("aria-hidden")).toBe("true");
+    expect(container.querySelector(".server-management")).not.toBeNull();
     expect(instance?.getAttribute("data-active")).toBe("false");
     const channel = vi.mocked(connectSsh).mock.calls[0][1];
     await act(async () => { channel({ event: "output", data: { bytes: [65, 66] } }); });
