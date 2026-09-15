@@ -143,43 +143,47 @@ export type ReleaseWriteInput = {
 };
 
 export async function createRelease(input: ReleaseWriteInput) {
-  const context = await getAdminContext();
-  if (context.status !== "ok") return { status: context.status } as const;
-  if (context.role !== "owner") return { status: "forbidden" } as const;
+  try {
+    const context = await getAdminContext();
+    if (context.status !== "ok") return { status: context.status } as const;
+    if (context.role !== "owner") return { status: "forbidden" } as const;
 
-  const version = normalizeVersion(input.version);
-  if (!version || version.length > 32 || !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(version)) {
-    return { status: "invalid" } as const;
-  }
-  const releasePageUrl = input.releasePageUrl?.trim() || null;
-  if (releasePageUrl && !isHttpsUrl(releasePageUrl)) return { status: "invalid" } as const;
-  const assets = normalizeAssets(input.assets);
-  if (!assets) return { status: "invalid" } as const;
-  const notesZh = input.notesZh?.trim() || null;
-  const notesEn = input.notesEn?.trim() || null;
-  if ((notesZh && notesZh.length > 8000) || (notesEn && notesEn.length > 8000)) return { status: "invalid" } as const;
+    const version = normalizeVersion(input.version);
+    if (!version || version.length > 32 || !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(version)) {
+      return { status: "invalid" } as const;
+    }
+    const releasePageUrl = input.releasePageUrl?.trim() || null;
+    if (releasePageUrl && !isHttpsUrl(releasePageUrl)) return { status: "invalid" } as const;
+    const assets = normalizeAssets(input.assets);
+    if (!assets) return { status: "invalid" } as const;
+    const notesZh = input.notesZh?.trim() || null;
+    const notesEn = input.notesEn?.trim() || null;
+    if ((notesZh && notesZh.length > 8000) || (notesEn && notesEn.length > 8000)) return { status: "invalid" } as const;
 
-  const { data, error } = await context.admin
-    .from("app_releases")
-    .insert({
-      version,
-      status: "draft",
-      is_latest: false,
-      notes_zh: notesZh,
-      notes_en: notesEn,
-      release_page_url: releasePageUrl,
-      created_by: context.actorId,
-      updated_by: context.actorId,
-    })
-    .select("id")
-    .single();
-  if (error || !data) return { status: error?.code === "23505" ? "conflict" : "unavailable" } as const;
-  if (!(await replaceAssets(context.admin, data.id, assets))) {
-    await context.admin.from("app_releases").delete().eq("id", data.id);
+    const { data, error } = await context.admin
+      .from("app_releases")
+      .insert({
+        version,
+        status: "draft",
+        is_latest: false,
+        notes_zh: notesZh,
+        notes_en: notesEn,
+        release_page_url: releasePageUrl,
+        created_by: context.actorId,
+        updated_by: context.actorId,
+      })
+      .select("id")
+      .single();
+    if (error || !data) return { status: error?.code === "23505" ? "conflict" : "unavailable" } as const;
+    if (!(await replaceAssets(context.admin, data.id, assets))) {
+      await context.admin.from("app_releases").delete().eq("id", data.id);
+      return { status: "unavailable" } as const;
+    }
+    await context.admin.from("platform_admin_audit").insert({ actor_id: context.actorId, action: "releases.create" });
+    return { status: "ok" as const, id: data.id as string };
+  } catch {
     return { status: "unavailable" } as const;
   }
-  await context.admin.from("platform_admin_audit").insert({ actor_id: context.actorId, action: "releases.create" });
-  return { status: "ok" as const, id: data.id as string };
 }
 
 export async function updateRelease(releaseId: string, input: ReleaseWriteInput) {

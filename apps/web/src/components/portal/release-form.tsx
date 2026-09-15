@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
 import { useActionState } from "react";
+import { useRouter } from "next/navigation";
 import { LoaderCircle, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +18,7 @@ import type { ReleaseRecord } from "@/lib/releases";
 function messageFor(code: ReleaseActionState["code"], t: ReturnType<typeof getDictionary>["admin"]) {
   switch (code) {
     case "updated":
+    case "created":
       return t.releasesUpdated;
     case "conflict":
       return t.releasesConflict;
@@ -52,11 +55,19 @@ export function ReleaseForm({
   release?: ReleaseRecord | null;
   readOnly: boolean;
 }) {
+  const router = useRouter();
   const t = getDictionary(locale);
   const action = release ? updateReleaseAction : createReleaseAction;
   const [state, formAction, pending] = useActionState(action, initialReleaseActionState);
   const defaults = assetDefaults(release);
   const message = messageFor(state.code, t.admin);
+
+  useEffect(() => {
+    if (state.code === "created" && state.id) {
+      router.push(`/${locale}/admin/releases/${state.id}`);
+      router.refresh();
+    }
+  }, [locale, router, state.code, state.id]);
 
   return (
     <form action={formAction} className="profile-form">
@@ -121,10 +132,14 @@ export function ReleaseForm({
       </section>
 
       {readOnly ? <p className="form-message" role="status">{t.admin.releasesReadOnly}</p> : null}
-      {message ? <p className={`form-message ${state.code === "updated" ? "success" : "error"}`} role="status">{message}</p> : null}
+      {message ? (
+        <p className={`form-message ${state.code === "updated" || state.code === "created" ? "success" : "error"}`} role="status">
+          {message}
+        </p>
+      ) : null}
       {!readOnly ? (
-        <Button type="submit" disabled={pending}>
-          {pending ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
+        <Button type="submit" disabled={pending || state.code === "created"}>
+          {pending || state.code === "created" ? <LoaderCircle className="animate-spin" size={16} /> : <Save size={16} />}
           {release ? t.admin.releasesSave : t.admin.releasesCreate}
         </Button>
       ) : null}

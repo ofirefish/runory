@@ -1,7 +1,6 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
 import { z } from "zod";
 import {
   createRelease,
@@ -13,7 +12,17 @@ import { isLocale } from "@/lib/i18n";
 import { isHttpsUrl, releasePlatforms } from "@/lib/releases";
 
 export type ReleaseActionState = {
-  code: "idle" | "invalid" | "forbidden" | "configuration" | "unavailable" | "conflict" | "updated" | "missing";
+  code:
+    | "idle"
+    | "invalid"
+    | "forbidden"
+    | "configuration"
+    | "unavailable"
+    | "conflict"
+    | "updated"
+    | "created"
+    | "missing";
+  id?: string;
 };
 
 export const initialReleaseActionState: ReleaseActionState = { code: "idle" };
@@ -32,23 +41,17 @@ const writeSchema = z.object({
     .min(1)
     .max(32)
     .regex(/^[A-Za-z0-9][A-Za-z0-9._+-]*$/),
-  notesZh: z.string().max(8000).optional(),
-  notesEn: z.string().max(8000).optional(),
-  releasePageUrl: z
-    .string()
-    .trim()
-    .max(2048)
-    .optional()
-    .transform(value => (value ? value : undefined))
-    .refine(value => value === undefined || isHttpsUrl(value)),
-  windowsUrl: z.string().trim(),
-  windowsFormat: z.string().trim(),
-  macosAppleUrl: z.string().trim(),
-  macosAppleFormat: z.string().trim(),
-  macosIntelUrl: z.string().trim(),
-  macosIntelFormat: z.string().trim(),
-  linuxUrl: z.string().trim(),
-  linuxFormat: z.string().trim(),
+  notesZh: z.string().max(8000).optional().default(""),
+  notesEn: z.string().max(8000).optional().default(""),
+  releasePageUrl: z.string().trim().max(2048).optional().default(""),
+  windowsUrl: z.string().trim().optional().default(""),
+  windowsFormat: z.string().trim().optional().default(".msi"),
+  macosAppleUrl: z.string().trim().optional().default(""),
+  macosAppleFormat: z.string().trim().optional().default(".dmg"),
+  macosIntelUrl: z.string().trim().optional().default(""),
+  macosIntelFormat: z.string().trim().optional().default(".dmg"),
+  linuxUrl: z.string().trim().optional().default(""),
+  linuxFormat: z.string().trim().optional().default(".AppImage"),
 });
 
 function collectAssets(values: z.infer<typeof writeSchema>) {
@@ -86,78 +89,98 @@ function revalidateReleasePaths(locale: string) {
   revalidatePath(`/${locale === "zh-CN" ? "en-US" : "zh-CN"}/download`);
 }
 
+function parseWriteForm(formData: FormData) {
+  const parsed = writeSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { status: "invalid" as const };
+  const releasePageUrl = parsed.data.releasePageUrl;
+  if (releasePageUrl && !isHttpsUrl(releasePageUrl)) return { status: "invalid" as const };
+  const assets = collectAssets(parsed.data);
+  if (!assets) return { status: "invalid" as const };
+  return {
+    status: "ok" as const,
+    data: {
+      locale: parsed.data.locale,
+      version: parsed.data.version,
+      notesZh: parsed.data.notesZh || null,
+      notesEn: parsed.data.notesEn || null,
+      releasePageUrl: releasePageUrl || null,
+      assets,
+    },
+  };
+}
+
 export async function createReleaseAction(
   _state: ReleaseActionState,
   formData: FormData,
 ): Promise<ReleaseActionState> {
-  const parsed = writeSchema.safeParse(Object.fromEntries(formData));
-  if (!parsed.success) return { code: "invalid" };
-  const assets = collectAssets(parsed.data);
-  if (!assets) return { code: "invalid" };
-  const result = await createRelease({
-    version: parsed.data.version,
-    notesZh: parsed.data.notesZh ?? null,
-    notesEn: parsed.data.notesEn ?? null,
-    releasePageUrl: parsed.data.releasePageUrl ?? null,
-    assets,
-  });
-  if (result.status !== "ok") return { code: mapWriteStatus(result.status) };
-  revalidateReleasePaths(parsed.data.locale);
-  redirect(`/${parsed.data.locale}/admin/releases/${result.id}`);
+  try {
+    const parsed = parseWriteForm(formData);
+    if (parsed.status !== "ok") return { code: "invalid" };
+    const result = await createRelease(parsed.data);
+    if (result.status !== "ok") return { code: mapWriteStatus(result.status) };
+    revalidateReleasePaths(parsed.data.locale);
+    return { code: "created", id: result.id };
+  } catch {
+    return { code: "unavailable" };
+  }
 }
 
 export async function updateReleaseAction(
   _state: ReleaseActionState,
   formData: FormData,
 ): Promise<ReleaseActionState> {
-  const releaseId = String(formData.get("releaseId") ?? "");
-  const parsed = writeSchema.safeParse(Object.fromEntries(formData));
-  if (!releaseId || !parsed.success) return { code: "invalid" };
-  const assets = collectAssets(parsed.data);
-  if (!assets) return { code: "invalid" };
-  const result = await updateRelease(releaseId, {
-    version: parsed.data.version,
-    notesZh: parsed.data.notesZh ?? null,
-    notesEn: parsed.data.notesEn ?? null,
-    releasePageUrl: parsed.data.releasePageUrl ?? null,
-    assets,
-  });
-  if (result.status !== "ok") return { code: mapWriteStatus(result.status) };
-  revalidateReleasePaths(parsed.data.locale);
-  return { code: "updated" };
+  try {
+    const releaseId = String(formData.get("releaseId") ?? "");
+    const parsed = parseWriteForm(formData);
+    if (!releaseId || parsed.status !== "ok") return { code: "invalid" };
+    const result = await updateRelease(releaseId, parsed.data);
+    if (result.status !== "ok") return { code: mapWriteStatus(result.status) };
+    revalidateReleasePaths(parsed.data.locale);
+    return { code: "updated" };
+  } catch {
+    return { code: "unavailable" };
+  }
 }
 
 export async function setReleaseStatusAction(
   _state: ReleaseActionState,
   formData: FormData,
 ): Promise<ReleaseActionState> {
-  const parsed = z
-    .object({
-      locale: z.string().refine(isLocale),
-      releaseId: z.string().uuid(),
-      status: z.enum(["draft", "published", "archived"]),
-    })
-    .safeParse(Object.fromEntries(formData));
-  if (!parsed.success) return { code: "invalid" };
-  const result = await setReleaseStatus(parsed.data.releaseId, parsed.data.status);
-  if (result.status !== "ok") return { code: mapWriteStatus(result.status) };
-  revalidateReleasePaths(parsed.data.locale);
-  return { code: "updated" };
+  try {
+    const parsed = z
+      .object({
+        locale: z.string().refine(isLocale),
+        releaseId: z.string().uuid(),
+        status: z.enum(["draft", "published", "archived"]),
+      })
+      .safeParse(Object.fromEntries(formData));
+    if (!parsed.success) return { code: "invalid" };
+    const result = await setReleaseStatus(parsed.data.releaseId, parsed.data.status);
+    if (result.status !== "ok") return { code: mapWriteStatus(result.status) };
+    revalidateReleasePaths(parsed.data.locale);
+    return { code: "updated" };
+  } catch {
+    return { code: "unavailable" };
+  }
 }
 
 export async function setLatestReleaseAction(
   _state: ReleaseActionState,
   formData: FormData,
 ): Promise<ReleaseActionState> {
-  const parsed = z
-    .object({
-      locale: z.string().refine(isLocale),
-      releaseId: z.string().uuid(),
-    })
-    .safeParse(Object.fromEntries(formData));
-  if (!parsed.success) return { code: "invalid" };
-  const result = await setLatestRelease(parsed.data.releaseId);
-  if (result.status !== "ok") return { code: mapWriteStatus(result.status) };
-  revalidateReleasePaths(parsed.data.locale);
-  return { code: "updated" };
+  try {
+    const parsed = z
+      .object({
+        locale: z.string().refine(isLocale),
+        releaseId: z.string().uuid(),
+      })
+      .safeParse(Object.fromEntries(formData));
+    if (!parsed.success) return { code: "invalid" };
+    const result = await setLatestRelease(parsed.data.releaseId);
+    if (result.status !== "ok") return { code: mapWriteStatus(result.status) };
+    revalidateReleasePaths(parsed.data.locale);
+    return { code: "updated" };
+  } catch {
+    return { code: "unavailable" };
+  }
 }
