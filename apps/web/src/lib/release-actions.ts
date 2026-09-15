@@ -9,23 +9,8 @@ import {
   updateRelease,
 } from "@/lib/data/releases";
 import { isLocale } from "@/lib/i18n";
+import type { ReleaseActionState } from "@/lib/release-action-state";
 import { isHttpsUrl, releasePlatforms } from "@/lib/releases";
-
-export type ReleaseActionState = {
-  code:
-    | "idle"
-    | "invalid"
-    | "forbidden"
-    | "configuration"
-    | "unavailable"
-    | "conflict"
-    | "updated"
-    | "created"
-    | "missing";
-  id?: string;
-};
-
-export const initialReleaseActionState: ReleaseActionState = { code: "idle" };
 
 const assetSchema = z.object({
   platform: z.enum(releasePlatforms),

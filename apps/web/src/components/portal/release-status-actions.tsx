@@ -4,11 +4,10 @@ import { useActionState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  initialReleaseActionState,
   setLatestReleaseAction,
   setReleaseStatusAction,
-  type ReleaseActionState,
 } from "@/lib/release-actions";
+import { initialReleaseActionState, type ReleaseActionState } from "@/lib/release-action-state";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import type { ReleaseStatus } from "@/lib/releases";
 

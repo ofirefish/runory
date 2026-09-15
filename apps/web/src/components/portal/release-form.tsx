@@ -8,10 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   createReleaseAction,
-  initialReleaseActionState,
   updateReleaseAction,
-  type ReleaseActionState,
 } from "@/lib/release-actions";
+import { initialReleaseActionState, type ReleaseActionState } from "@/lib/release-action-state";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import type { ReleaseRecord } from "@/lib/releases";
 
