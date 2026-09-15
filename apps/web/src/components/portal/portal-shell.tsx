@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { Boxes, LayoutDashboard, LogOut, ShieldCheck, Store } from "lucide-react";
+import { Boxes, LayoutDashboard, LogOut, Package, ShieldCheck, Store } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { Button } from "@/components/ui/button";
 import { signOutAction } from "@/lib/auth-actions";
 import { getDictionary, type Locale } from "@/lib/i18n";
 
-export function PortalShell({ locale, area, children }: { locale: Locale; area: "account" | "admin"; children: React.ReactNode }) {
+export type PortalArea = "account" | "admin-accounts" | "admin-releases" | "admin-skills" | "admin-store";
+
+export function PortalShell({ locale, area, children }: { locale: Locale; area: PortalArea; children: React.ReactNode }) {
   const t = getDictionary(locale);
   return (
     <div className="portal-layout">
@@ -13,9 +15,10 @@ export function PortalShell({ locale, area, children }: { locale: Locale; area: 
         <Link href={`/${locale}`} className="flex items-center gap-3 font-semibold"><BrandMark />Runory</Link>
         <nav className="portal-nav" aria-label={t.nav.label}>
           <Link href={`/${locale}/account`} data-active={area === "account"}><LayoutDashboard size={17} />{t.common.account}</Link>
-          <Link href={`/${locale}/admin/accounts`} data-active={area === "admin"}><ShieldCheck size={17} />{t.admin.accounts}</Link>
-          <Link href={`/${locale}/admin/skills`} data-active={false}><Boxes size={17} />{t.admin.skills}</Link>
-          <Link href={`/${locale}/admin/store`} data-active={false}><Store size={17} />{t.admin.store}</Link>
+          <Link href={`/${locale}/admin/accounts`} data-active={area === "admin-accounts"}><ShieldCheck size={17} />{t.admin.accounts}</Link>
+          <Link href={`/${locale}/admin/releases`} data-active={area === "admin-releases"}><Package size={17} />{t.admin.releases}</Link>
+          <Link href={`/${locale}/admin/skills`} data-active={area === "admin-skills"}><Boxes size={17} />{t.admin.skills}</Link>
+          <Link href={`/${locale}/admin/store`} data-active={area === "admin-store"}><Store size={17} />{t.admin.store}</Link>
         </nav>
         <form action={signOutAction} className="mt-auto">
           <input type="hidden" name="locale" value={locale} />

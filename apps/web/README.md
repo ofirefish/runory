@@ -1,6 +1,6 @@
 # Runory Web
 
-Runory Web is the public landing page, optional cloud-sync account portal, and read-only operations console. It is intentionally isolated from the Tauri client and never decrypts synced infrastructure data.
+Runory Web is the public landing page, optional cloud-sync account portal, and operations console. It is intentionally isolated from the Tauri client and never decrypts synced infrastructure data.
 
 ## Local development
 
@@ -21,7 +21,8 @@ The public homepage is available at `/zh-CN` and `/en-US`. Its content lives in
 `src/lib/landing-copy.ts`; styles are scoped to `.landing` so account pages keep
 their own theme. The workspace and AI tours use explicitly labeled sample data
 and never establish connections or execute commands. Platform selection explains
-package formats and links to GitHub Releases without claiming a package exists.
+package formats and links installer URLs from the published release catalog
+(or GitHub Releases when no published catalog exists).
 
 Run `pnpm --dir apps/web test`, `lint`, `typecheck`, and `build` from the workspace
 root (the tests reuse the workspace's Vitest and jsdom dependencies). On Windows,
@@ -34,6 +35,18 @@ content, metadata, keywords, canonical paths, language alternates, FAQs, and
 structured data together in `src/lib/marketing-pages.ts`. `sitemap.ts` includes
 only public marketing routes; authentication, account, and administration pages
 are excluded from indexing.
+
+## Release catalog
+
+Platform owners manage website download links at `/[locale]/admin/releases`:
+
+1. Build installers with the existing GitHub Actions publish workflow (or local release build).
+2. Host the packages on GitHub Releases (or another https origin).
+3. Create a draft release in the operations console, paste the four platform URLs, then Publish and Set as latest.
+
+The homepage and `/download` prefer the published release marked `is_latest`. If none exists, they fall back to the GitHub Releases API. Desktop automatic updates still use GitHub `latest.json` as documented in `docs/DESKTOP_UPDATES.md` and are not controlled by this catalog.
+
+`support_viewer` admins can inspect releases but cannot create or change them. Account administration remains read-only.
 
 ## Vercel
 

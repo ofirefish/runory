@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { AgentWalkthrough, DownloadPicker, LandingHeader } from "@/components/landing/landing-interactions";
 import { WorkspaceTour } from "@/components/landing/workspace-tour";
 import { isLocale } from "@/lib/i18n";
-import { fetchLatestReleaseDownloads } from "@/lib/github-releases";
+import { fetchDownloadCatalog } from "@/lib/download-catalog";
 import { getLandingCopy } from "@/lib/landing-copy";
 import { siteUrl } from "@/lib/marketing-pages";
 import "./landing.css";
@@ -36,7 +36,7 @@ export default async function LandingPage({ params }: PageProps) {
   const { locale } = await params;
   if (!isLocale(locale)) notFound();
   const t = getLandingCopy(locale);
-  const downloads = await fetchLatestReleaseDownloads();
+  const downloads = await fetchDownloadCatalog();
   return <div className="landing" id="top">
     <a className="skip-link" href="#main-content">{t.nav.skip}</a>
     <LandingHeader locale={locale} copy={t.nav} />

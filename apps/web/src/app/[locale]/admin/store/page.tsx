@@ -13,5 +13,5 @@ export default async function StorePage({ params }: { params: Promise<{ locale: 
   const result = await getAdminContext();
   if (result.status === "signedOut") redirect(`/${locale}/auth/sign-in`);
   const t = getDictionary(locale);
-  return <PortalShell locale={locale} area="admin">{result.status !== "ok" ? <AdminStatus locale={locale} status={result.status} /> : <Card className="reserved-card"><Store size={26} /><Badge variant="secondary">{t.common.planned}</Badge><h1>{t.admin.storeTitle}</h1><p>{t.admin.storeDescription}</p></Card>}</PortalShell>;
+  return <PortalShell locale={locale} area="admin-store">{result.status !== "ok" ? <AdminStatus locale={locale} status={result.status} /> : <Card className="reserved-card"><Store size={26} /><Badge variant="secondary">{t.common.planned}</Badge><h1>{t.admin.storeTitle}</h1><p>{t.admin.storeDescription}</p></Card>}</PortalShell>;
 }

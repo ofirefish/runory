@@ -6,7 +6,7 @@ import { DownloadPlatformPanel } from "@/components/landing/download-platform-pa
 import { LandingHeader, releaseUrl } from "@/components/landing/landing-interactions";
 import { PricingPlans } from "@/components/landing/pricing-plans";
 import { BrandMark } from "@/components/brand-mark";
-import { fetchLatestReleaseDownloads } from "@/lib/github-releases";
+import { fetchDownloadCatalog } from "@/lib/download-catalog";
 import { getLandingCopy } from "@/lib/landing-copy";
 import { getMarketingCopy, isMarketingSlug, localizedPath, marketingMetadata, marketingSlugs, siteUrl, type MarketingSlug } from "@/lib/marketing-pages";
 import { isLocale, locales, type Locale } from "@/lib/i18n";
@@ -47,7 +47,7 @@ export default async function MarketingPage({ params }: PageProps) {
   const Icon = pageIcons[marketingPage];
   const related = marketingSlugs.filter(slug => slug !== marketingPage).slice(0, 3);
   const isDownload = marketingPage === "download";
-  const downloads = isDownload ? await fetchLatestReleaseDownloads() : null;
+  const downloads = isDownload ? await fetchDownloadCatalog() : null;
   return <div className={`landing marketing-page marketing-${marketingPage}`} id="top">
     <a className="skip-link" href="#main-content">{landing.nav.skip}</a>
     <LandingHeader locale={locale} copy={landing.nav} page={marketingPage} />

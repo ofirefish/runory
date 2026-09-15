@@ -21,7 +21,7 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
   if (result.status === "missing") notFound();
   const t = getDictionary(locale);
   const roleLabels: Record<string, string> = { owner: t.admin.roleOwner, admin: t.admin.roleAdmin, operator: t.admin.roleOperator, viewer: t.admin.roleViewer };
-  return <PortalShell locale={locale} area="admin">{result.status !== "ok" ? <AdminStatus locale={locale} status={result.status} /> : <>
+  return <PortalShell locale={locale} area="admin-accounts">{result.status !== "ok" ? <AdminStatus locale={locale} status={result.status} /> : <>
     <Button asChild variant="ghost" size="sm"><Link href={`/${locale}/admin/accounts`}><ArrowLeft size={15} />{t.admin.back}</Link></Button>
     <header className="portal-header compact"><p className="eyebrow">{t.admin.eyebrow}</p><h1>{t.admin.details}</h1><p>{result.account.email}</p></header>
     <section className="detail-grid"><Card className="portal-card"><h2>{t.portal.profileTitle}</h2><dl className="detail-list"><div><dt>{t.admin.displayName}</dt><dd>{result.account.displayName}</dd></div><div><dt>{t.admin.userId}</dt><dd className="font-mono text-xs">{result.account.id}</dd></div><div><dt>{t.admin.status}</dt><dd><Badge>{result.account.confirmed ? t.admin.confirmed : t.admin.pending}</Badge></dd></div><div><dt>{t.admin.created}</dt><dd>{formatDate(result.account.createdAt, locale, t.admin.never)}</dd></div><div><dt>{t.admin.lastSignIn}</dt><dd>{formatDate(result.account.lastSignInAt, locale, t.admin.never)}</dd></div><div><dt>{t.admin.syncObjects}</dt><dd>{result.account.syncObjectCount}</dd></div></dl></Card>
