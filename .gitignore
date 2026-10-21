@@ -1,35 +1,104 @@
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
 node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+
+# Only pnpm-lock.yaml / Cargo.lock are allowed (AGENTS.md §18)
+package-lock.json
+yarn.lock
+bun.lockb
+
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
 dist/
-apps/web/.next/
-apps/web/.next-*/
-src-tauri/target/
+dist-ssr/
+build/
+coverage/
+*.tsbuildinfo
+.vite/
+.eslintcache
+
+# Rust / Cargo (all target dirs, including alternate ones like target-pp11)
+target/
+target-*/
+**/*.rs.bk
+
+# Next.js (apps/web)
+.next/
+.next-*/
+out/
+
+# ---------------------------------------------------------------------------
+# Tauri mobile generated build state
+# ---------------------------------------------------------------------------
 src-tauri/gen/android/.gradle/
 src-tauri/gen/android/build/
 src-tauri/gen/android/app/build/
 src-tauri/gen/android/local.properties
-.idea/
-.vscode/
-.workbuddy/
-*.log
-*.tsbuildinfo
+src-tauri/gen/android/**/*.keystore
+src-tauri/gen/android/**/*.jks
+src-tauri/gen/apple/build/
+src-tauri/gen/apple/**/xcuserdata/
+src-tauri/gen/apple/**/DerivedData/
+
+# ---------------------------------------------------------------------------
+# Secrets & environment (never commit)
+# ---------------------------------------------------------------------------
 .env
 .env.*
 !.env.example
 !.env.cloud.example
-.DS_Store
-tests/ssh-server/host-keys/
-tests/ssh-server/generated/
+!**/.env.example
 
-.vercel
-
-# Updater signing private key
+# Updater signing private key (the .pub may be committed)
 runory-updater.key
+*.key
+!*.key.pub
+*.pem
+*.p12
+*.keystore
+*.jks
 
 # Plugin publisher private keys (public *.pub.json may be committed)
 plugin-sdk/keys/*.json
 !plugin-sdk/keys/*.pub.json
 !plugin-sdk/keys/README.md
 
+# ---------------------------------------------------------------------------
+# Local test fixtures generated at runtime
+# ---------------------------------------------------------------------------
+tests/ssh-server/host-keys/
+tests/ssh-server/generated/
+
+# ---------------------------------------------------------------------------
+# Tooling / platform local state
+# ---------------------------------------------------------------------------
+.vercel/
 supabase/.temp/
-.vercel
-.env*
+supabase/.branches/
+.workbuddy/
+
+# ---------------------------------------------------------------------------
+# Logs & scratch files
+# ---------------------------------------------------------------------------
+*.log
+logs/
+.tmp*
+tmp/
+tmp_*
+*.tmp
+
+# ---------------------------------------------------------------------------
+# Editors & OS
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
