@@ -17,13 +17,14 @@ const AuthDialog = lazy(() => import("../features/auth/AuthDialog").then((module
 const PricingDialog = lazy(() => import("../features/settings/PricingDialog").then((module) => ({ default: module.PricingDialog })));
 const SettingsPanel = lazy(() => import("../features/settings/SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
 const TunnelsPage = lazy(() => import("../features/tunnels/TunnelsPage").then((module) => ({ default: module.TunnelsPage })));
+const PluginsPage = lazy(() => import("../features/plugins/PluginsPage").then((module) => ({ default: module.PluginsPage })));
 
 export function App() {
   const { t } = useTranslation();
   useTheme();
   useLanguage();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
-  const [activeNavigation, setActiveNavigation] = useState<"servers" | "sessions" | "tunnels">("servers");
+  const [activeNavigation, setActiveNavigation] = useState<"servers" | "sessions" | "tunnels" | "plugins">("servers");
   const [tunnelProfileId, setTunnelProfileId] = useState<string | undefined>();
   const [query, setQuery] = useState("");
   const [titlebarTabsHost, setTitlebarTabsHost] = useState<HTMLDivElement | null>(null);
@@ -50,7 +51,7 @@ export function App() {
     window.addEventListener("runory:open-settings", onOpenSettings);
     return () => window.removeEventListener("runory:open-settings", onOpenSettings);
   }, []);
-  const selectNavigation = (item: "servers" | "sessions" | "tunnels" | "settings") => {
+  const selectNavigation = (item: "servers" | "sessions" | "tunnels" | "plugins" | "settings") => {
     if (item === "tunnels") setTunnelProfileId(undefined);
     setMobileNavigationOpen(false);
     if (item === "settings") { setSettingsSection("general"); setSettingsOpen(true); }
@@ -67,6 +68,7 @@ export function App() {
       <PrimaryNavigationRail active={activeNavigation} onSelect={selectNavigation} onOpenAccount={() => { setMobileNavigationOpen(false); setSettingsSection("account"); setSettingsOpen(true); }} onOpenAuth={() => { setMobileNavigationOpen(false); setAuthOpen(true); }} onOpenPricing={() => { setMobileNavigationOpen(false); setPricingOpen(true); }} mobileOpen={mobileNavigationOpen} />
       {activeNavigation === "servers" && <ServerManagement query={query} onQueryChange={setQuery} onConnectProfile={connectProfile} onOpenSync={() => { setSettingsSection("cloud"); setSettingsOpen(true); }} onOpenAuth={() => setAuthOpen(true)} onCreateTunnel={(profileId) => { setTunnelProfileId(profileId); setActiveNavigation("tunnels"); }} />}
       {activeNavigation === "tunnels" && <Suspense fallback={null}><TunnelsPage initialProfileId={tunnelProfileId} onConnectProfile={connectProfile} onShowSession={(tabId) => { useSessionStore.getState().setActive(tabId); setActiveNavigation("sessions"); }} /></Suspense>}
+      {activeNavigation === "plugins" && <Suspense fallback={null}><PluginsPage /></Suspense>}
       {/* Keep terminal instances and channel bindings alive across page changes. */}
       <Workspace visible={activeNavigation === "sessions"} onSelectServer={() => selectNavigation("servers")} titlebarTabsHost={titlebarTabsHost} onShowSessions={() => selectNavigation("sessions")} connectProfileRequest={connectProfileRequest} />
     </div>

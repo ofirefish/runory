@@ -1,0 +1,29 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: django.inspect
+  name: Inspect Django Environment
+  description: Read-only probe of Python, Git, Nginx, and systemd on the host
+steps:
+  - id: system
+    uses: system.detect
+  - id: python
+    uses: ssh.command
+    with:
+      executable: python3
+      args: ["--version"]
+  - id: git
+    uses: ssh.command
+    with:
+      executable: git
+      args: ["--version"]
+  - id: nginx
+    uses: ssh.command
+    with:
+      executable: nginx
+      args: ["-v"]
+  - id: systemd
+    uses: ssh.command
+    with:
+      executable: systemctl
+      args: ["--version"]

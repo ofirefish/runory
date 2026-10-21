@@ -146,6 +146,28 @@ impl CredentialVault for StrongholdCredentialVault {
         })
     }
 
+    fn put_many(&self, entries: Vec<(Uuid, CredentialKind, Zeroizing<String>)>) -> AppResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.with_stronghold(|stronghold| {
+            let client = stronghold
+                .get_client(CLIENT_ID)
+                .map_err(|_| AppError::VaultInvalid)?;
+            for (profile_id, kind, secret) in entries {
+                client
+                    .store()
+                    .insert(
+                        Self::record_key(profile_id, kind),
+                        secret.as_bytes().to_vec(),
+                        None,
+                    )
+                    .map_err(|_| AppError::VaultInvalid)?;
+            }
+            stronghold.save().map_err(|_| AppError::Storage)
+        })
+    }
+
     fn delete(&self, profile_id: Uuid, kind: CredentialKind) -> AppResult<()> {
         self.with_stronghold(|stronghold| {
             let client = stronghold

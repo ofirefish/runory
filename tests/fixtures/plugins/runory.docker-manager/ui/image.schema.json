@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "required": ["image"],
+  "properties": {
+    "image": {
+      "type": "string",
+      "title": "Image Reference",
+      "description": "Example: nginx:alpine or ghcr.io/org/app:1.0.0",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  }
+}

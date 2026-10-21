@@ -12,7 +12,7 @@ const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 1024 * 1024;
 
 pub(crate) struct RemoteCommand {
-    program: &'static str,
+    program: String,
     args: Vec<String>,
     stdin: Vec<u8>,
     timeout: Duration,
@@ -22,12 +22,28 @@ pub(crate) struct RemoteCommand {
 impl RemoteCommand {
     pub(crate) fn program(program: &'static str, args: Vec<String>) -> Self {
         Self {
-            program,
+            program: program.to_owned(),
             args,
             stdin: Vec::new(),
             timeout: DEFAULT_TIMEOUT,
             output_limit: MAX_OUTPUT_BYTES,
         }
+    }
+
+    /// Structured remote program owned by Runory Core. Program names must pass
+    /// `is_safe_program` (no shell metacharacters). Used by the plugin
+    /// `ssh.command` action so plugins never control quoting.
+    pub(crate) fn dynamic_program(program: String, args: Vec<String>) -> AppResult<Self> {
+        if !is_safe_program(&program) {
+            return Err(AppError::InvalidOperation);
+        }
+        Ok(Self {
+            program,
+            args,
+            stdin: Vec::new(),
+            timeout: DEFAULT_TIMEOUT,
+            output_limit: MAX_OUTPUT_BYTES,
+        })
     }
 
     pub(crate) fn script(script: &'static str, args: Vec<String>) -> Self {
@@ -75,10 +91,10 @@ impl RemoteCommand {
     }
 
     fn render(&self) -> AppResult<String> {
-        if !is_safe_program(self.program) {
+        if !is_safe_program(&self.program) {
             return Err(AppError::InvalidOperation);
         }
-        let mut rendered = self.program.to_owned();
+        let mut rendered = self.program.clone();
         for argument in &self.args {
             rendered.push(' ');
             rendered.push_str(&shell_quote(argument)?);
@@ -156,9 +172,10 @@ fn append_bounded(target: &mut Vec<u8>, bytes: &[u8], limit: usize) -> AppResult
 
 fn is_safe_program(program: &str) -> bool {
     !program.is_empty()
+        && !program.contains("..")
         && program
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/'))
 }
 
 fn shell_quote(value: &str) -> AppResult<String> {

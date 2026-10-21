@@ -71,7 +71,7 @@ impl BoundaryCli {
             serde_json::from_str(&payload[start..=end]).ok()
         })?;
         let credentials = value.get("credentials")?.as_array()?;
-        for item in credentials {
+        if let Some(item) = credentials.first() {
             let credential = item
                 .get("credential")
                 .or_else(|| item.pointer("/secret/decoded"))?;

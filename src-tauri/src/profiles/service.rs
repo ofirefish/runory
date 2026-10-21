@@ -2,14 +2,54 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use zeroize::Zeroizing;
 
 use crate::domain::{
-    AppError, AppResult, AuthMethod, ConnectionRoute, CreateProfileRequest, OsDistribution,
-    ReorderProfilesRequest, ServerProfile, UpdateProfileRequest,
+    AppError, AppResult, AuthMethod, ConnectionRoute, CreateProfileRequest, KeySource,
+    OsDistribution, ReorderProfilesRequest, ServerProfile, UpdateProfileRequest,
 };
 use crate::groups::{timestamp, GroupRepository};
 
 use super::ProfileRepository;
+
+pub struct ImportUpsertRequest {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub group_id: Option<uuid::Uuid>,
+    pub auth_method: AuthMethod,
+    pub key_source: Option<KeySource>,
+    pub source_id: Option<String>,
+    pub jump_source_id: Option<String>,
+    pub password: Option<Zeroizing<String>>,
+}
+
+pub struct ImportUpsertOutcome {
+    pub profile_id: uuid::Uuid,
+    pub created: bool,
+    pub password: Option<Zeroizing<String>>,
+}
+
+pub struct ImportUpsertBatchResult {
+    pub outcomes: Vec<ImportUpsertOutcome>,
+    pub profiles_created: usize,
+    pub profiles_updated: usize,
+    pub jumps_wired: usize,
+}
+
+struct PreparedImportUpsert {
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+    group_id: Option<uuid::Uuid>,
+    auth_method: AuthMethod,
+    key_source: Option<KeySource>,
+    source_id: Option<String>,
+    jump_source_id: Option<String>,
+    password: Option<Zeroizing<String>>,
+}
 
 pub struct ProfileService {
     profiles: ProfileRepository,
@@ -74,6 +114,189 @@ impl ProfileService {
         profiles.push(profile.clone());
         self.profiles.save(&profiles).await?;
         Ok(profile)
+    }
+
+    /// Create or overwrite import matches in a single catalog write.
+    /// Match key: host + port + username. Jump wiring is applied in the same save when both ends exist.
+    pub async fn upsert_import_batch(
+        &self,
+        items: Vec<ImportUpsertRequest>,
+    ) -> AppResult<ImportUpsertBatchResult> {
+        if items.is_empty() {
+            return Ok(ImportUpsertBatchResult {
+                outcomes: Vec::new(),
+                profiles_created: 0,
+                profiles_updated: 0,
+                jumps_wired: 0,
+            });
+        }
+
+        let prepared = items
+            .into_iter()
+            .map(|item| {
+                let fields = validate_fields(item.name, item.host, item.port, item.username)?;
+                let key_source = validate_auth(&item.auth_method, item.key_source)?;
+                Ok(PreparedImportUpsert {
+                    name: fields.0,
+                    host: fields.1,
+                    port: item.port,
+                    username: fields.2,
+                    group_id: item.group_id,
+                    auth_method: item.auth_method,
+                    key_source,
+                    source_id: item.source_id,
+                    jump_source_id: item.jump_source_id,
+                    password: item.password,
+                })
+            })
+            .collect::<AppResult<Vec<_>>>()?;
+
+        let _guard = self.write_lock.lock().await;
+        let known_groups: HashSet<_> = self
+            .groups
+            .list()
+            .await?
+            .into_iter()
+            .map(|group| group.id)
+            .collect();
+        for item in &prepared {
+            if let Some(group_id) = item.group_id {
+                if !known_groups.contains(&group_id) {
+                    return Err(AppError::InvalidGroup);
+                }
+            }
+        }
+
+        let mut profiles = self.profiles.list().await?;
+        let mut outcomes = Vec::with_capacity(prepared.len());
+        let mut profiles_created = 0usize;
+        let mut profiles_updated = 0usize;
+        let mut source_to_runory: std::collections::HashMap<String, uuid::Uuid> =
+            std::collections::HashMap::new();
+        let mut pending_jumps: Vec<(uuid::Uuid, String)> = Vec::new();
+
+        for item in prepared {
+            let matched_index = profiles.iter().position(|profile| {
+                profile.host == item.host
+                    && profile.port == item.port
+                    && profile.username == item.username
+            });
+
+            let profile = if let Some(index) = matched_index {
+                let existing = &profiles[index];
+                let sort_order = if existing.group_id == item.group_id {
+                    existing.sort_order
+                } else {
+                    next_sort_order(&profiles, item.group_id)
+                };
+                let connection_route = existing.connection_route.clone();
+                let last_connected_at = existing.last_connected_at.clone();
+                let os_distribution = existing.os_distribution;
+                let created_at = existing.created_at.clone();
+                let id = existing.id;
+                let now = timestamp();
+                let updated = ServerProfile {
+                    id,
+                    name: item.name,
+                    host: item.host,
+                    port: item.port,
+                    username: item.username,
+                    group_id: item.group_id,
+                    auth_method: item.auth_method,
+                    key_source: item.key_source,
+                    connection_route,
+                    sort_order,
+                    created_at,
+                    updated_at: now,
+                    last_connected_at,
+                    os_distribution,
+                };
+                profiles[index] = updated.clone();
+                profiles_updated += 1;
+                updated
+            } else {
+                validate_route(&ConnectionRoute::Direct, None, &profiles)?;
+                let now = timestamp();
+                let created = ServerProfile {
+                    id: uuid::Uuid::new_v4(),
+                    name: item.name,
+                    host: item.host,
+                    port: item.port,
+                    username: item.username,
+                    group_id: item.group_id,
+                    auth_method: item.auth_method,
+                    key_source: item.key_source,
+                    connection_route: ConnectionRoute::Direct,
+                    sort_order: next_sort_order(&profiles, item.group_id),
+                    created_at: now.clone(),
+                    updated_at: now,
+                    last_connected_at: None,
+                    os_distribution: None,
+                };
+                profiles.push(created.clone());
+                profiles_created += 1;
+                created
+            };
+
+            if let Some(source_id) = &item.source_id {
+                source_to_runory.insert(source_id.clone(), profile.id);
+            }
+            if let Some(jump_id) = &item.jump_source_id {
+                pending_jumps.push((profile.id, jump_id.clone()));
+            }
+            outcomes.push(ImportUpsertOutcome {
+                profile_id: profile.id,
+                created: matched_index.is_none(),
+                password: item.password,
+            });
+        }
+
+        let mut jumps_wired = 0usize;
+        for (profile_id, jump_source_id) in pending_jumps {
+            let Some(jump_profile_id) = source_to_runory.get(&jump_source_id).copied() else {
+                continue;
+            };
+            let Some(jump_index) = profiles
+                .iter()
+                .position(|profile| profile.id == jump_profile_id)
+            else {
+                continue;
+            };
+            if !matches!(
+                profiles[jump_index].connection_route,
+                ConnectionRoute::Direct
+            ) {
+                continue;
+            }
+            if profiles.iter().any(|candidate| {
+                matches!(candidate.connection_route, ConnectionRoute::JumpHost { profile_id: used } if used == profile_id)
+            }) {
+                continue;
+            }
+            let Some(profile) = profiles.iter_mut().find(|profile| profile.id == profile_id) else {
+                continue;
+            };
+            if matches!(
+                profile.connection_route,
+                ConnectionRoute::JumpHost { profile_id: existing } if existing == jump_profile_id
+            ) {
+                jumps_wired += 1;
+                continue;
+            }
+            profile.connection_route = ConnectionRoute::JumpHost {
+                profile_id: jump_profile_id,
+            };
+            profile.updated_at = timestamp();
+            jumps_wired += 1;
+        }
+
+        self.profiles.save(&profiles).await?;
+        Ok(ImportUpsertBatchResult {
+            outcomes,
+            profiles_created,
+            profiles_updated,
+            jumps_wired,
+        })
     }
 
     pub async fn update(&self, request: UpdateProfileRequest) -> AppResult<ServerProfile> {

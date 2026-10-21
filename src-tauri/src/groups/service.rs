@@ -56,6 +56,52 @@ impl GroupService {
         Ok(group)
     }
 
+    /// Create missing groups by display name in one catalog write.
+    pub async fn ensure_groups_by_name(
+        &self,
+        names: &[String],
+    ) -> AppResult<(std::collections::HashMap<String, Uuid>, usize)> {
+        let mut validated = Vec::new();
+        let mut seen = HashSet::new();
+        for name in names {
+            let name = validate_name(name.clone())?;
+            if seen.insert(name.clone()) {
+                validated.push(name);
+            }
+        }
+
+        let _guard = self.write_lock.lock().await;
+        let mut groups = self.groups.list().await?;
+        let mut group_ids: std::collections::HashMap<String, Uuid> = groups
+            .iter()
+            .map(|group| (group.name.clone(), group.id))
+            .collect();
+        let mut created = 0usize;
+        let mut dirty = false;
+        for name in validated {
+            if group_ids.contains_key(&name) {
+                continue;
+            }
+            let now = timestamp();
+            let group = HostGroup {
+                id: Uuid::new_v4(),
+                name: name.clone(),
+                sort_order: next_sort_order(&groups),
+                collapsed: false,
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            group_ids.insert(name, group.id);
+            groups.push(group);
+            created += 1;
+            dirty = true;
+        }
+        if dirty {
+            self.groups.save(&groups).await?;
+        }
+        Ok((group_ids, created))
+    }
+
     pub async fn update(&self, request: UpdateGroupRequest) -> AppResult<HostGroup> {
         let name = validate_name(request.name)?;
         if request.sort_order < 0 {

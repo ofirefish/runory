@@ -1,0 +1,21 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: docker.inspect-host
+  name: Docker Host Version
+  description: Probe docker CLI availability and version (R0).
+steps:
+  - id: detect
+    uses: system.detect
+
+  - id: docker_exists
+    uses: system.command_exists
+    with:
+      command: docker
+
+  - id: version
+    uses: ssh.command
+    with:
+      executable: docker
+      args:
+        - version

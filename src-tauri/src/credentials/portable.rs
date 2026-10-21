@@ -248,6 +248,21 @@ impl CredentialVault for PortableCredentialVault {
         })
     }
 
+    fn put_many(&self, entries: Vec<(Uuid, CredentialKind, Zeroizing<String>)>) -> AppResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.with_unlocked_mut(|state| {
+            for (profile_id, kind, secret) in entries {
+                state.values.insert(
+                    Self::record_key(profile_id, kind),
+                    secret.as_bytes().to_vec(),
+                );
+            }
+            Self::persist(&self.path, state)
+        })
+    }
+
     fn delete(&self, profile_id: Uuid, kind: CredentialKind) -> AppResult<()> {
         self.with_unlocked_mut(|state| {
             if let Some(mut removed) = state.values.remove(&Self::record_key(profile_id, kind)) {

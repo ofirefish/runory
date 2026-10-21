@@ -50,6 +50,9 @@ vi.mock("../features/tunnels/TunnelsPage", () => ({
     </main>
   ),
 }));
+vi.mock("../features/plugins/PluginsPage", () => ({
+  PluginsPage: () => <main className="plugins-page" aria-label="plugins" />,
+}));
 vi.mock("../lib/tauri/ssh", () => ({ connectSsh: vi.fn(), disconnectSsh: vi.fn(), reconnectSsh: vi.fn(), testSsh: vi.fn() }));
 vi.mock("../lib/tauri/tunnels", () => ({ listTunnels: vi.fn().mockResolvedValue([]), sessionTunnelImpact: vi.fn().mockResolvedValue([]) }));
 
@@ -120,6 +123,19 @@ describe("server management and session navigation", () => {
     expect(container.querySelector(".tunnels-page")).not.toBeNull();
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain(i18n.t("tunnels.create"));
     expect(document.querySelector("#tunnel-profile")?.textContent).toContain("alpha");
+  });
+
+  it("opens plugin marketplace without disposing terminals", async () => {
+    await click(".server-host-connect");
+    await click('[aria-label="connection"] button');
+    await flushLazy();
+    const instance = container.querySelector('[data-testid="terminal"]');
+    expect(instance).not.toBeNull();
+    await click(nav("plugins.nav"));
+    await flushLazy();
+    expect(container.querySelector(".plugins-page")).not.toBeNull();
+    expect(container.querySelector('[data-testid="terminal"]')).toBe(instance);
+    expect(terminal.disposed).not.toHaveBeenCalled();
   });
 
   it("shows the catalog in management and selects details without connecting", async () => {

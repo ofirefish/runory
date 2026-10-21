@@ -2,4 +2,4 @@ mod repository;
 mod service;
 
 pub use repository::ProfileRepository;
-pub use service::ProfileService;
+pub use service::{ImportUpsertRequest, ProfileService};

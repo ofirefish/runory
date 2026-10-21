@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tunnelSchema } from "./tunnel-form";
+import { profileComboboxGroups, tunnelSchema } from "./tunnel-form";
 import { localEndpoint, targetEndpoint } from "../../types/tunnels";
 
 const values = { name: "Database", profileId: "profile", targetHost: "db.internal", targetPort: 5432, localPort: 15432 };
@@ -16,5 +16,21 @@ describe("tunnel rule form", () => {
     const rule = { ...values, id: "rule", targetHost: "::1" };
     expect(localEndpoint(rule)).toBe("127.0.0.1:15432");
     expect(targetEndpoint(rule)).toBe("[::1]:5432");
+  });
+  it("groups SSH servers by catalog group and keeps ungrouped servers last", () => {
+    const groups = [
+      { id: "prod", name: "Production", sortOrder: 0, collapsed: false, createdAt: "", updatedAt: "" },
+      { id: "stag", name: "Staging", sortOrder: 1, collapsed: false, createdAt: "", updatedAt: "" },
+    ];
+    const profiles = [
+      { id: "alpha", name: "Alpha", host: "10.0.0.1", port: 22, username: "ops", groupId: "prod", sortOrder: 0, authMethod: "password" as const, connectionRoute: { type: "direct" as const }, createdAt: "", updatedAt: "" },
+      { id: "beta", name: "Beta", host: "10.0.0.2", port: 22, username: "ops", groupId: "stag", sortOrder: 0, authMethod: "password" as const, connectionRoute: { type: "direct" as const }, createdAt: "", updatedAt: "" },
+      { id: "solo", name: "Solo", host: "10.0.0.3", port: 22, username: "ops", groupId: null, sortOrder: 0, authMethod: "password" as const, connectionRoute: { type: "direct" as const }, createdAt: "", updatedAt: "" },
+    ];
+    expect(profileComboboxGroups(groups, profiles, "Ungrouped").map((group) => [group.label, group.options.map((option) => option.label)])).toEqual([
+      ["Production", ["Alpha"]],
+      ["Staging", ["Beta"]],
+      ["Ungrouped", ["Solo"]],
+    ]);
   });
 });

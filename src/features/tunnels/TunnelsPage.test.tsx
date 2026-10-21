@@ -8,11 +8,18 @@ import * as ssh from "../../lib/tauri/ssh";
 import { useCatalogStore } from "../../stores/catalog-store";
 import { useSessionStore } from "../../stores/session-store";
 import type { TunnelView } from "../../types/tunnels";
+import type { SearchableCombobox } from "../../components/ui/searchable-combobox";
 import type { SelectControl } from "../../components/ui/select-control";
 import { TunnelsPage } from "./TunnelsPage";
 
 vi.mock("../../lib/tauri/tunnels", () => ({ listTunnels: vi.fn(), saveTunnel: vi.fn(), startTunnel: vi.fn(), connectStartTunnel: vi.fn(), stopTunnel: vi.fn(), checkTunnel: vi.fn(), deleteTunnel: vi.fn() }));
 vi.mock("../../components/ui/select-control", () => ({ SelectControl: ({ value, onValueChange, options, label, id, disabled }: ComponentProps<typeof SelectControl>) => <select id={id} aria-label={label} value={value} disabled={disabled} onChange={(event) => onValueChange(event.target.value)}>{options.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select> }));
+vi.mock("../../components/ui/searchable-combobox", () => ({
+  SearchableCombobox: ({ value, onValueChange, groups, options, label, id, disabled, placeholder }: ComponentProps<typeof SearchableCombobox>) => {
+    const flat = groups ? groups.flatMap((group) => group.options) : (options ?? []);
+    return <select id={id} aria-label={label} value={value} disabled={disabled} onChange={(event) => onValueChange(event.target.value)}>{!value && placeholder ? <option value="">{placeholder}</option> : null}{flat.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>;
+  },
+}));
 vi.mock("../../lib/tauri/ssh", () => ({
   credentialStatus: vi.fn(), prepareHostVerification: vi.fn(), trustHost: vi.fn(), cancelHostVerification: vi.fn(),
   testSsh: vi.fn(), forgetCredential: vi.fn(), initializeVault: vi.fn(), unlockVault: vi.fn(), unlockVaultWithPlatform: vi.fn(),

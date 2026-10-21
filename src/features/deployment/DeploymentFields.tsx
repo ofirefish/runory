@@ -8,21 +8,22 @@ interface FieldProps<T extends string = string> {
   label: string;
   value: T;
   onChange: (value: T) => void;
+  disabled?: boolean;
 }
 
-export function DeploymentInputField({ label, value, onChange, type = "text", placeholder }: FieldProps & { type?: HTMLInputTypeAttribute; placeholder?: string }) {
+export function DeploymentInputField({ label, value, onChange, type = "text", placeholder, disabled }: FieldProps & { type?: HTMLInputTypeAttribute; placeholder?: string }) {
   const id = useId();
   return <div className="grid min-w-0 gap-1.5">
     <Label htmlFor={id}>{label}</Label>
-    <Input id={id} type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} className="text-foreground focus:ring-primary" />
+    <Input id={id} type={type} value={value} placeholder={placeholder} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="text-foreground focus:ring-primary" />
   </div>;
 }
 
-export function DeploymentSelectField<T extends string>({ label, value, onChange, options }: FieldProps<T> & { options: readonly { value: T; label: string }[] }) {
+export function DeploymentSelectField<T extends string>({ label, value, onChange, options, disabled }: FieldProps<T> & { options: readonly { value: T; label: string }[] }) {
   const id = useId();
   return <div className="grid min-w-0 gap-1.5">
     <Label htmlFor={id}>{label}</Label>
-    <Select value={value} onValueChange={(next) => {
+    <Select value={value} disabled={disabled} onValueChange={(next) => {
       const option = options.find((item) => item.value === next);
       if (option) onChange(option.value);
     }}>

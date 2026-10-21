@@ -1,4 +1,4 @@
-﻿// Agent Runtime V2 domain contracts (AR2-A). Public library API with no
+// Agent Runtime V2 domain contracts (AR2-A). Public library API with no
 // production caller yet; the legacy Agent paths run unchanged until AR2-B+.
 pub mod agent;
 // The legacy typed Agent/ChangeSet runtime remains available to Incident and
@@ -21,12 +21,18 @@ mod groups;
 // External helper process framework (tsh / boundary); callers land with provider wiring.
 #[allow(dead_code)]
 mod helper;
+mod import;
 mod known_hosts;
 // MCP stays behind the typed gateway and is currently consumed only by the
 // retained legacy Agent runtime; keep the guarded implementation compiled.
 #[allow(dead_code)]
 mod mcp;
 mod operations;
+// Plugin System V1: manifest/registry/permissions plus workflow action runtime.
+/// Developer CLI / SDK surface (`runory-plugin` binary).
+pub mod plugin_sdk;
+#[allow(dead_code)]
+mod plugins;
 mod policy;
 mod profiles;
 mod settings;
@@ -50,6 +56,9 @@ use tauri::{DragDropEvent, Manager, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tokio::sync::Mutex;
 
+use crate::plugins::permissions::service::PermissionService;
+use crate::plugins::registry::{PluginRegistryRepository, PluginRegistryService};
+use crate::plugins::workflow::WorkflowExecutor;
 use agent::AgentRuntimeV2Service;
 use agentic::{
     AgentRuntimeService, ChangeSetService, FleetExecutionService, IncidentService, ModelGateway,
@@ -225,6 +234,7 @@ pub fn run() {
             app.manage(AgentRuntimeService::default());
             app.manage(AgentRuntimeV2Service::open(&data_directory)?);
             app.manage(ObservationCache::default());
+            let agent_policy_for_plugins = agent_policy.clone();
             app.manage(agent_policy);
             let incidents = IncidentService::at_path(data_directory.join("agentic-incidents.json"));
             tauri::async_runtime::block_on(incidents.load())?;
@@ -232,12 +242,40 @@ pub fn run() {
             let change_sets =
                 ChangeSetService::at_path(data_directory.join("agentic-change-sets.json"));
             tauri::async_runtime::block_on(change_sets.load())?;
-            app.manage(change_sets);
+            app.manage(change_sets.clone());
             let fleet_runs =
                 FleetExecutionService::at_path(data_directory.join("agentic-fleet-runs.json"));
             tauri::async_runtime::block_on(fleet_runs.load())?;
             app.manage(fleet_runs);
             app.manage(SkillRegistry::at_path(data_directory.join("skills"))?);
+            let plugin_repository = Arc::new(
+                PluginRegistryRepository::open(data_directory.join("plugins.db")).map_err(
+                    |error| -> Box<dyn std::error::Error> {
+                        Box::new(std::io::Error::other(error.to_string()))
+                    },
+                )?,
+            );
+            let plugin_permissions =
+                Arc::new(PermissionService::new(Arc::clone(&plugin_repository)));
+            let plugin_registry = Arc::new(PluginRegistryService::new(
+                data_directory.join("plugins"),
+                Arc::clone(&plugin_repository),
+                Arc::clone(&plugin_permissions),
+                env!("CARGO_PKG_VERSION"),
+            ));
+            plugin_registry
+                .startup_recovery()
+                .map_err(|error| -> Box<dyn std::error::Error> {
+                    Box::new(std::io::Error::other(error.to_string()))
+                })?;
+            let sessions = app.state::<ServerSessionManager>().inner().clone();
+            app.manage(Arc::new(WorkflowExecutor::with_services(
+                Arc::clone(&plugin_registry),
+                Arc::new(sessions),
+                Some(change_sets),
+                Some(agent_policy_for_plugins),
+            )));
+            app.manage(plugin_registry);
             let mcp_gateway = McpGateway::new(
                 McpConfigRepository::new(JsonRepository::new(
                     data_directory.join("mcp-config.json"),
@@ -263,9 +301,14 @@ pub fn run() {
             #[cfg(mobile)]
             let cloud_key_store: Arc<dyn CloudSyncKeyStore> =
                 Arc::new(UnavailableCloudSyncKeyStore);
+            let deployment_apps = DeploymentAppsRepository::open(
+                data_directory.join("deployment.db"),
+                data_directory.join("deployment-apps.json"),
+            )?;
             app.manage(CloudSyncService::with_key_store(
                 profile_repository.clone(),
                 group_repository.clone(),
+                deployment_apps.clone(),
                 Arc::clone(&write_lock),
                 CloudSyncStateRepository::at_path(data_directory.join("cloud-sync-state.json")),
                 cloud_key_store,
@@ -291,9 +334,7 @@ pub fn run() {
             app.manage(DeploymentService::new(DeploymentHistoryRepository::new(
                 JsonRepository::new(data_directory.join("deployment-history.json")),
             )));
-            app.manage(DeploymentAppsRepository::new(JsonRepository::new(
-                data_directory.join("deployment-apps.json"),
-            )));
+            app.manage(deployment_apps);
             app.manage(DockerRegistriesRepository::new(JsonRepository::new(
                 data_directory.join("docker-registries.json"),
             )));
@@ -389,6 +430,8 @@ pub fn run() {
             commands::catalog::profile_update,
             commands::catalog::profile_delete,
             commands::catalog::profile_reorder,
+            commands::import::catalog_import_preview,
+            commands::import::catalog_import_apply,
             commands::cloud::cloud_sync_export,
             commands::cloud::cloud_sync_preview,
             commands::cloud::cloud_sync_key_status,
@@ -478,6 +521,27 @@ pub fn run() {
             commands::operations::logs_read,
             commands::settings::settings_get,
             commands::settings::settings_update,
+            commands::plugins::plugin_list_installed,
+            commands::plugins::plugin_inspect_package,
+            commands::plugins::plugin_install,
+            commands::plugins::plugin_set_enabled,
+            commands::plugins::plugin_uninstall,
+            commands::plugins::plugin_host_menus,
+            commands::plugins::plugin_workspace_entries,
+            commands::plugins::plugin_workflow_get_form,
+            commands::plugins::plugin_workflow_plan,
+            commands::plugins::plugin_workflow_execute,
+            commands::plugins::plugin_workflow_cancel,
+            commands::plugins::plugin_secret_bind,
+            commands::plugins::plugin_secret_unbind,
+            commands::plugins::plugin_secret_list,
+            commands::plugins::plugin_marketplace_list,
+            commands::plugins::plugin_marketplace_sync_revocations,
+            commands::plugins::plugin_marketplace_prepare_install,
+            commands::plugins::plugin_discard_install_review,
+            commands::plugins::plugin_agent_tools,
+            commands::plugins::plugin_activate_version,
+            commands::plugins::plugin_check_update,
             commands::deployment::deployment_git_setup,
             commands::deployment::deployment_run,
             commands::deployment::deployment_environment_write,
@@ -490,7 +554,29 @@ pub fn run() {
             commands::deployment::deployment_history,
             commands::deployment::deployment_apps_list,
             commands::deployment::deployment_apps_upsert,
-            commands::deployment::deployment_apps_delete
+            commands::deployment::deployment_apps_delete,
+            commands::deployment::deployment_python_provision,
+            commands::deployment::deployment_python_status,
+            commands::deployment::deployment_python_control,
+            commands::deployment::deployment_list_system_users,
+            commands::deployment::deployment_list_python_runtimes,
+            commands::deployment::deployment_python_prepare_env,
+            commands::deployment::deployment_php_provision,
+            commands::deployment::deployment_php_control,
+            commands::deployment::deployment_list_php_runtimes,
+            commands::deployment::deployment_java_provision,
+            commands::deployment::deployment_java_control,
+            commands::deployment::deployment_list_java_runtimes,
+            commands::deployment::deployment_java_install_jdk,
+            commands::deployment::deployment_java_set_default_jdk,
+            commands::deployment::deployment_node_provision,
+            commands::deployment::deployment_node_control,
+            commands::deployment::deployment_list_node_runtimes,
+            commands::deployment::deployment_go_provision,
+            commands::deployment::deployment_go_control,
+            commands::deployment::deployment_list_go_runtimes,
+            commands::deployment::deployment_html_provision,
+            commands::deployment::deployment_proxy_provision
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|error| eprintln!("failed to run Runory: {error}"));

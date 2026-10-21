@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runory.app/schemas/plugin-api/v1/workflow.schema.json",
+  "title": "Runory Workflow DSL (runory/v1)",
+  "description": "Canonical Workflow DSL for Plugin API 1.0. Matches Core AST and validators. Parallel/foreach/matrix/while and arbitrary JS/Python expressions are NOT part of API 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "steps"],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "runory/v1"
+    },
+    "kind": {
+      "type": "string",
+      "const": "Workflow"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      }
+    },
+    "inputs": {
+      "description": "Optional JSON Schema-like or free-form input declaration consumed by the planner/UI.",
+      "type": ["object", "null"]
+    },
+    "outputs": {
+      "description": "Optional workflow output mapping.",
+      "type": ["object", "null"]
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/step" }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "uses"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique within the workflow."
+        },
+        "uses": {
+          "type": "string",
+          "description": "Core Action ID from the API 1 allowlist.",
+          "enum": [
+            "system.detect",
+            "system.command_exists",
+            "system.disk",
+            "system.memory",
+            "system.preflight_report",
+            "network.tcp_check",
+            "ssh.command",
+            "remote.fs.read",
+            "remote.fs.write",
+            "remote.fs.write_env",
+            "remote.fs.mkdir",
+            "remote.fs.symlink",
+            "template.render",
+            "git.clone",
+            "git.rev_parse",
+            "git.fetch",
+            "git.checkout",
+            "python.detect",
+            "python.venv",
+            "python.pip.install",
+            "systemd.install",
+            "systemd.daemon_reload",
+            "systemd.enable",
+            "systemd.restart",
+            "systemd.reload",
+            "systemd.status",
+            "nginx.test",
+            "nginx.reload",
+            "http.check",
+            "database.migration",
+            "changeset.checkpoint",
+            "release.activate"
+          ]
+        },
+        "with": {
+          "description": "Action-specific structured inputs. Strings may contain {{ inputs.* }}, {{ host.id }}, {{ host.os }}, {{ steps.<id>.outputs.<key> }}.",
+          "type": "object",
+          "default": {}
+        },
+        "if": {
+          "type": "string",
+          "description": "Safe condition subset: true/false, ==, !=, contains over expression paths."
+        },
+        "timeout": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional duration hint (non-empty string when set)."
+        },
+        "retry": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxAttempts"],
+          "properties": {
+            "maxAttempts": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            },
+            "delay": { "type": "string" }
+          }
+        },
+        "onFailure": {
+          "type": "string",
+          "enum": ["abort", "continue"],
+          "default": "abort"
+        }
+      }
+    },
+    "envValue": {
+      "description": "Literal string, { value }, or { secretRef }. Secret plaintext never enters workflow context.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value"],
+          "properties": {
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secretRef"],
+          "properties": {
+            "secretRef": {
+              "type": "string",
+              "pattern": "^secret://[A-Za-z0-9:/.\\-_]+$"
+            }
+          }
+        }
+      ]
+    },
+    "privilege": {
+      "type": "string",
+      "enum": ["none", "sudo"],
+      "default": "none"
+    }
+  }
+}

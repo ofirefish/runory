@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "id": "runory.docker-manager",
+  "name": "Docker Manager",
+  "version": "1.0.0",
+  "description": "Inspect and operate Docker containers via Runory Plugin API 1.0 (ssh.command).",
+  "publisher": {
+    "id": "runory",
+    "name": "Runory"
+  },
+  "apiVersion": "1",
+  "minRunoryVersion": "0.1.0",
+  "logo": "assets/logo.png",
+  "category": "operations",
+  "permissions": [
+    "host.read",
+    "ssh.exec"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "docker.inspect-host",
+        "title": "Docker Host Version",
+        "category": "Docker"
+      },
+      {
+        "id": "docker.list",
+        "title": "List Containers",
+        "category": "Docker"
+      },
+      {
+        "id": "docker.inspect",
+        "title": "Inspect Container",
+        "category": "Docker"
+      },
+      {
+        "id": "docker.logs",
+        "title": "Container Logs",
+        "category": "Docker"
+      },
+      {
+        "id": "docker.start",
+        "title": "Start Container",
+        "category": "Docker"
+      },
+      {
+        "id": "docker.stop",
+        "title": "Stop Container",
+        "category": "Docker"
+      },
+      {
+        "id": "docker.restart",
+        "title": "Restart Container",
+        "category": "Docker"
+      },
+      {
+        "id": "docker.pull",
+        "title": "Pull Image",
+        "category": "Docker"
+      }
+    ],
+    "hostMenus": [
+      {
+        "command": "docker.inspect-host",
+        "group": "docker",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "docker.list",
+        "group": "docker",
+        "when": "host.os == 'linux'"
+      }
+    ],
+    "workflows": [
+      {
+        "id": "docker.inspect-host",
+        "file": "workflows/inspect-host.yaml"
+      },
+      {
+        "id": "docker.list",
+        "file": "workflows/list.yaml"
+      },
+      {
+        "id": "docker.inspect",
+        "file": "workflows/inspect.yaml",
+        "inputSchema": "ui/container.schema.json"
+      },
+      {
+        "id": "docker.logs",
+        "file": "workflows/logs.yaml",
+        "inputSchema": "ui/container.schema.json"
+      },
+      {
+        "id": "docker.start",
+        "file": "workflows/start.yaml",
+        "inputSchema": "ui/container.schema.json"
+      },
+      {
+        "id": "docker.stop",
+        "file": "workflows/stop.yaml",
+        "inputSchema": "ui/container.schema.json"
+      },
+      {
+        "id": "docker.restart",
+        "file": "workflows/restart.yaml",
+        "inputSchema": "ui/container.schema.json"
+      },
+      {
+        "id": "docker.pull",
+        "file": "workflows/pull.yaml",
+        "inputSchema": "ui/image.schema.json"
+      }
+    ],
+    "agentTools": [
+      {
+        "name": "docker.list",
+        "description": "List Docker containers on the host.",
+        "workflow": "docker.list",
+        "risk": "R0",
+        "requiresApproval": false
+      },
+      {
+        "name": "docker.inspect",
+        "description": "Inspect a Docker container.",
+        "workflow": "docker.inspect",
+        "risk": "R0",
+        "requiresApproval": false
+      },
+      {
+        "name": "docker.logs",
+        "description": "Fetch recent Docker container logs.",
+        "workflow": "docker.logs",
+        "risk": "R0",
+        "requiresApproval": false
+      },
+      {
+        "name": "docker.restart",
+        "description": "Restart a Docker container.",
+        "workflow": "docker.restart",
+        "risk": "R3",
+        "requiresApproval": true
+      }
+    ],
+    "workspaceEntries": [
+      {
+        "id": "docker.main",
+        "title": "Docker",
+        "description": "管理 Docker 容器和镜像",
+        "command": "docker.list",
+        "actions": [
+          "docker.list",
+          "docker.inspect",
+          "docker.logs",
+          "docker.restart",
+          "docker.pull"
+        ],
+        "order": 100
+      }
+    ]
+  }
+}

@@ -10,6 +10,8 @@ export type AppSettings = {
   terminalTheme: TerminalThemeId;
   boundaryCliPath?: string | null;
   teleportCliPath?: string | null;
+  pluginDeveloperMode?: boolean;
+  marketplaceUrl?: string | null;
 };
 
 export async function getSettings(): Promise<AppSettings> {

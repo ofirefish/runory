@@ -12,7 +12,8 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
-import { appErrorCode } from "../../lib/app-error";
+import { appErrorCode, appErrorEndpoint } from "../../lib/app-error";
+import { connectionFailureMessage } from "./connectionFailureMessage";
 import {
   bastionCancelFlow,
   bastionContinueAuth,
@@ -85,6 +86,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
   const [manualTargetId, setManualTargetId] = useState("");
   const [verification, setVerification] = useState<HostVerification | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [failureEndpoint, setFailureEndpoint] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const flowId = useRef<string | null>(null);
   const pendingConnect = useRef<BastionFlowSnapshot | null>(null);
@@ -106,7 +108,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
   }, [isBoundary, profile.id]);
 
   useEffect(() => {
-    void refreshVault().catch((error) => setFailure(appErrorCode(error)));
+    void refreshVault().catch((error) => reportFailure(error));
   }, [refreshVault]);
 
   const close = useCallback(() => {
@@ -124,10 +126,15 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
     [],
   );
 
+  const showFailure = (code: string | null, error?: unknown) => {
+    setFailure(code);
+    setFailureEndpoint(code ? appErrorEndpoint(error) : undefined);
+  };
+
   const reportFailure = (error: unknown) => {
     const code = appErrorCode(error);
     console.error("[bastion]", code, error);
-    setFailure(code);
+    showFailure(code, error);
   };
 
   const finishOpen = async (next: BastionFlowSnapshot, verificationAttemptId?: string) => {
@@ -148,7 +155,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
     if (next.state !== "connecting" || opening.current) return;
     opening.current = true;
     setBusy(true);
-    setFailure(null);
+    showFailure(null);
     try {
       if (skipsHostVerify || next.provider === "mock") {
         await finishOpen(next);
@@ -173,7 +180,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
   const trustAndConnect = async (remember: boolean) => {
     if (!verification || !pendingConnect.current) return;
     setBusy(true);
-    setFailure(null);
+    showFailure(null);
     opening.current = true;
     try {
       await trustHost(verification.attemptId, remember);
@@ -209,7 +216,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
   const unlockOrInitialize = async (status: CredentialStatus | null) => {
     const action = vaultUnlockAction(status);
     if (action === "none") return status;
-    setFailure(null);
+    showFailure(null);
     try {
       if (action === "initialize-platform") {
         await initializeVault();
@@ -217,11 +224,11 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
         await unlockVaultWithPlatform();
       } else {
         if (!masterPassword) {
-          setFailure("VAULT_PASSWORD_REQUIRED");
+          showFailure("VAULT_PASSWORD_REQUIRED");
           return null;
         }
         if (!status?.vaultInitialized && masterPassword !== confirmMasterPassword) {
-          setFailure("VAULT_PASSWORD_MISMATCH");
+          showFailure("VAULT_PASSWORD_MISMATCH");
           return null;
         }
         await unlockVault(masterPassword);
@@ -248,7 +255,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
 
   const start = async () => {
     setBusy(true);
-    setFailure(null);
+    showFailure(null);
     try {
       if (authMode === "token") {
         const needsVault =
@@ -266,7 +273,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
             ? { mode: "remember-securely", secret: token.trim() }
             : { mode: "session-only", secret: token.trim() };
         if (!useStoredToken && !token.trim()) {
-          setFailure("BASTION_AUTH_FAILED");
+          showFailure("BASTION_AUTH_FAILED");
           return;
         }
         const targetPasswordCredential = buildTargetPasswordCredential();
@@ -315,7 +322,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
   const completeExternalAuth = async () => {
     if (!snap) return;
     setBusy(true);
-    setFailure(null);
+    showFailure(null);
     try {
       await applySnapshot(
         await bastionContinueAuth(snap.flowId, {
@@ -332,7 +339,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
 
   const openExternalBrowser = async () => {
     if (!snap) return;
-    setFailure(null);
+    showFailure(null);
     try {
       await bastionOpenExternalBrowser(snap.flowId);
     } catch (error) {
@@ -343,7 +350,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
   const submitChallenge = async (challenge: AuthChallenge) => {
     if (!snap) return;
     setBusy(true);
-    setFailure(null);
+    showFailure(null);
     try {
       const response =
         challenge.type === "totp" || challenge.type === "smsCode"
@@ -367,7 +374,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
   const pickAsset = async (assetId: string) => {
     if (!snap) return;
     setBusy(true);
-    setFailure(null);
+    showFailure(null);
     try {
       await applySnapshot(await bastionSelectAsset(snap.flowId, assetId));
     } catch (error) {
@@ -380,7 +387,7 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
   const pickAccount = async (account: string) => {
     if (!snap) return;
     setBusy(true);
-    setFailure(null);
+    showFailure(null);
     try {
       await applySnapshot(await bastionSelectAccount(snap.flowId, account));
     } catch (error) {
@@ -1036,12 +1043,10 @@ export function BastionConnectionDialog({ profile, onClose, onOpenSession }: Pro
             <div role="alert" className="rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-500">
               <div className="font-medium">{t("connection.error")}</div>
               <div className="mt-1 text-xs">
-                {t(`connection.errors.${failure}`, {
+                {connectionFailureMessage(t, failure, {
+                  provider,
+                  endpoint: failureEndpoint,
                   cli: isBoundary ? "boundary" : isTeleport ? "tsh" : "tsh / boundary",
-                  defaultValue: t(`errors.${failure}`, {
-                    cli: isBoundary ? "boundary" : isTeleport ? "tsh" : "tsh / boundary",
-                    defaultValue: t("bastion.genericError"),
-                  }),
                 })}
               </div>
             </div>

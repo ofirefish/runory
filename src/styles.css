@@ -193,6 +193,7 @@ button, input, select, textarea { font: inherit; }
 .host-status-dot.status-connected { border-color: #4ade80; background: #22c55e; box-shadow: 0 0 0 4px rgba(34,197,94,.08); }
 .host-status-dot.status-connecting,.host-status-dot.status-verifying-host,.host-status-dot.status-authenticating,.host-status-dot.status-opening-shell { border-color: #60a5fa; background: #3b82f6; box-shadow: 0 0 0 4px rgba(59,130,246,.07); }
 .host-status-dot.status-error { border-color: #f87171; background: #ef4444; }
+.host-default-icon { position: relative; display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border: 1px solid hsl(var(--primary) / .28); border-radius: 6px; background: hsl(var(--primary) / .1); color: hsl(var(--primary)); }
 .host-os-logo { position: relative; display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border: 1px solid color-mix(in srgb,var(--os-logo-color) 50%,transparent); border-radius: 6px; background: color-mix(in srgb,var(--os-logo-color) 12%,transparent); }
 .host-os-glyph { width: 14px; height: 14px; background: var(--os-logo-color); -webkit-mask: var(--os-logo-mask) center/contain no-repeat; mask: var(--os-logo-mask) center/contain no-repeat; }
 .host-os-logo.plain { width: 16px; height: 16px; flex-basis: 16px; border: 0; border-radius: 0; background: transparent; }
@@ -243,7 +244,8 @@ button, input, select, textarea { font: inherit; }
 .host-name-row { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .server-catalog .host-name { font-size: 13px; font-weight: 550; }
 .server-catalog .host-address { color: hsl(var(--secondary)); font-size: 11px; }
-.server-catalog .host-os-logo { width: 28px; height: 28px; flex-basis: 28px; }
+.server-catalog .host-os-logo,.server-catalog .host-default-icon { width: 28px; height: 28px; flex-basis: 28px; }
+.server-catalog .host-default-icon svg { width: 16px; height: 16px; }
 .server-catalog .host-menu { grid-column: 2; grid-row: 1; opacity: 1; }
 .server-catalog .host-menu summary { color: hsl(var(--secondary)); }
 .server-host-meta { display: flex; grid-column: 1 / -1; align-items: center; gap: 10px; min-width: 0; padding: 3px 8px 4px 12px; border-top: 1px solid hsl(var(--border-soft)); font-size: 11px; }
@@ -767,9 +769,17 @@ button, input, select, textarea { font: inherit; }
 .empty-workspace { display: flex; height: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 9px; color: hsl(var(--muted)); text-align: center; }
 .empty-workspace strong { color: hsl(var(--foreground)); font-size: 15px; }
 .empty-terminal-icon { display: grid; width: 48px; height: 48px; place-items: center; margin-bottom: 4px; border: 1px solid hsl(var(--border)); border-radius: 10px; background: hsl(var(--surface)); color: hsl(var(--primary)); }
-.terminal-xterm-host { height: 100%; min-height: 0; padding: 16px; box-sizing: border-box; }
-/* Never pad .xterm itself — padding breaks FitAddon / canvas metrics. */
-.xterm { height: 100%; }
+/* Host stays flush with the panel; inset is .xterm padding (FitAddon subtracts it). */
+.terminal-xterm-host {
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+}
+.xterm {
+  height: 100%;
+  padding: 5px;
+  box-sizing: border-box;
+}
 .xterm-viewport { scrollbar-color: hsl(var(--border)) transparent; }
 .xterm canvas {
   display: block !important;

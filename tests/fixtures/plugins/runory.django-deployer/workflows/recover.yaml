@@ -1,0 +1,22 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: django.recover
+  name: Recover Django Release
+  description: Restore previous release after a failed switch (DB migrations are never reversed)
+steps:
+  - id: checkpoint
+    uses: changeset.checkpoint
+    with:
+      name: recover-probe
+      currentLink: "/opt/runory/apps/{{ inputs.projectName }}/current"
+      service: "{{ inputs.projectName }}"
+  - id: activate
+    uses: release.activate
+    with:
+      currentLink: "/opt/runory/apps/{{ inputs.projectName }}/current"
+      releaseDir: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+      previousTarget: "{{ steps.checkpoint.outputs.previousTarget }}"
+      service: "{{ inputs.projectName }}"
+      healthUrl: "http://127.0.0.1:{{ inputs.port }}{{ inputs.healthPath }}"
+      migrationRan: true

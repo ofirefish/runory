@@ -1,0 +1,25 @@
+{
+  "apiVersion": "1",
+  "manifestSchema": 1,
+  "workflowDsl": "runory/v1",
+  "schemas": [
+    "plugin-sdk/schemas/v1/manifest.schema.json",
+    "plugin-sdk/schemas/v1/workflow.schema.json",
+    "plugin-sdk/schemas/v1/input.schema.json"
+  ],
+  "docs": "docs/plugin-api/v1/",
+  "plugins": [
+    {
+      "id": "runory.hello",
+      "path": "tests/fixtures/plugins/runory.hello"
+    },
+    {
+      "id": "runory.django-deployer",
+      "path": "tests/fixtures/plugins/runory.django-deployer"
+    },
+    {
+      "id": "runory.docker-manager",
+      "path": "tests/fixtures/plugins/runory.docker-manager"
+    }
+  ]
+}

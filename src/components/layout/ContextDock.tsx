@@ -3,6 +3,7 @@ import { lazy, Suspense, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useContextPanelStore } from "../context-panel/context-panel-store";
 import type { WorkspaceView } from "./workspace-view";
+import { PluginWorkspaceSection } from "../../features/plugins/workspace/PluginWorkspaceSection";
 
 const FilesView = lazy(() => import("../../features/files/FilesView").then((module) => ({ default: module.FilesView })));
 const DashboardView = lazy(() => import("../../features/dashboard/DashboardView").then((module) => ({ default: module.DashboardView })));
@@ -43,7 +44,19 @@ export function ContextDock({ view, terminalContent, sessionId, profileId, activ
     </header>
     <div className="dock-content relative">
       {/* Never use display:none on the terminal host — xterm must keep a measurable box. */}
-      <div className={view === "terminal" ? "h-full min-h-0" : "pointer-events-none absolute inset-0 -z-10 invisible"} aria-hidden={view !== "terminal"}>{terminalContent(terminalToolbarHost)}</div>
+      <div className={view === "terminal" ? "flex h-full min-h-0 flex-col" : "pointer-events-none absolute inset-0 -z-10 invisible"} aria-hidden={view !== "terminal"}>
+        <div className="min-h-0 flex-1">{terminalContent(terminalToolbarHost)}</div>
+        {view === "terminal" && active ? (
+          <div className="max-h-48 shrink-0 overflow-auto bg-[hsl(var(--surface))] px-3 pb-2">
+            <PluginWorkspaceSection
+              category="terminal"
+              titleKey="plugins.workspace.section.terminal"
+              hostId={profileId}
+              sessionId={sessionId}
+            />
+          </div>
+        ) : null}
+      </div>
       <Suspense fallback={<DockViewFallback />}>
         {view === "files" && <FilesView sessionId={sessionId} profileId={profileId} active={active && view === "files"} />}
         {view === "dashboard" && <DashboardView sessionId={sessionId} active={active && view === "dashboard"} />}

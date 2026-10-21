@@ -1,9 +1,17 @@
 # Build signed desktop installers and upload them to a draft GitHub Release.
 # Trigger: push a version tag (v0.1.0) or run manually from Actions.
+# Desktop updater clients read:
+#   https://github.com/<owner>/<repo>/releases/latest/download/latest.json
+# That URL only resolves after the draft release is published.
 name: publish
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the GitHub Release after verifying latest.json (required for desktop auto-update checks)
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -206,6 +214,9 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional Cloud Foundation — omit either secret to ship local-only builds.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
           # Signing key, pubkey config, RUNORY_UPDATER_* come from GITHUB_ENV (prepared above).
         with:
           tagName: v__VERSION__
@@ -213,4 +224,39 @@ jobs:
           releaseBody: See the release notes for details.
           releaseDraft: true
           prerelease: false
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
           args: --config src-tauri/tauri.release.conf.json --config ${{ env.RUNORY_UPDATER_PUBKEY_CONFIG }} ${{ matrix.args }}
+
+  # tauri-action merges latest.json per matrix job. Verify the final draft is complete,
+  # and optionally publish so /releases/latest/download/latest.json stops 404-ing.
+  verify-updater-manifest:
+    name: verify-updater-manifest
+    needs: publish-tauri
+    if: ${{ !cancelled() && needs.publish-tauri.result == 'success' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Verify latest.json platforms
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || false }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          EXTRA_ARGS=()
+          if [ "${PUBLISH_RELEASE}" = "true" ]; then
+            EXTRA_ARGS+=(--publish)
+          fi
+          node scripts/verify-desktop-updater-manifest.mjs \
+            --tag "v${VERSION}" \
+            --expected-version "${VERSION}" \
+            "${EXTRA_ARGS[@]}"

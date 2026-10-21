@@ -21,6 +21,9 @@ use crate::transfers::TransferQueue;
 const TERMINAL_CONTEXT_LIMIT: usize = 32 * 1024;
 const AGENT_TERMINAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const AGENT_TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(75);
+/// Prompt redraws during long-line echo can briefly look "complete". Require the
+/// captured tail to stay unchanged across this window before accepting completion.
+const AGENT_TERMINAL_PROMPT_STABLE: Duration = Duration::from_millis(200);
 
 #[derive(Default)]
 struct TerminalContextBuffer {
@@ -90,18 +93,10 @@ struct SessionHandle {
     _route_owner: Option<Arc<BackgroundConnection>>,
 }
 
+#[derive(Clone, Default)]
 pub struct ServerSessionManager {
     sessions: Arc<RwLock<HashMap<SessionId, SessionHandle>>>,
     transfers: TransferQueue,
-}
-
-impl Default for ServerSessionManager {
-    fn default() -> Self {
-        Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            transfers: TransferQueue::default(),
-        }
-    }
 }
 
 impl ServerSessionManager {
@@ -317,14 +312,32 @@ impl ServerSessionManager {
             .map_err(|_| AppError::ConnectionLost)?;
 
         let started = Instant::now();
+        let mut stable_prompt: Option<(Instant, usize)> = None;
         loop {
             sleep(AGENT_TERMINAL_POLL_INTERVAL).await;
             let captured = context.lock().await.text_since(mark);
-            if !captured.is_empty() && terminal_prompt_returned(&captured, prompt_hint.as_deref()) {
-                return Ok(TerminalCommandResult {
-                    output: clean_terminal_capture(&captured, command, prompt_hint.as_deref()),
-                    timed_out: false,
-                });
+            if !captured.is_empty()
+                && terminal_prompt_returned(&captured, command, prompt_hint.as_deref())
+            {
+                let len = captured.len();
+                match stable_prompt {
+                    Some((seen_at, prev_len))
+                        if prev_len == len && seen_at.elapsed() >= AGENT_TERMINAL_PROMPT_STABLE =>
+                    {
+                        return Ok(TerminalCommandResult {
+                            output: clean_terminal_capture(
+                                &captured,
+                                command,
+                                prompt_hint.as_deref(),
+                            ),
+                            timed_out: false,
+                        });
+                    }
+                    Some((_, prev_len)) if prev_len == len => {}
+                    _ => stable_prompt = Some((Instant::now(), len)),
+                }
+            } else {
+                stable_prompt = None;
             }
             if started.elapsed() >= AGENT_TERMINAL_COMMAND_TIMEOUT {
                 return Ok(TerminalCommandResult {
@@ -681,9 +694,9 @@ impl ServerSessionManager {
 }
 
 fn last_terminal_line(value: &str) -> Option<String> {
-    let plain = strip_terminal_control(value);
+    let plain = apply_terminal_display(&strip_terminal_control(value));
     plain
-        .split(['\r', '\n'])
+        .lines()
         .rev()
         .find(|line| !line.is_empty())
         .map(str::to_owned)
@@ -720,39 +733,151 @@ fn prompt_directory(prompt: &str, username: &str) -> Option<String> {
     directory.starts_with('/').then(|| directory.to_owned())
 }
 
-fn terminal_prompt_returned(captured: &str, prompt_hint: Option<&str>) -> bool {
-    let plain = strip_terminal_control(captured);
-    let tail = plain
-        .split(['\r', '\n'])
-        .rev()
-        .find(|line| !line.is_empty())
-        .unwrap_or_default();
+fn terminal_prompt_returned(captured: &str, command: &str, prompt_hint: Option<&str>) -> bool {
+    let plain = apply_terminal_display(&strip_terminal_control(captured));
+    let lines = plain
+        .lines()
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let Some(tail) = lines.last().copied() else {
+        return false;
+    };
+    if !line_looks_like_shell_prompt(tail, prompt_hint) {
+        return false;
+    }
+    // A reprinted prompt while the long command is still echoing is not completion.
+    let before_prompt = lines[..lines.len().saturating_sub(1)].join("\n");
+    if before_prompt.is_empty() {
+        return false;
+    }
+    if is_incomplete_command_echo(&before_prompt, command) {
+        return false;
+    }
+    true
+}
+
+fn line_looks_like_shell_prompt(line: &str, prompt_hint: Option<&str>) -> bool {
     if let Some(prompt) = prompt_hint.filter(|prompt| prompt.len() >= 2) {
-        if tail.ends_with(prompt) {
+        if line.ends_with(prompt) || line.trim_end() == prompt.trim_end() {
             return true;
         }
     }
-    let trimmed = tail.trim_end();
-    (tail.ends_with("$ ") || tail.ends_with("# ") || tail.ends_with("% "))
-        || (trimmed.ends_with('$') || trimmed.ends_with('#') || trimmed.ends_with('%'))
-            && (captured.contains('\r') || captured.contains('\n'))
+    // Reject bare `#` / `$` endings on arbitrary output (comments, wraps).
+    if line.len() > 120 {
+        return false;
+    }
+    if !(line.ends_with("$ ") || line.ends_with("# ") || line.ends_with("% ")) {
+        return false;
+    }
+    let trimmed = line.trim_end();
+    trimmed.contains('@') || trimmed.starts_with('[') || matches!(trimmed, "$" | "#" | "%")
+}
+
+fn is_incomplete_command_echo(before_prompt: &str, command: &str) -> bool {
+    let echo = before_prompt.lines().next().unwrap_or(before_prompt).trim();
+    let command = command.trim();
+    if echo.is_empty() || command.is_empty() || echo == command {
+        return false;
+    }
+    // Mid-echo: the first capture line is still a proper prefix of the command.
+    command.starts_with(echo) && echo.chars().count() >= 8
 }
 
 fn clean_terminal_capture(captured: &str, command: &str, prompt_hint: Option<&str>) -> String {
-    let plain = strip_terminal_control(captured).replace('\r', "");
+    let plain = apply_terminal_display(&strip_terminal_control(captured));
     let mut lines = plain.lines().collect::<Vec<_>>();
-    if lines
-        .first()
-        .is_some_and(|line| line.trim() == command.trim())
-    {
+    while lines.first().is_some_and(|line| line.is_empty()) {
+        lines.remove(0);
+    }
+    if lines.first().is_some_and(|line| {
+        let line = line.trim();
+        line == command.trim() || line_is_command_echo(line, command)
+    }) {
         lines.remove(0);
     }
     if let Some(prompt) = prompt_hint {
-        if lines.last().is_some_and(|line| line.ends_with(prompt)) {
+        if lines.last().is_some_and(|line| {
+            line.ends_with(prompt) || line_looks_like_shell_prompt(line, Some(prompt))
+        }) {
             lines.pop();
         }
+    } else if lines
+        .last()
+        .is_some_and(|line| line_looks_like_shell_prompt(line, None))
+    {
+        lines.pop();
     }
     lines.join("\n").trim().to_owned()
+}
+
+fn line_is_command_echo(line: &str, command: &str) -> bool {
+    let line = line.trim();
+    let command = command.trim();
+    if line == command {
+        return true;
+    }
+    // After CR/BS normalization, wrapped echoes may still differ slightly; accept
+    // near-equal length lines that share a long common prefix with the command.
+    if line.len().abs_diff(command.len()) > command.len() / 5 + 8 {
+        return false;
+    }
+    let shared = line
+        .chars()
+        .zip(command.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    shared >= 24 || shared * 5 >= command.chars().count() * 4
+}
+
+/// Apply carriage-return overwrite and backspace so PTY echo matches what the
+/// user saw, instead of concatenating `\r` redraws into doubled glyphs.
+fn apply_terminal_display(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut line: Vec<char> = Vec::new();
+    let mut col = 0usize;
+    for character in value.chars() {
+        match character {
+            '\n' => {
+                output.extend(line.iter().copied());
+                output.push('\n');
+                line.clear();
+                col = 0;
+            }
+            '\r' => {
+                col = 0;
+            }
+            '\u{08}' | '\u{7f}' => {
+                if col > 0 {
+                    col -= 1;
+                    if col < line.len() {
+                        line.remove(col);
+                    }
+                }
+            }
+            '\t' => {
+                let spaces = 8 - (col % 8);
+                for _ in 0..spaces {
+                    if col < line.len() {
+                        line[col] = ' ';
+                    } else {
+                        line.push(' ');
+                    }
+                    col += 1;
+                }
+            }
+            c if c.is_control() => {}
+            c => {
+                if col < line.len() {
+                    line[col] = c;
+                } else {
+                    line.push(c);
+                }
+                col += 1;
+            }
+        }
+    }
+    output.extend(line.iter().copied());
+    output
 }
 
 fn strip_terminal_control(value: &str) -> String {
@@ -848,7 +973,11 @@ mod terminal_context_tests {
     #[test]
     fn terminal_capture_removes_echo_and_prompt_but_keeps_output() {
         let captured = "df -h\r\n/dev/sda2 100G 94G 6G 94% /\r\nzzly@host:~$ ";
-        assert!(terminal_prompt_returned(captured, Some("zzly@host:~$ ")));
+        assert!(terminal_prompt_returned(
+            captured,
+            "df -h",
+            Some("zzly@host:~$ ")
+        ));
         assert_eq!(
             clean_terminal_capture(captured, "df -h", Some("zzly@host:~$ ")),
             "/dev/sda2 100G 94G 6G 94% /"
@@ -861,11 +990,37 @@ mod terminal_context_tests {
         let captured = format!("{command}\r\n");
         assert!(!terminal_prompt_returned(
             &captured,
+            command,
             Some("[root@localhost ~]# ")
         ));
         assert!(
             clean_terminal_capture(&captured, command, Some("[root@localhost ~]# ")).is_empty()
         );
+    }
+
+    #[test]
+    fn prompt_redraw_during_long_echo_is_not_completion() {
+        let command = "uptime; echo '---'; journalctl --since '2026-09-18 12:00:00' --until '2026-09-18 13:30:00' -p warning --no-pager | tail -100";
+        let prompt = "[root@iZ0jl5t085zwvs1253b280Z ~]# ";
+        let partial = &command[..command.len() / 2];
+        let captured = format!("{partial}\r\n{prompt}");
+        assert!(!terminal_prompt_returned(&captured, command, Some(prompt)));
+    }
+
+    #[test]
+    fn carriage_return_redraw_does_not_double_glyphs() {
+        // Terminal rewrote "since" over a partial line; naive `\r` strip made "sincce".
+        let raw = "journalctl --sin\rjournalctl --since '2026-09-18'";
+        assert_eq!(
+            apply_terminal_display(raw),
+            "journalctl --since '2026-09-18'"
+        );
+    }
+
+    #[test]
+    fn backspace_in_echo_is_applied() {
+        assert_eq!(apply_terminal_display("sinc\u{08}ce"), "since");
+        assert_eq!(apply_terminal_display("--\u{08}\u{08}--until"), "--until");
     }
 
     #[test]

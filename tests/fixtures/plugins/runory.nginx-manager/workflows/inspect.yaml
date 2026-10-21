@@ -1,0 +1,18 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: nginx.inspect
+  name: Inspect Nginx
+  description: Detect host and read nginx version / site listing hints
+steps:
+  - id: detect
+    uses: system.detect
+  - id: version
+    uses: ssh.command
+    with:
+      executable: nginx
+      args: ["-v"]
+  - id: sites
+    uses: remote.fs.read
+    with:
+      path: /etc/nginx/nginx.conf

@@ -11,6 +11,7 @@ import { formatFileSize } from "../files/sftp-format";
 import { DockerPanel, type DockerTab } from "./DockerPanel";
 import { LogSourceSelect } from "./LogSourceSelect";
 import { cn } from "../../lib/utils";
+import { PluginWorkspaceSection } from "../plugins/workspace/PluginWorkspaceSection";
 
 type PendingAction =
   | { kind: "docker" | "pm2"; target: string; label: string; action: ResourceAction }
@@ -426,6 +427,13 @@ export function OperationsView({ sessionId, active }: { sessionId: string | null
         )}
       </div>
       {pending && <ActionDialog action={pending} onClose={() => setPending(null)} onConfirm={() => run(pending)} />}
+      <div className="shrink-0 px-4 pb-3">
+        <PluginWorkspaceSection
+          category="operations"
+          titleKey="plugins.workspace.section.operations"
+          sessionId={sessionId}
+        />
+      </div>
     </section>
   );
 }

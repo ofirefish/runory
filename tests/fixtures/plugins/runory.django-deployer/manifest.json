@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "id": "runory.django-deployer",
+  "name": "Django Deployment",
+  "version": "0.2.0",
+  "description": "Deploy and manage Django applications on Linux servers.",
+  "publisher": {
+    "id": "runory",
+    "name": "Runory"
+  },
+  "apiVersion": "1",
+  "minRunoryVersion": "0.1.0",
+  "logo": "assets/logo.png",
+  "category": "deployment",
+  "permissions": [
+    "host.read",
+    "ssh.exec",
+    "ssh.exec.sudo",
+    "remote.fs.read",
+    "remote.fs.write",
+    "remote.fs.delete",
+    "secret.reference"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "django.inspect",
+        "title": "Inspect Django Environment",
+        "category": "Django"
+      },
+      {
+        "id": "django.preflight",
+        "title": "Django Preflight Check",
+        "category": "Django"
+      },
+      {
+        "id": "django.deploy",
+        "title": "Deploy Django Project",
+        "category": "Django"
+      },
+      {
+        "id": "django.update",
+        "title": "Update Django Project",
+        "category": "Django"
+      },
+      {
+        "id": "django.rollback",
+        "title": "Rollback Django Project",
+        "category": "Django"
+      },
+      {
+        "id": "django.recover",
+        "title": "Recover Django Release",
+        "category": "Django"
+      },
+      {
+        "id": "django.restart",
+        "title": "Restart Django Service",
+        "category": "Django"
+      },
+      {
+        "id": "django.logs",
+        "title": "View Django Logs",
+        "category": "Django"
+      },
+      {
+        "id": "django.health",
+        "title": "Django Health Check",
+        "category": "Django"
+      }
+    ],
+    "hostMenus": [
+      {
+        "command": "django.inspect",
+        "group": "deployment",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "django.preflight",
+        "group": "deployment",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "django.deploy",
+        "group": "deployment",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "django.update",
+        "group": "deployment",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "django.rollback",
+        "group": "deployment",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "django.recover",
+        "group": "deployment",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "django.health",
+        "group": "deployment",
+        "when": "host.os == 'linux'"
+      }
+    ],
+    "workflows": [
+      {
+        "id": "django.inspect",
+        "file": "workflows/inspect.yaml"
+      },
+      {
+        "id": "django.preflight",
+        "file": "workflows/preflight.yaml",
+        "inputSchema": "ui/deploy.schema.json"
+      },
+      {
+        "id": "django.deploy",
+        "file": "workflows/deploy.yaml",
+        "inputSchema": "ui/deploy.schema.json"
+      },
+      {
+        "id": "django.update",
+        "file": "workflows/update.yaml",
+        "inputSchema": "ui/update.schema.json"
+      },
+      {
+        "id": "django.rollback",
+        "file": "workflows/rollback.yaml",
+        "inputSchema": "ui/rollback.schema.json"
+      },
+      {
+        "id": "django.recover",
+        "file": "workflows/recover.yaml",
+        "inputSchema": "ui/rollback.schema.json"
+      },
+      {
+        "id": "django.restart",
+        "file": "workflows/restart.yaml"
+      },
+      {
+        "id": "django.logs",
+        "file": "workflows/logs.yaml"
+      },
+      {
+        "id": "django.health",
+        "file": "workflows/health.yaml",
+        "inputSchema": "ui/deploy.schema.json"
+      }
+    ],
+    "workspaceEntries": [
+      {
+        "id": "django.main",
+        "title": "Django",
+        "description": "部署和管理 Django 项目",
+        "command": "django.deploy",
+        "actions": [
+          "django.inspect",
+          "django.deploy",
+          "django.update",
+          "django.rollback",
+          "django.logs"
+        ],
+        "order": 100
+      }
+    ]
+  }
+}

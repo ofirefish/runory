@@ -6,6 +6,7 @@ import { Input } from "../../components/ui/input";
 import { loadDashboard, loadProcesses, loadServiceHealth } from "../../lib/tauri/infrastructure";
 import type { ProcessInfo, ServerDashboard, ServiceHealth } from "../../types/infrastructure";
 import { formatFileSize } from "../files/sftp-format";
+import { PluginWorkspaceSection } from "../plugins/workspace/PluginWorkspaceSection";
 
 const percent = (value: number) => `${Math.round(value)}%`;
 
@@ -46,5 +47,10 @@ export function DashboardView({ sessionId, active }: { sessionId: string | null;
       <article className="rounded-lg border bg-[hsl(var(--surface))]"><header className="flex items-center gap-2 border-b px-4 py-3"><Activity size={16} /><h3 className="font-medium">{t("dashboard.services")}</h3></header><div className="p-3"><div className="flex gap-2"><Input value={serviceNames} aria-label={t("dashboard.serviceNames")} onChange={(event) => setServiceNames(event.target.value)} /><Button variant="secondary" onClick={() => void refresh()}>{t("common.refresh")}</Button></div><div className="mt-3 divide-y">{services.map((service) => <div key={service.name} className="flex items-center py-2 text-sm"><span className={`mr-2 h-2 w-2 rounded-full ${service.status === "active" ? "bg-emerald-500" : service.status === "failed" ? "bg-red-500" : "bg-slate-400"}`} /><span>{service.name}</span><span className="ml-auto text-xs text-[hsl(var(--secondary))]">{t(`dashboard.service.${service.status}`)}</span></div>)}</div></div></article>
     </div>
     <article className="mt-4 overflow-hidden rounded-lg border bg-[hsl(var(--surface))]"><header className="border-b px-4 py-3"><h3 className="font-medium">{t("dashboard.processes")}</h3></header><div className="max-h-80 overflow-auto"><table className="w-full text-left text-sm"><thead className="sticky top-0 bg-[hsl(var(--elevated))] text-xs"><tr><th className="px-3 py-2">PID</th><th className="px-3 py-2">{t("dashboard.user")}</th><th className="px-3 py-2">CPU</th><th className="px-3 py-2">MEM</th><th className="px-3 py-2">{t("dashboard.command")}</th></tr></thead><tbody>{processes.map((process) => <tr key={process.pid} className="border-t border-[hsl(var(--border-soft))]"><td className="px-3 py-2 font-mono">{process.pid}</td><td className="px-3 py-2">{process.user}</td><td className="px-3 py-2">{process.cpuPercent}%</td><td className="px-3 py-2">{process.memoryPercent}%</td><td className="px-3 py-2 font-mono">{process.command}</td></tr>)}</tbody></table></div></article>
+    <PluginWorkspaceSection
+      category="dashboard"
+      titleKey="plugins.workspace.section.dashboard"
+      sessionId={sessionId}
+    />
   </section>;
 }

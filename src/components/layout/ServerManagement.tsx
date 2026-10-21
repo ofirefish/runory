@@ -1,4 +1,4 @@
-import { Clock3, FolderPlus, LayoutGrid, List, Plus, Search, Server, X } from "lucide-react";
+import { ChevronDown, Clock3, FileUp, FolderPlus, LayoutGrid, List, Plus, Search, Server, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "../ui/confirm-dialog";
@@ -6,27 +6,38 @@ import { GroupSection } from "../../features/groups/GroupSection";
 import { GroupDialog } from "../../features/groups/GroupDialog";
 import { moveId } from "../../features/groups/reorder";
 import { HostItem } from "../../features/profiles/HostItem";
+import { WorkflowExecutionDialog } from "../../features/plugins/components/WorkflowExecutionDialog";
+import { usePluginStore } from "../../features/plugins/store/pluginStore";
 import { ProfileDialog } from "../../features/profiles/ProfileDialog";
+import { CatalogImportDialog } from "../../features/profiles/CatalogImportDialog";
 import { filterProfiles } from "../../features/profiles/search";
 import { ServerProfileDetails } from "../../features/profiles/ServerProfileDetails";
 import { useProfileGroupDrag } from "../../features/profiles/use-profile-group-drag";
 import { useCatalogStore } from "../../stores/catalog-store";
 import { useSessionStore } from "../../stores/session-store";
 import type { HostGroup, ServerProfile } from "../../types/domain";
+import type { CatalogImportSource } from "../../types/import";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ServerSyncStatus } from "./ServerSyncStatus";
 
 type DialogState =
   | { kind: "group"; group?: HostGroup }
   | { kind: "profile"; profile?: ServerProfile; groupId?: string | null }
+  | { kind: "catalog-import"; source: CatalogImportSource }
   | { kind: "delete-group"; group: HostGroup }
   | { kind: "delete-profile"; profile: ServerProfile }
   | null;
 
+const IMPORT_SOURCES: CatalogImportSource[] = ["terminus", "openssh", "xshell", "securecrt", "mobaxterm"];
+
+
 export function ServerManagement({ query, onQueryChange, onConnectProfile, onCreateTunnel, onOpenSync = () => undefined, onOpenAuth = () => undefined }: { query: string; onQueryChange: (query: string) => void; onConnectProfile: (profileId: string) => void; onCreateTunnel?: (profileId: string) => void; onOpenSync?: () => void; onOpenAuth?: () => void }) {
   const { t } = useTranslation();
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [pluginWorkflow, setPluginWorkflow] = useState<{ pluginId: string; workflowId: string; hostId: string; sessionId?: string } | null>(null);
+  const [importMenuOpen, setImportMenuOpen] = useState(false);
   const [filter, setFilter] = useState<"all" | "recent">("all");
   const [view, setView] = useState<"grid" | "list">(() => {
     try { return localStorage.getItem("runory.serversView") === "list" ? "list" : "grid"; }
@@ -39,6 +50,11 @@ export function ServerManagement({ query, onQueryChange, onConnectProfile, onCre
   const { groups, profiles, selectedProfileId, loading, errorCode, selectProfile, updateGroup, deleteGroup, reorderGroups, deleteProfile, reorderProfiles } = useCatalogStore();
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId) ?? null;
   const sessionTabs = useSessionStore((store) => store.tabs);
+  const hostMenus = usePluginStore((store) => store.hostMenus);
+  const refreshHostMenus = usePluginStore((store) => store.refreshHostMenus);
+  useEffect(() => {
+    void refreshHostMenus("linux", "x86_64");
+  }, [refreshHostMenus]);
   const visibleProfiles = filterProfiles(groups, profiles, query);
   const ungroupedProfiles = visibleProfiles.filter((profile) => profile.groupId === null);
   const recentProfiles = visibleProfiles.filter((profile) => profile.lastConnectedAt).sort((left, right) => new Date(right.lastConnectedAt ?? 0).getTime() - new Date(left.lastConnectedAt ?? 0).getTime());
@@ -87,11 +103,26 @@ export function ServerManagement({ query, onQueryChange, onConnectProfile, onCre
       active={selectedProfileId === profile.id} state={state} osDistribution={profile.osDistribution}
       summary={`${t(profile.authMethod === "password" ? "profile.password" : "profile.privateKey")}${profile.connectionRoute.type === "jumpHost" ? ` · ${t("profile.routeJumpHost")}` : ""}`}
       jumpHostLabel={profile.connectionRoute.type === "jumpHost" ? jumpProfile ? t("profile.jumpHostIndicatorNamed", { name: jumpProfile.name }) : t("profile.jumpHostIndicator") : undefined}
-      labels={{ edit: t("profile.editTitle"), delete: t("profile.deleteTitle"), moveUp: t("profile.moveUp", { name: profile.name }), moveDown: t("profile.moveDown", { name: profile.name }), more: t("common.moreActions"), status: t(`status.${state}`), connect: t("serverManagement.openSession"), drag: t("serverManagement.dragHost", { name: profile.name }) }}
+      labels={{ viewDetails: t("serverManagement.viewDetails"), edit: t("profile.editTitle"), delete: t("profile.deleteTitle"), moveUp: t("profile.moveUp", { name: profile.name }), moveDown: t("profile.moveDown", { name: profile.name }), more: t("common.moreActions"), status: t(`status.${state}`), connect: t("serverManagement.openSession"), drag: t("serverManagement.dragHost", { name: profile.name }) }}
       onDragPointerDown={(event) => drag.startDrag(event, profile.id)} dragging={drag.draggedId === profile.id} dragDisabled={drag.moving || loading || dialog !== null}
-      onSelect={() => selectProfile(profile.id)}
+      onViewDetails={() => selectProfile(profile.id)}
       onCreateTunnel={onCreateTunnel ? () => onCreateTunnel(profile.id) : undefined} tunnelLabel={t("tunnels.create")}
-      onConnect={() => { selectProfile(profile.id); onConnectProfile(profile.id); }}
+      pluginActions={hostMenus
+        .filter((menu) => Boolean(menu.workflowId))
+        .map((menu) => ({
+          id: `${menu.pluginId}:${menu.command}`,
+          title: menu.title,
+          onSelect: () => {
+            const sessionId = sessionTabs.find((tab) => tab.profileId === profile.id && tab.state === "connected")?.sessionId ?? undefined;
+            setPluginWorkflow({
+              pluginId: menu.pluginId,
+              workflowId: menu.workflowId ?? menu.command,
+              hostId: profile.id,
+              sessionId,
+            });
+          },
+        }))}
+      onConnect={() => onConnectProfile(profile.id)}
       onEdit={() => setDialog({ kind: "profile", profile })} onDelete={() => setDialog({ kind: "delete-profile", profile })}
       onMoveUp={sortingEnabled ? () => moveProfile(profile, siblings, -1) : undefined}
       onMoveDown={sortingEnabled ? () => moveProfile(profile, siblings, 1) : undefined}
@@ -110,6 +141,33 @@ export function ServerManagement({ query, onQueryChange, onConnectProfile, onCre
       </div>
       <div className="server-header-actions">
         <ServerSyncStatus onOpenSync={onOpenSync} onOpenAuth={onOpenAuth} />
+        <Popover open={importMenuOpen} onOpenChange={setImportMenuOpen}>
+          <PopoverTrigger asChild>
+            <Button className="server-create-group" variant="secondary" size="sm">
+              <FileUp size={15} aria-hidden="true" />
+              {t("catalogImport.action")}
+              <ChevronDown size={14} aria-hidden="true" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-56 p-1">
+            <div className="flex flex-col" role="menu" aria-label={t("catalogImport.action")}>
+              {IMPORT_SOURCES.map((source) => (
+                <button
+                  key={source}
+                  type="button"
+                  role="menuitem"
+                  className="rounded-sm px-3 py-2 text-left text-sm hover:bg-[hsl(var(--elevated))]"
+                  onClick={() => {
+                    setImportMenuOpen(false);
+                    setDialog({ kind: "catalog-import", source });
+                  }}
+                >
+                  {t(`catalogImport.sources.${source}`)}
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
         <Button className="server-create-group" variant="secondary" size="sm" onClick={() => setDialog({ kind: "group" })}><FolderPlus size={15} aria-hidden="true" />{t("group.createTitle")}</Button>
         <Button size="sm" onClick={() => setDialog({ kind: "profile" })}><Plus size={15} aria-hidden="true" />{t("profile.createTitle")}</Button>
       </div>
@@ -161,7 +219,18 @@ export function ServerManagement({ query, onQueryChange, onConnectProfile, onCre
     </div>
     {dialog?.kind === "group" && <GroupDialog group={dialog.group} onClose={() => setDialog(null)} />}
     {dialog?.kind === "profile" && <ProfileDialog profile={dialog.profile} initialGroupId={dialog.groupId} onClose={() => setDialog(null)} />}
+    {dialog?.kind === "catalog-import" && <CatalogImportDialog source={dialog.source} onClose={() => setDialog(null)} />}
     {dialog?.kind === "delete-group" && <ConfirmDialog title={t("group.deleteTitle")} description={t("group.deleteDescription", { name: dialog.group.name })} onConfirm={() => deleteGroup(dialog.group.id)} onClose={() => setDialog(null)} />}
     {dialog?.kind === "delete-profile" && <ConfirmDialog title={t("profile.deleteTitle")} description={sessionTabs.some((tab) => tab.profileId === dialog.profile.id && tab.sessionId) ? t("profile.deleteActiveDescription", { name: dialog.profile.name, count: sessionTabs.filter((tab) => tab.profileId === dialog.profile.id && tab.sessionId).length }) : t("profile.deleteDescription", { name: dialog.profile.name })} onConfirm={() => deleteProfile(dialog.profile.id)} onClose={() => setDialog(null)} />}
+    {pluginWorkflow && (
+      <WorkflowExecutionDialog
+        open
+        pluginId={pluginWorkflow.pluginId}
+        workflowId={pluginWorkflow.workflowId}
+        hostId={pluginWorkflow.hostId}
+        sessionId={pluginWorkflow.sessionId}
+        onClose={() => setPluginWorkflow(null)}
+      />
+    )}
   </main>;
 }

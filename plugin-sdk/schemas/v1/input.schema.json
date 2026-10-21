@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runory.app/schemas/plugin-api/v1/input.schema.json",
+  "title": "Runory Plugin Workflow Input Schema (API 1)",
+  "description": "Meta-schema for package-relative UI input schemas referenced by contributes.workflows[].inputSchema. API 1 supports a JSON Schema subset used by Runory Desktop forms.",
+  "type": "object",
+  "required": ["type"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "$id": { "type": "string" },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "type": {
+      "const": "object",
+      "description": "Workflow input roots must be objects."
+    },
+    "required": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "additionalProperties": {
+      "type": ["boolean", "object"]
+    },
+    "properties": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/property" }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "property": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["string", "integer", "number", "boolean", "object", "array"]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["string", "integer", "number", "boolean", "object", "array", "null"]
+              }
+            }
+          ]
+        },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "default": true,
+        "enum": {
+          "type": "array",
+          "minItems": 1
+        },
+        "pattern": { "type": "string" },
+        "format": {
+          "type": "string",
+          "description": "Known Runory formats include secret-ref.",
+          "enum": ["secret-ref", "uri", "hostname", "email"]
+        },
+        "minLength": { "type": "integer", "minimum": 0 },
+        "maxLength": { "type": "integer", "minimum": 0 },
+        "minimum": { "type": "number" },
+        "maximum": { "type": "number" },
+        "exclusiveMinimum": { "type": "number" },
+        "exclusiveMaximum": { "type": "number" },
+        "items": { "type": "object" },
+        "properties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/property" }
+        },
+        "required": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -11,10 +11,12 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use crate::deployment::DeploymentAppsRepository;
 use crate::domain::{
     AppError, AppResult, AuthMethod, CloudApplyResult, CloudConflictDecision, CloudConflictItem,
-    CloudConflictResolution, CloudEncryptedPayload, CloudGroup, CloudImportPreview,
-    CloudKeyEnvelope, CloudObjectKind, CloudProfile, CloudSyncKeyStatus, HostGroup, ServerProfile,
+    CloudConflictResolution, CloudDeploymentApp, CloudEncryptedPayload, CloudGroup,
+    CloudImportPreview, CloudKeyEnvelope, CloudObjectKind, CloudProfile, CloudSyncKeyStatus,
+    DeploymentApp, HostGroup, ServerProfile,
 };
 use crate::groups::timestamp;
 use crate::groups::GroupRepository;
@@ -23,7 +25,8 @@ use crate::profiles::ProfileRepository;
 use super::state::{CloudSyncStateRepository, CloudTombstone, OrganizationSyncState};
 use super::CloudSyncKeyStore;
 
-const SYNC_VERSION: u8 = 4;
+const SYNC_VERSION: u8 = 5;
+const PREVIOUS_SYNC_VERSION: u8 = 4;
 const LEGACY_SYNC_VERSION: u8 = 3;
 const SALT_LENGTH: usize = 16;
 const NONCE_LENGTH: usize = 12;
@@ -42,6 +45,8 @@ struct CloudSnapshot {
     version: u8,
     groups: Vec<CloudGroup>,
     profiles: Vec<CloudProfile>,
+    #[serde(default)]
+    deployment_apps: Vec<CloudDeploymentApp>,
     #[serde(default)]
     tombstones: Vec<CloudTombstone>,
 }
@@ -69,6 +74,7 @@ impl Clone for CloudKeyMaterial {
 pub struct CloudSyncService {
     profiles: ProfileRepository,
     groups: GroupRepository,
+    deployment_apps: DeploymentAppsRepository,
     write_lock: Arc<Mutex<()>>,
     state: CloudSyncStateRepository,
     pending: Mutex<HashMap<Uuid, PendingImport>>,
@@ -80,6 +86,7 @@ impl CloudSyncService {
     pub fn with_key_store(
         profiles: ProfileRepository,
         groups: GroupRepository,
+        deployment_apps: DeploymentAppsRepository,
         write_lock: Arc<Mutex<()>>,
         state: CloudSyncStateRepository,
         key_store: Arc<dyn CloudSyncKeyStore>,
@@ -87,6 +94,7 @@ impl CloudSyncService {
         Self {
             profiles,
             groups,
+            deployment_apps,
             write_lock,
             state,
             pending: Mutex::new(HashMap::new()),
@@ -216,7 +224,7 @@ impl CloudSyncService {
         payload: CloudEncryptedPayload,
     ) -> AppResult<CloudEncryptedPayload> {
         validate_passphrase(&new_recovery_passphrase)?;
-        if payload.version != SYNC_VERSION {
+        if !matches!(payload.version, PREVIOUS_SYNC_VERSION | SYNC_VERSION) {
             return Err(AppError::CloudInvalid);
         }
         let (material, persisted_on_device) = self.load_key_material(organization_id).await?;
@@ -276,13 +284,21 @@ impl CloudSyncService {
             .into_iter()
             .map(CloudProfile::from)
             .collect();
+        let deployment_apps: Vec<_> = self
+            .deployment_apps
+            .list_all()
+            .await?
+            .into_iter()
+            .map(CloudDeploymentApp::from)
+            .collect();
         let mut state = self.state.load().await?;
         let organization_state = state.organizations.entry(organization_id).or_default();
-        record_local_deletions(organization_state, &groups, &profiles)?;
+        record_local_deletions(organization_state, &groups, &profiles, &deployment_apps)?;
         let snapshot = CloudSnapshot {
             version: SYNC_VERSION,
             groups,
             profiles,
+            deployment_apps,
             tombstones: organization_state.tombstones.clone(),
         };
         self.state.save(&state).await?;
@@ -300,69 +316,76 @@ impl CloudSyncService {
         recovery_passphrase: Option<Zeroizing<String>>,
         payload: CloudEncryptedPayload,
     ) -> AppResult<CloudImportPreview> {
-        let (snapshot, migration_key) = if payload.version == SYNC_VERSION {
-            let local_material = self.load_key_material(organization_id).await?.0;
-            let local_attempt = if let Some(material) = local_material {
-                let local_payload = payload.clone();
-                Some(
-                    tokio::task::spawn_blocking(move || {
-                        decrypt_snapshot_with_key(
-                            organization_id,
-                            material.key.as_ref(),
-                            &local_payload,
-                        )
-                    })
-                    .await
-                    .map_err(|_| AppError::CloudCrypto)?,
-                )
+        let (snapshot, migration_key) =
+            if matches!(payload.version, PREVIOUS_SYNC_VERSION | SYNC_VERSION) {
+                let local_material = self.load_key_material(organization_id).await?.0;
+                let local_attempt = if let Some(material) = local_material {
+                    let local_payload = payload.clone();
+                    Some(
+                        tokio::task::spawn_blocking(move || {
+                            decrypt_snapshot_with_key(
+                                organization_id,
+                                material.key.as_ref(),
+                                &local_payload,
+                            )
+                        })
+                        .await
+                        .map_err(|_| AppError::CloudCrypto)?,
+                    )
+                } else {
+                    None
+                };
+                let snapshot = match local_attempt {
+                    Some(Ok(snapshot)) => snapshot,
+                    Some(Err(error)) if recovery_passphrase.is_none() => return Err(error),
+                    _ => {
+                        let recovery_passphrase =
+                            recovery_passphrase.ok_or(AppError::CloudRecoveryRequired)?;
+                        validate_passphrase(&recovery_passphrase)?;
+                        let envelope =
+                            payload.key_envelope.clone().ok_or(AppError::CloudInvalid)?;
+                        let (material, snapshot) = tokio::task::spawn_blocking(move || {
+                            let material = unwrap_key_material(
+                                organization_id,
+                                recovery_passphrase,
+                                envelope,
+                            )?;
+                            let snapshot = decrypt_snapshot_with_key(
+                                organization_id,
+                                material.key.as_ref(),
+                                &payload,
+                            )?;
+                            Ok::<_, AppError>((material, snapshot))
+                        })
+                        .await
+                        .map_err(|_| AppError::CloudCrypto)??;
+                        self.remember_key_material(organization_id, material)
+                            .await?;
+                        snapshot
+                    }
+                };
+                (snapshot, None)
             } else {
-                None
+                let recovery_passphrase =
+                    recovery_passphrase.ok_or(AppError::CloudRecoveryRequired)?;
+                validate_passphrase(&recovery_passphrase)?;
+                let migration_passphrase = Zeroizing::new(recovery_passphrase.to_string());
+                let (snapshot, material) = tokio::task::spawn_blocking(move || {
+                    let snapshot =
+                        decrypt_legacy_snapshot(organization_id, recovery_passphrase, payload)?;
+                    let material = create_key_material(organization_id, migration_passphrase)?;
+                    Ok::<_, AppError>((snapshot, material))
+                })
+                .await
+                .map_err(|_| AppError::CloudCrypto)??;
+                (snapshot, Some(material))
             };
-            let snapshot = match local_attempt {
-                Some(Ok(snapshot)) => snapshot,
-                Some(Err(error)) if recovery_passphrase.is_none() => return Err(error),
-                _ => {
-                    let recovery_passphrase =
-                        recovery_passphrase.ok_or(AppError::CloudRecoveryRequired)?;
-                    validate_passphrase(&recovery_passphrase)?;
-                    let envelope = payload.key_envelope.clone().ok_or(AppError::CloudInvalid)?;
-                    let (material, snapshot) = tokio::task::spawn_blocking(move || {
-                        let material =
-                            unwrap_key_material(organization_id, recovery_passphrase, envelope)?;
-                        let snapshot = decrypt_snapshot_with_key(
-                            organization_id,
-                            material.key.as_ref(),
-                            &payload,
-                        )?;
-                        Ok::<_, AppError>((material, snapshot))
-                    })
-                    .await
-                    .map_err(|_| AppError::CloudCrypto)??;
-                    self.remember_key_material(organization_id, material)
-                        .await?;
-                    snapshot
-                }
-            };
-            (snapshot, None)
-        } else {
-            let recovery_passphrase = recovery_passphrase.ok_or(AppError::CloudRecoveryRequired)?;
-            validate_passphrase(&recovery_passphrase)?;
-            let migration_passphrase = Zeroizing::new(recovery_passphrase.to_string());
-            let (snapshot, material) = tokio::task::spawn_blocking(move || {
-                let snapshot =
-                    decrypt_legacy_snapshot(organization_id, recovery_passphrase, payload)?;
-                let material = create_key_material(organization_id, migration_passphrase)?;
-                Ok::<_, AppError>((snapshot, material))
-            })
-            .await
-            .map_err(|_| AppError::CloudCrypto)??;
-            (snapshot, Some(material))
-        };
         validate_snapshot(&snapshot)?;
 
         let _guard = self.write_lock.lock().await;
         let local_groups = self.groups.list().await?;
         let local_profiles = self.profiles.list().await?;
+        let local_deployment_apps = self.deployment_apps.list_all().await?;
         let state = self.state.load().await?;
         let organization_state = state
             .organizations
@@ -373,6 +396,7 @@ impl CloudSyncService {
             &snapshot,
             &local_groups,
             &local_profiles,
+            &local_deployment_apps,
             &organization_state,
         );
         drop(_guard);
@@ -411,6 +435,7 @@ impl CloudSyncService {
         let _guard = self.write_lock.lock().await;
         let original_groups = self.groups.list().await?;
         let original_profiles = self.profiles.list().await?;
+        let original_deployment_apps = self.deployment_apps.list_all().await?;
         let original_state = self.state.load().await?;
         let mut state = original_state.clone();
         let organization_state = state.organizations.entry(organization_id).or_default();
@@ -418,6 +443,7 @@ impl CloudSyncService {
             &snapshot,
             &original_groups,
             &original_profiles,
+            &original_deployment_apps,
             organization_state,
         );
         let overrides = validate_decisions(&decisions, &current_preview.conflict_items)?;
@@ -436,8 +462,25 @@ impl CloudSyncService {
             organization_state,
             &overrides,
         );
+        let valid_profiles: HashSet<_> = profiles.iter().map(|profile| profile.id).collect();
+        let (mut deployment_apps, deployment_apps_applied, deployment_app_skipped) =
+            merge_deployment_apps(
+                &original_deployment_apps,
+                &snapshot.deployment_apps,
+                &valid_profiles,
+                organization_state,
+                &overrides,
+            );
+        let (deployment_apps_deleted, deployment_app_delete_skipped) =
+            apply_deployment_app_tombstones(
+                &mut deployment_apps,
+                &snapshot.tombstones,
+                organization_state,
+                &overrides,
+            );
         let (profiles_deleted, profile_delete_skipped) = apply_profile_tombstones(
             &mut profiles,
+            &mut deployment_apps,
             &snapshot.tombstones,
             organization_state,
             &overrides,
@@ -451,15 +494,31 @@ impl CloudSyncService {
         );
         organization_state.known_groups = groups.iter().map(|item| item.id).collect();
         organization_state.known_profiles = profiles.iter().map(|item| item.id).collect();
+        organization_state.known_deployment_apps =
+            deployment_apps.iter().map(|item| item.id).collect();
 
         self.groups.save(&groups).await?;
         if self.profiles.save(&profiles).await.is_err() {
             self.groups.save(&original_groups).await?;
             return Err(AppError::Storage);
         }
+        if self
+            .deployment_apps
+            .save_all(&deployment_apps)
+            .await
+            .is_err()
+        {
+            self.groups.save(&original_groups).await?;
+            self.profiles.save(&original_profiles).await?;
+            return Err(AppError::Storage);
+        }
         if self.state.save(&state).await.is_err() {
             self.groups.save(&original_groups).await?;
             self.profiles.save(&original_profiles).await?;
+            let _ = self
+                .deployment_apps
+                .save_all(&original_deployment_apps)
+                .await;
             return Err(AppError::Storage);
         }
         drop(_guard);
@@ -468,16 +527,30 @@ impl CloudSyncService {
                 .await?;
         }
         self.pending.lock().await.remove(&import_id);
-        tracing::info!(%organization_id, %import_id, groups_applied, profiles_applied, groups_deleted, profiles_deleted, "cloud sync import applied");
+        tracing::info!(
+            %organization_id,
+            %import_id,
+            groups_applied,
+            profiles_applied,
+            deployment_apps_applied,
+            groups_deleted,
+            profiles_deleted,
+            deployment_apps_deleted,
+            "cloud sync import applied"
+        );
         Ok(CloudApplyResult {
             groups_applied,
             profiles_applied,
             groups_deleted,
             profiles_deleted,
+            deployment_apps_applied,
+            deployment_apps_deleted,
             skipped: group_skipped
                 + profile_skipped
+                + deployment_app_skipped
                 + group_delete_skipped
-                + profile_delete_skipped,
+                + profile_delete_skipped
+                + deployment_app_delete_skipped,
         })
     }
 
@@ -516,6 +589,35 @@ impl From<ServerProfile> for CloudProfile {
             sort_order: profile.sort_order,
             created_at: profile.created_at,
             updated_at: profile.updated_at,
+        }
+    }
+}
+
+impl From<DeploymentApp> for CloudDeploymentApp {
+    fn from(app: DeploymentApp) -> Self {
+        Self {
+            id: app.id,
+            profile_id: app.profile_id,
+            name: app.name,
+            repository_path: app.repository_path,
+            remote_url: app.remote_url,
+            branch: app.branch,
+            build: app.build,
+            restart: app.restart,
+            project_kind: app.project_kind,
+            python: app.python,
+            php: app.php,
+            java: app.java,
+            node: app.node,
+            go: app.go,
+            html: app.html,
+            proxy: app.proxy,
+            setup_step: app.setup_step,
+            setup_status: app.setup_status,
+            source_kind: app.source_kind,
+            venv_path: app.venv_path,
+            // Match group/profile millis epoch strings so timestamp_order stays consistent.
+            updated_at: format!("{}", app.updated_at_epoch_seconds.saturating_mul(1_000)),
         }
     }
 }
@@ -668,7 +770,7 @@ fn decrypt_snapshot_with_key(
     key: &[u8],
     payload: &CloudEncryptedPayload,
 ) -> AppResult<CloudSnapshot> {
-    if payload.version != SYNC_VERSION
+    if !matches!(payload.version, PREVIOUS_SYNC_VERSION | SYNC_VERSION)
         || payload.salt.len() != SALT_LENGTH
         || payload.nonce.len() != NONCE_LENGTH
         || payload.ciphertext.len() > MAX_PLAINTEXT_BYTES + 32
@@ -780,19 +882,27 @@ fn decode_key_material(encoded: &[u8]) -> AppResult<CloudKeyMaterial> {
 }
 
 fn validate_snapshot(snapshot: &CloudSnapshot) -> AppResult<()> {
-    if !matches!(snapshot.version, 1 | 2 | LEGACY_SYNC_VERSION | SYNC_VERSION)
-        || snapshot
-            .groups
-            .len()
-            .saturating_add(snapshot.profiles.len())
-            .saturating_add(snapshot.tombstones.len())
-            > MAX_OBJECTS
+    if !matches!(
+        snapshot.version,
+        1 | 2 | LEGACY_SYNC_VERSION | PREVIOUS_SYNC_VERSION | SYNC_VERSION
+    ) || snapshot
+        .groups
+        .len()
+        .saturating_add(snapshot.profiles.len())
+        .saturating_add(snapshot.deployment_apps.len())
+        .saturating_add(snapshot.tombstones.len())
+        > MAX_OBJECTS
     {
         return Err(AppError::CloudInvalid);
     }
     let group_ids: HashSet<_> = snapshot.groups.iter().map(|group| group.id).collect();
     let profile_ids: HashSet<_> = snapshot.profiles.iter().map(|profile| profile.id).collect();
-    if group_ids.len() != snapshot.groups.len() || profile_ids.len() != snapshot.profiles.len() {
+    let deployment_app_ids: HashSet<_> =
+        snapshot.deployment_apps.iter().map(|app| app.id).collect();
+    if group_ids.len() != snapshot.groups.len()
+        || profile_ids.len() != snapshot.profiles.len()
+        || deployment_app_ids.len() != snapshot.deployment_apps.len()
+    {
         return Err(AppError::CloudInvalid);
     }
     let tombstone_ids: HashSet<_> = snapshot
@@ -806,6 +916,7 @@ fn validate_snapshot(snapshot: &CloudSnapshot) -> AppResult<()> {
                 || match item.kind {
                     CloudObjectKind::Group => group_ids.contains(&item.id),
                     CloudObjectKind::Profile => profile_ids.contains(&item.id),
+                    CloudObjectKind::DeploymentApp => deployment_app_ids.contains(&item.id),
                 }
         })
     {
@@ -832,7 +943,17 @@ fn validate_snapshot(snapshot: &CloudSnapshot) -> AppResult<()> {
             && valid_timestamp(&profile.created_at)
             && valid_timestamp(&profile.updated_at)
     };
-    if snapshot.groups.iter().all(valid_group) && snapshot.profiles.iter().all(valid_profile) {
+    let valid_deployment_app = |app: &CloudDeploymentApp| {
+        !app.name.trim().is_empty()
+            && app.name.chars().count() <= 100
+            && !app.repository_path.trim().is_empty()
+            && profile_ids.contains(&app.profile_id)
+            && valid_timestamp(&app.updated_at)
+    };
+    if snapshot.groups.iter().all(valid_group)
+        && snapshot.profiles.iter().all(valid_profile)
+        && snapshot.deployment_apps.iter().all(valid_deployment_app)
+    {
         Ok(())
     } else {
         Err(AppError::CloudInvalid)
@@ -847,9 +968,11 @@ fn record_local_deletions(
     state: &mut OrganizationSyncState,
     groups: &[CloudGroup],
     profiles: &[CloudProfile],
+    deployment_apps: &[CloudDeploymentApp],
 ) -> AppResult<()> {
     let current_groups: HashSet<_> = groups.iter().map(|item| item.id).collect();
     let current_profiles: HashSet<_> = profiles.iter().map(|item| item.id).collect();
+    let current_deployment_apps: HashSet<_> = deployment_apps.iter().map(|item| item.id).collect();
     let deleted_at = timestamp();
     for id in state
         .known_groups
@@ -879,18 +1002,40 @@ fn record_local_deletions(
             });
         }
     }
+    for id in state
+        .known_deployment_apps
+        .difference(&current_deployment_apps)
+        .copied()
+        .collect::<Vec<_>>()
+    {
+        if state
+            .tombstone(CloudObjectKind::DeploymentApp, id)
+            .is_none()
+        {
+            state.upsert_tombstone(CloudTombstone {
+                kind: CloudObjectKind::DeploymentApp,
+                id,
+                deleted_at: deleted_at.clone(),
+            });
+        }
+    }
     for id in &current_groups {
         state.remove_tombstone(CloudObjectKind::Group, *id);
     }
     for id in &current_profiles {
         state.remove_tombstone(CloudObjectKind::Profile, *id);
     }
+    for id in &current_deployment_apps {
+        state.remove_tombstone(CloudObjectKind::DeploymentApp, *id);
+    }
     state.known_groups = current_groups;
     state.known_profiles = current_profiles;
+    state.known_deployment_apps = current_deployment_apps;
     if state
         .known_groups
         .len()
         .saturating_add(state.known_profiles.len())
+        .saturating_add(state.known_deployment_apps.len())
         .saturating_add(state.tombstones.len())
         > MAX_OBJECTS
     {
@@ -910,6 +1055,7 @@ fn compare_snapshot(
     snapshot: &CloudSnapshot,
     local_groups: &[HostGroup],
     local_profiles: &[ServerProfile],
+    local_deployment_apps: &[DeploymentApp],
     local_state: &OrganizationSyncState,
 ) -> CloudImportPreview {
     let mut result = CloudImportPreview {
@@ -920,6 +1066,9 @@ fn compare_snapshot(
         profile_updates: 0,
         group_deletions: 0,
         profile_deletions: 0,
+        deployment_app_additions: 0,
+        deployment_app_updates: 0,
+        deployment_app_deletions: 0,
         local_newer: 0,
         conflicts: 0,
         conflict_items: Vec::new(),
@@ -1018,6 +1167,59 @@ fn compare_snapshot(
             },
         }
     }
+    for remote in &snapshot.deployment_apps {
+        match local_deployment_apps
+            .iter()
+            .find(|local| local.id == remote.id)
+        {
+            None => match local_state.tombstone(CloudObjectKind::DeploymentApp, remote.id) {
+                None => result.deployment_app_additions += 1,
+                Some(local) => match timestamp_order(&remote.updated_at, &local.deleted_at) {
+                    std::cmp::Ordering::Greater => result.deployment_app_additions += 1,
+                    ordering => add_conflict(
+                        &mut result,
+                        CloudObjectKind::DeploymentApp,
+                        remote.id,
+                        remote.name.clone(),
+                        local.deleted_at.clone(),
+                        remote.updated_at.clone(),
+                        false,
+                        ordering,
+                    ),
+                },
+            },
+            Some(local) => {
+                let local_cloud = CloudDeploymentApp::from(local.clone());
+                match classify(
+                    timestamp_order(&remote.updated_at, &local_cloud.updated_at),
+                    remote != &local_cloud,
+                ) {
+                    Difference::RemoteNewer => result.deployment_app_updates += 1,
+                    Difference::LocalNewer => add_conflict(
+                        &mut result,
+                        CloudObjectKind::DeploymentApp,
+                        remote.id,
+                        local.name.clone(),
+                        local_cloud.updated_at.clone(),
+                        remote.updated_at.clone(),
+                        false,
+                        std::cmp::Ordering::Less,
+                    ),
+                    Difference::Conflict => add_conflict(
+                        &mut result,
+                        CloudObjectKind::DeploymentApp,
+                        remote.id,
+                        local.name.clone(),
+                        local_cloud.updated_at,
+                        remote.updated_at.clone(),
+                        false,
+                        std::cmp::Ordering::Equal,
+                    ),
+                    Difference::None => {}
+                }
+            }
+        }
+    }
     for tombstone in &snapshot.tombstones {
         match tombstone.kind {
             CloudObjectKind::Group => {
@@ -1047,6 +1249,27 @@ fn compare_snapshot(
                             local.id,
                             local.name.clone(),
                             local.updated_at.clone(),
+                            tombstone.deleted_at.clone(),
+                            true,
+                            ordering,
+                        ),
+                    }
+                }
+            }
+            CloudObjectKind::DeploymentApp => {
+                if let Some(local) = local_deployment_apps
+                    .iter()
+                    .find(|item| item.id == tombstone.id)
+                {
+                    let local_updated_at = CloudDeploymentApp::from(local.clone()).updated_at;
+                    match timestamp_order(&tombstone.deleted_at, &local_updated_at) {
+                        std::cmp::Ordering::Greater => result.deployment_app_deletions += 1,
+                        ordering => add_conflict(
+                            &mut result,
+                            CloudObjectKind::DeploymentApp,
+                            local.id,
+                            local.name.clone(),
+                            local_updated_at,
                             tombstone.deleted_at.clone(),
                             true,
                             ordering,
@@ -1253,8 +1476,123 @@ fn merge_profiles(
     (merged, applied, skipped)
 }
 
+fn deployment_app_from_cloud(item: &CloudDeploymentApp, profile_id: Uuid) -> DeploymentApp {
+    DeploymentApp {
+        id: item.id,
+        profile_id,
+        name: item.name.clone(),
+        repository_path: item.repository_path.clone(),
+        remote_url: item.remote_url.clone(),
+        branch: item.branch.clone(),
+        build: item.build,
+        restart: item.restart.clone(),
+        project_kind: item.project_kind,
+        python: item.python.clone(),
+        php: item.php.clone(),
+        java: item.java.clone(),
+        node: item.node.clone(),
+        go: item.go.clone(),
+        html: item.html.clone(),
+        proxy: item.proxy.clone(),
+        setup_step: item.setup_step,
+        setup_status: item.setup_status,
+        source_kind: item.source_kind,
+        venv_path: item.venv_path.clone(),
+        updated_at_epoch_seconds: epoch_seconds_from_timestamp(&item.updated_at),
+    }
+}
+
+fn epoch_seconds_from_timestamp(value: &str) -> u64 {
+    value
+        .parse::<u128>()
+        .map(|millis| u64::try_from(millis / 1_000).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+fn merge_deployment_apps(
+    local: &[DeploymentApp],
+    remote: &[CloudDeploymentApp],
+    valid_profiles: &HashSet<Uuid>,
+    state: &mut OrganizationSyncState,
+    overrides: &OverrideSet,
+) -> (Vec<DeploymentApp>, usize, usize) {
+    let mut merged = local
+        .iter()
+        .filter(|app| valid_profiles.contains(&app.profile_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut applied = 0;
+    let mut skipped = 0;
+    for item in remote {
+        if !valid_profiles.contains(&item.profile_id) {
+            skipped += 1;
+            continue;
+        }
+        let converted = deployment_app_from_cloud(item, item.profile_id);
+        let local_updated_at =
+            |current: &DeploymentApp| CloudDeploymentApp::from(current.clone()).updated_at;
+        match merged.iter_mut().find(|current| current.id == item.id) {
+            None if state
+                .tombstone(CloudObjectKind::DeploymentApp, item.id)
+                .is_none_or(|deleted| {
+                    timestamp_order(&item.updated_at, &deleted.deleted_at).is_gt()
+                        || overrides.contains(&(CloudObjectKind::DeploymentApp, item.id))
+                }) =>
+            {
+                merged.push(converted);
+                state.remove_tombstone(CloudObjectKind::DeploymentApp, item.id);
+                applied += 1;
+            }
+            None => skipped += 1,
+            Some(current)
+                if timestamp_order(&item.updated_at, &local_updated_at(current)).is_gt()
+                    || overrides.contains(&(CloudObjectKind::DeploymentApp, item.id)) =>
+            {
+                *current = converted;
+                applied += 1;
+            }
+            Some(_) => skipped += 1,
+        }
+    }
+    (merged, applied, skipped)
+}
+
+fn apply_deployment_app_tombstones(
+    apps: &mut Vec<DeploymentApp>,
+    tombstones: &[CloudTombstone],
+    state: &mut OrganizationSyncState,
+    overrides: &OverrideSet,
+) -> (usize, usize) {
+    let mut deleted = 0;
+    let mut skipped = 0;
+    for tombstone in tombstones
+        .iter()
+        .filter(|item| item.kind == CloudObjectKind::DeploymentApp)
+    {
+        if let Some(local) = apps.iter().find(|item| item.id == tombstone.id) {
+            let local_updated_at = CloudDeploymentApp::from(local.clone()).updated_at;
+            if timestamp_order(&tombstone.deleted_at, &local_updated_at).is_gt()
+                || overrides.contains(&(CloudObjectKind::DeploymentApp, tombstone.id))
+            {
+                apps.retain(|item| item.id != tombstone.id);
+                state.upsert_tombstone(tombstone.clone());
+                deleted += 1;
+            } else {
+                skipped += 1;
+            }
+        } else if state
+            .tombstone(CloudObjectKind::DeploymentApp, tombstone.id)
+            .is_none_or(|local| timestamp_order(&tombstone.deleted_at, &local.deleted_at).is_gt())
+        {
+            state.upsert_tombstone(tombstone.clone());
+        }
+    }
+    (deleted, skipped)
+}
+
 fn apply_profile_tombstones(
     profiles: &mut Vec<ServerProfile>,
+    deployment_apps: &mut Vec<DeploymentApp>,
     tombstones: &[CloudTombstone],
     state: &mut OrganizationSyncState,
     overrides: &OverrideSet,
@@ -1270,6 +1608,18 @@ fn apply_profile_tombstones(
                 || overrides.contains(&(CloudObjectKind::Profile, tombstone.id))
             {
                 profiles.retain(|item| item.id != tombstone.id);
+                deployment_apps.retain(|app| {
+                    if app.profile_id == tombstone.id {
+                        state.upsert_tombstone(CloudTombstone {
+                            kind: CloudObjectKind::DeploymentApp,
+                            id: app.id,
+                            deleted_at: tombstone.deleted_at.clone(),
+                        });
+                        false
+                    } else {
+                        true
+                    }
+                });
                 state.upsert_tombstone(tombstone.clone());
                 deleted += 1;
             } else {
@@ -1341,6 +1691,7 @@ mod tests {
                 updated_at: "2".into(),
             }],
             profiles: vec![],
+            deployment_apps: vec![],
             tombstones: vec![],
         }
     }
@@ -1551,7 +1902,7 @@ mod tests {
         let group_id = Uuid::new_v4();
         let mut state = OrganizationSyncState::default();
         state.known_groups.insert(group_id);
-        record_local_deletions(&mut state, &[], &[]).expect("record deletion");
+        record_local_deletions(&mut state, &[], &[], &[]).expect("record deletion");
         assert!(state.tombstone(CloudObjectKind::Group, group_id).is_some());
         let group = CloudGroup {
             id: group_id,
@@ -1561,7 +1912,7 @@ mod tests {
             created_at: "1".into(),
             updated_at: "2".into(),
         };
-        record_local_deletions(&mut state, &[group], &[]).expect("record resurrection");
+        record_local_deletions(&mut state, &[group], &[], &[]).expect("record resurrection");
         assert!(state.tombstone(CloudObjectKind::Group, group_id).is_none());
     }
 
@@ -1579,13 +1930,20 @@ mod tests {
             version: SYNC_VERSION,
             groups: vec![],
             profiles: vec![],
+            deployment_apps: vec![],
             tombstones: vec![CloudTombstone {
                 kind: CloudObjectKind::Group,
                 id: group.id,
                 deleted_at: "4".into(),
             }],
         };
-        let preview = compare_snapshot(&remote, &[group], &[], &OrganizationSyncState::default());
+        let preview = compare_snapshot(
+            &remote,
+            &[group],
+            &[],
+            &[],
+            &OrganizationSyncState::default(),
+        );
         assert_eq!(preview.local_newer, 1);
         assert_eq!(preview.group_deletions, 0);
         assert!(preview.conflict_items[0].remote_deleted);
@@ -1634,5 +1992,74 @@ mod tests {
         assert!(groups.is_empty());
         assert_eq!(profiles[0].group_id, None);
         assert_eq!(profiles[0].updated_at, "3");
+    }
+
+    #[test]
+    fn compare_snapshot_includes_deployment_app_additions() {
+        let profile_id = Uuid::new_v4();
+        let app = DeploymentApp {
+            id: Uuid::new_v4(),
+            profile_id,
+            name: "web".into(),
+            repository_path: "/var/www/app".into(),
+            remote_url: "git@example.com:app.git".into(),
+            branch: "main".into(),
+            build: crate::domain::BuildPreset::None,
+            restart: crate::domain::RestartTarget::None,
+            project_kind: crate::domain::ProjectKind::Other,
+            python: None,
+            php: None,
+            java: None,
+            node: None,
+            go: None,
+            html: None,
+            proxy: None,
+            setup_step: 3,
+            setup_status: crate::domain::DeploymentSetupStatus::Ready,
+            source_kind: crate::domain::DeploymentSourceKind::ExistingPath,
+            venv_path: String::new(),
+            updated_at_epoch_seconds: 1_700_000_000,
+        };
+        let cloud_app = CloudDeploymentApp::from(app.clone());
+        assert_eq!(cloud_app.updated_at, "1700000000000");
+
+        let remote = CloudSnapshot {
+            version: SYNC_VERSION,
+            groups: vec![],
+            profiles: vec![CloudProfile {
+                id: profile_id,
+                name: "API".into(),
+                host: "api.example.com".into(),
+                port: 22,
+                username: "root".into(),
+                group_id: None,
+                auth_method: AuthMethod::Password,
+                connection_route: crate::domain::ConnectionRoute::Direct,
+                sort_order: 0,
+                created_at: "1".into(),
+                updated_at: "2".into(),
+            }],
+            deployment_apps: vec![cloud_app],
+            tombstones: vec![],
+        };
+        assert!(validate_snapshot(&remote).is_ok());
+        let preview = compare_snapshot(&remote, &[], &[], &[], &OrganizationSyncState::default());
+        assert_eq!(preview.deployment_app_additions, 1);
+        assert_eq!(preview.profile_additions, 1);
+
+        let local_newer = DeploymentApp {
+            updated_at_epoch_seconds: 1_700_000_001,
+            name: "web-local".into(),
+            ..app
+        };
+        let preview = compare_snapshot(
+            &remote,
+            &[],
+            &[],
+            &[local_newer],
+            &OrganizationSyncState::default(),
+        );
+        assert_eq!(preview.deployment_app_updates, 0);
+        assert_eq!(preview.local_newer, 1);
     }
 }

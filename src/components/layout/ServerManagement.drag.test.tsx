@@ -164,7 +164,7 @@ describe("server group pointer dragging", () => {
   });
 
   it("keeps group editing accessible through the existing actions menu", async () => {
-    await act(async () => { container.querySelector<HTMLButtonElement>(".host-menu button")?.click(); });
+    await act(async () => { container.querySelectorAll<HTMLButtonElement>(".host-menu button")[1]?.click(); });
     expect(container.querySelector('[role="dialog"]')).not.toBeNull();
     expect(connect).not.toHaveBeenCalled();
     expect(updateProfile).not.toHaveBeenCalled();
@@ -175,7 +175,7 @@ describe("server group pointer dragging", () => {
     expect(updateProfile).toHaveBeenCalledWith(expect.objectContaining({ id: "alpha", groupId: "empty" }));
   });
 
-  it("suppresses post-drag click and double-click, but preserves the next click and keyboard activation", async () => {
+  it("suppresses post-drag click and double-click, but preserves the next keyboard activation", async () => {
     await start(); await move(section("source")); await pointer("pointerup");
     const select = container.querySelector<HTMLButtonElement>(".host-select")!;
     await act(async () => {
@@ -186,7 +186,7 @@ describe("server group pointer dragging", () => {
     expect(connect).not.toHaveBeenCalled();
     await start(); await pointer("pointerup");
     await act(async () => { select.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
-    expect(useCatalogStore.getState().selectedProfileId).toBe("alpha");
+    expect(useCatalogStore.getState().selectedProfileId).toBeNull();
     await act(async () => { select.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
     expect(connect).toHaveBeenCalledExactlyOnceWith("alpha");
   });

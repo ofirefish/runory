@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "required": ["containerId"],
+  "properties": {
+    "containerId": {
+      "type": "string",
+      "title": "Container ID or Name",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "tail": {
+      "type": "integer",
+      "title": "Log Tail Lines",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 5000
+    }
+  }
+}

@@ -79,8 +79,11 @@ describe("server catalog", () => {
     expect(targetItem?.querySelector(".jump-host-indicator")?.getAttribute("aria-label")).toBe(i18n.t("profile.jumpHostIndicatorNamed", { name: profiles[0].name }));
   });
 
-  it("opens and closes details without connecting, and restores keyboard focus", async () => {
+  it("opens details from the host menu, not card click, and restores keyboard focus", async () => {
     await click(".host-select");
+    expect(container.querySelector(".server-profile-details")).toBeNull();
+    await click(".host-menu summary");
+    await click(".host-menu [role='menuitem']");
     expect(container.querySelector(".server-profile-details")?.textContent).toContain("host-0.example.test");
     expect(container.querySelector(".server-profile-actions button:nth-child(2)")?.textContent).toBe(i18n.t("common.edit"));
     expect(container.querySelector(".server-profile-actions button:nth-child(3)")?.textContent).toBe(i18n.t("common.delete"));
@@ -92,19 +95,23 @@ describe("server catalog", () => {
     expect(connect).toHaveBeenCalledExactlyOnceWith("host-0");
   });
 
-  it("supports explicit connect and double-click", async () => {
+  it("supports explicit connect and double-click without opening details", async () => {
     await click(".server-host-connect");
     expect(connect).toHaveBeenCalledExactlyOnceWith("host-0");
+    expect(container.querySelector(".server-profile-details")).toBeNull();
+    expect(useCatalogStore.getState().selectedProfileId).toBeNull();
     connect.mockClear();
     await act(async () => { container.querySelector(".host-select")?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
     expect(connect).toHaveBeenCalledExactlyOnceWith("host-0");
+    expect(container.querySelector(".server-profile-details")).toBeNull();
+    expect(useCatalogStore.getState().selectedProfileId).toBeNull();
   });
 
   it("filters all recent hosts by real timestamps and disables manual ordering", async () => {
     await click(".server-filter-switch button:last-child");
     expect(container.querySelectorAll(".host-item")).toHaveLength(4);
     expect(container.querySelector(".host-name")?.textContent).toBe("Server 3");
-    expect(container.querySelectorAll(".host-menu [role='menuitem']")).toHaveLength(8);
+    expect(container.querySelectorAll(".host-menu [role='menuitem']")).toHaveLength(12);
     await search("host-1");
     expect(container.querySelectorAll(".host-item")).toHaveLength(1);
     expect(container.querySelector(".host-name")?.textContent).toBe("Server 1");
@@ -129,7 +136,7 @@ describe("server catalog", () => {
     await click(".group-menu [role='menuitem']");
     expect(container.querySelector("[role='dialog']")?.getAttribute("data-group")).toBe("production");
     await click(".host-menu summary");
-    await click(".host-menu [role='menuitem']:nth-child(3)");
+    await click(".host-menu [role='menuitem']:nth-child(4)");
     expect(useCatalogStore.getState().reorderProfiles).toHaveBeenCalledWith("production", ["host-1", "host-0", ...profiles.slice(2, 12).map((profile) => profile.id)]);
   });
 

@@ -1,0 +1,23 @@
+apiVersion: runory/v1
+kind: Workflow
+
+metadata:
+  id: hello.inspect
+  name: Inspect Linux Host
+
+steps:
+
+  - id: detect
+    uses: system.detect
+
+  - id: uname
+    uses: ssh.command
+    with:
+      executable: uname
+      args:
+        - -a
+
+  - id: whoami
+    uses: ssh.command
+    with:
+      executable: whoami

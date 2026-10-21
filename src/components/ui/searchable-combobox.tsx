@@ -2,7 +2,7 @@ import { Check, ChevronsUpDown } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "./button";
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "./command";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "./command";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 
 export type SearchableComboboxOption<T extends string> = {
@@ -11,11 +11,17 @@ export type SearchableComboboxOption<T extends string> = {
   keywords?: string;
 };
 
+export type SearchableComboboxOptionGroup<T extends string> = {
+  label: string;
+  options: readonly SearchableComboboxOption<T>[];
+};
+
 export function SearchableCombobox<T extends string>({
   id,
   label,
   value,
   options,
+  groups,
   placeholder,
   searchPlaceholder,
   emptyMessage,
@@ -27,7 +33,8 @@ export function SearchableCombobox<T extends string>({
   id: string;
   label: string;
   value: T;
-  options: readonly SearchableComboboxOption<T>[];
+  options?: readonly SearchableComboboxOption<T>[];
+  groups?: readonly SearchableComboboxOptionGroup<T>[];
   placeholder: string;
   searchPlaceholder: string;
   emptyMessage: string;
@@ -37,7 +44,19 @@ export function SearchableCombobox<T extends string>({
   onValueChange: (value: T) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const selected = options.find((option) => option.value === value);
+  const flatOptions = groups ? groups.flatMap((group) => group.options) : (options ?? []);
+  const selected = flatOptions.find((option) => option.value === value);
+  const renderOption = (option: SearchableComboboxOption<T>) => <CommandItem
+    key={`${id}:${option.value || "empty"}`}
+    value={`${option.label} ${option.keywords ?? ""}`}
+    onSelect={() => {
+      onValueChange(option.value);
+      setOpen(false);
+    }}
+  >
+    <Check className={cn("h-4 w-4 shrink-0", option.value === value ? "opacity-100" : "opacity-0")} aria-hidden="true" />
+    <span className="truncate">{option.label}</span>
+  </CommandItem>;
 
   return <Popover open={open && !disabled} onOpenChange={setOpen}>
     <PopoverTrigger asChild>
@@ -66,17 +85,9 @@ export function SearchableCombobox<T extends string>({
         <CommandInput placeholder={searchPlaceholder} aria-label={searchPlaceholder} />
         <CommandList>
           <CommandEmpty>{emptyMessage}</CommandEmpty>
-          {options.map((option) => <CommandItem
-            key={`${id}:${option.value || "empty"}`}
-            value={`${option.label} ${option.keywords ?? ""}`}
-            onSelect={() => {
-              onValueChange(option.value);
-              setOpen(false);
-            }}
-          >
-            <Check className={cn("h-4 w-4 shrink-0", option.value === value ? "opacity-100" : "opacity-0")} aria-hidden="true" />
-            <span className="truncate">{option.label}</span>
-          </CommandItem>)}
+          {groups
+            ? groups.map((group) => <CommandGroup key={`${id}:${group.label}`} heading={group.label}>{group.options.map(renderOption)}</CommandGroup>)
+            : flatOptions.map(renderOption)}
         </CommandList>
       </Command>
     </PopoverContent>

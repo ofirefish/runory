@@ -1,0 +1,16 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: docker.restart
+  name: Restart Docker Container
+  description: Restart a container (R3).
+inputs:
+  type: object
+steps:
+  - id: restart
+    uses: ssh.command
+    with:
+      executable: docker
+      args:
+        - restart
+        - "{{ inputs.containerId }}"

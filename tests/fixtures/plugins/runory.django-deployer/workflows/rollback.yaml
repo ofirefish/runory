@@ -1,0 +1,20 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: django.rollback
+  name: Rollback Django Project
+  description: Point current at a previous release and restart (DB untouched)
+steps:
+  - id: switch
+    uses: remote.fs.symlink
+    with:
+      target: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+      linkPath: "/opt/runory/apps/{{ inputs.projectName }}/current"
+  - id: restart
+    uses: systemd.restart
+    with:
+      service: "{{ inputs.projectName }}"
+  - id: health
+    uses: http.check
+    with:
+      url: "http://127.0.0.1:{{ inputs.port }}{{ inputs.healthPath }}"

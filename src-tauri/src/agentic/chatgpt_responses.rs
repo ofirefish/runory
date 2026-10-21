@@ -62,7 +62,10 @@ pub(super) async fn parse_chatgpt_responses(
     match response.status() {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => return Err(AppError::ModelAuthFailed),
         StatusCode::TOO_MANY_REQUESTS => return Err(AppError::ModelRateLimited),
-        StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND => return Err(AppError::ModelInvalid),
+        // 404 usually means the configured model id is unknown. Generic 400s are
+        // often runtime request/context issues, not a broken endpoint setting.
+        StatusCode::NOT_FOUND => return Err(AppError::ModelInvalid),
+        StatusCode::BAD_REQUEST => return Err(AppError::ModelUnavailable),
         status if !status.is_success() => return Err(AppError::ModelUnavailable),
         _ => {}
     }
@@ -168,9 +171,10 @@ impl ResponseStream {
                     Some("invalid_api_key" | "authentication_error" | "token_expired") => {
                         AppError::ModelAuthFailed
                     }
-                    Some("invalid_request_error" | "model_not_found" | "unsupported_parameter") => {
-                        AppError::ModelInvalid
-                    }
+                    Some("model_not_found" | "unsupported_parameter") => AppError::ModelInvalid,
+                    // Broad invalid_request covers context overflow and similar
+                    // runtime failures; do not blame the saved model profile.
+                    Some("invalid_request_error") => AppError::ModelUnavailable,
                     _ => AppError::ModelUnavailable,
                 })
             }
@@ -386,7 +390,8 @@ mod tests {
     #[tokio::test]
     async fn http_failures_use_stable_codes_without_provider_body() {
         for (status, code) in [
-            ("400 Bad Request", "MODEL_INVALID"),
+            ("400 Bad Request", "MODEL_UNAVAILABLE"),
+            ("404 Not Found", "MODEL_INVALID"),
             ("401 Unauthorized", "MODEL_AUTH_FAILED"),
             ("429 Too Many Requests", "MODEL_RATE_LIMITED"),
             ("503 Unavailable", "MODEL_UNAVAILABLE"),

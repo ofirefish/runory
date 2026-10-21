@@ -9,7 +9,9 @@ COPY entrypoint.sh /entrypoint.sh
 COPY systemctl-fixture.sh /usr/local/bin/systemctl
 COPY journalctl-fixture.sh /usr/local/bin/journalctl
 COPY nginx-fixture.sh /usr/local/bin/nginx
-RUN chmod 0755 /entrypoint.sh /usr/local/bin/systemctl /usr/local/bin/journalctl /usr/local/bin/nginx
+# Windows checkouts may use CRLF; the Linux shebang must not contain a CR.
+RUN sed -i 's/\r$//' /entrypoint.sh /usr/local/bin/systemctl /usr/local/bin/journalctl /usr/local/bin/nginx /etc/ssh/sshd_config \
+    && chmod 0755 /entrypoint.sh /usr/local/bin/systemctl /usr/local/bin/journalctl /usr/local/bin/nginx
 
 EXPOSE 22
 ENTRYPOINT ["/entrypoint.sh"]

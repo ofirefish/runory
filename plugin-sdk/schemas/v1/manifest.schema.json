@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runory.app/schemas/plugin-api/v1/manifest.schema.json",
+  "title": "Runory Plugin Manifest (API 1)",
+  "description": "Canonical Plugin API 1.0 manifest contract. Matches Runory Core validators in src-tauri/src/plugins/manifest/.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "version",
+    "publisher",
+    "apiVersion"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Manifest schema major version. API 1 requires exactly 1."
+    },
+    "id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9.-]{2,127}$",
+      "description": "Reverse-domain-like plugin ID (e.g. runory.hello)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable display name."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[A-Za-z0-9.-]+)?$",
+      "description": "Plugin semver (major.minor.patch with optional pre-release on patch)."
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional short description."
+    },
+    "publisher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "apiVersion": {
+      "type": "string",
+      "const": "1",
+      "description": "Plugin API major version string. Breaking changes require \"2\"."
+    },
+    "minRunoryVersion": {
+      "type": "string",
+      "description": "Optional minimum Runory semver."
+    },
+    "maxRunoryVersion": {
+      "type": "string",
+      "description": "Optional maximum Runory semver (inclusive)."
+    },
+    "icon": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Package-relative icon path. Must not escape the package root."
+    },
+    "logo": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Package-relative PNG or WebP logo path. Remote URLs, absolute paths, traversal, and SVG are rejected. Max 512 KB."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "terminal",
+        "files",
+        "dashboard",
+        "operations",
+        "deployment"
+      ],
+      "description": "Workspace placement category. Optional; missing category means workspace entries are not exposed."
+    },
+    "permissions": {
+      "type": "array",
+      "description": "Requested capabilities. Unknown permissions fail validation.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "host.read",
+              "host.metadata.read",
+              "ssh.exec",
+              "ssh.exec.sudo",
+              "ssh.shell",
+              "remote.fs.read",
+              "remote.fs.write",
+              "remote.fs.upload",
+              "remote.fs.delete",
+              "secret.reference",
+              "network.https"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["permission"],
+            "properties": {
+              "permission": {
+                "type": "string",
+                "enum": [
+                  "host.read",
+                  "host.metadata.read",
+                  "ssh.exec",
+                  "ssh.exec.sudo",
+                  "ssh.shell",
+                  "remote.fs.read",
+                  "remote.fs.write",
+                  "remote.fs.upload",
+                  "remote.fs.delete",
+                  "secret.reference",
+                  "network.https"
+                ]
+              },
+              "hosts": {
+                "type": "array",
+                "items": { "type": "string" },
+                "default": []
+              }
+            }
+          }
+        ]
+      },
+      "default": []
+    },
+    "contributes": {
+      "$ref": "#/$defs/contributions",
+      "default": {}
+    }
+  },
+  "$defs": {
+    "contributions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/commandContribution" },
+          "default": []
+        },
+        "hostMenus": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/hostMenuContribution" },
+          "default": []
+        },
+        "workflows": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workflowContribution" },
+          "default": []
+        },
+        "agentTools": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/agentToolContribution" },
+          "default": []
+        },
+        "workspaceEntries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workspaceEntryContribution" },
+          "default": []
+        }
+      }
+    },
+    "commandContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "category": { "type": "string" },
+        "icon": { "type": "string" }
+      }
+    },
+    "hostMenuContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Must reference a contributes.commands[].id."
+        },
+        "group": { "type": "string" },
+        "when": {
+          "type": "string",
+          "description": "Allowlisted host-menu condition only.",
+          "enum": [
+            "host.os == \"linux\"",
+            "host.os == 'linux'",
+            "host.os == \"windows\"",
+            "host.os == 'windows'",
+            "host.arch == \"x86_64\"",
+            "host.arch == 'x86_64'",
+            "host.tags contains \"production\"",
+            "host.tags contains 'production'"
+          ]
+        }
+      }
+    },
+    "workflowContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "file"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Package-relative workflow YAML path."
+        },
+        "inputSchema": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Package-relative JSON Schema for workflow inputs."
+        }
+      }
+    },
+    "agentToolContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "workflow", "risk"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow contribution id."
+        },
+        "risk": {
+          "type": "string",
+          "enum": ["R0", "R1", "R2", "R3", "R4"],
+          "description": "Declarative metadata only. Core risk remains authoritative."
+        },
+        "requiresApproval": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "workspaceEntryContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "command"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Must reference a contributes.commands[].id."
+        },
+        "actions": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": [],
+          "description": "Additional command ids shown in the overflow menu."
+        },
+        "order": {
+          "type": "integer",
+          "description": "Sort order ascending. Default 1000 when omitted."
+        }
+      }
+    }
+  }
+}

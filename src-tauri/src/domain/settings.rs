@@ -14,6 +14,19 @@ pub struct AppSettings {
     /// Absolute path to Teleport `tsh`. Empty / unset = PATH lookup.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teleport_cli_path: Option<String>,
+    /// Allow installing unsigned local plugin packages (PP4 Developer Mode).
+    #[serde(default)]
+    pub plugin_developer_mode: bool,
+    /// Official Marketplace base URL (website-hosted API). Empty clears to offline cache-only.
+    #[serde(
+        default = "default_marketplace_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub marketplace_url: Option<String>,
+}
+
+fn default_marketplace_url() -> Option<String> {
+    Some("https://runory.app".to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,6 +65,8 @@ impl Default for AppSettings {
             terminal_theme: TerminalTheme::Runory,
             boundary_cli_path: None,
             teleport_cli_path: None,
+            plugin_developer_mode: false,
+            marketplace_url: default_marketplace_url(),
         }
     }
 }

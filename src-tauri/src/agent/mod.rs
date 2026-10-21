@@ -9,6 +9,7 @@ mod broadcast;
 mod changeset;
 mod checkpoint;
 mod command;
+mod command_loop;
 mod controller;
 mod decision;
 mod dispatch;

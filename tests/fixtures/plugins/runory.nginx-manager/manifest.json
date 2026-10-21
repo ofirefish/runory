@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "id": "runory.nginx-manager",
+  "name": "Nginx Manager",
+  "version": "1.0.0",
+  "description": "Inspect, test, and reload nginx via Runory Core actions",
+  "publisher": {
+    "id": "runory",
+    "name": "Runory"
+  },
+  "apiVersion": "1",
+  "minRunoryVersion": "0.1.0",
+  "permissions": [
+    "host.read",
+    "ssh.exec",
+    "ssh.exec.sudo",
+    "remote.fs.read"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "nginx.inspect",
+        "title": "Inspect Nginx",
+        "category": "Nginx"
+      },
+      {
+        "id": "nginx.test",
+        "title": "Test Nginx Config",
+        "category": "Nginx"
+      },
+      {
+        "id": "nginx.reload",
+        "title": "Reload Nginx",
+        "category": "Nginx"
+      }
+    ],
+    "hostMenus": [
+      {
+        "command": "nginx.inspect",
+        "group": "nginx",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "nginx.test",
+        "group": "nginx",
+        "when": "host.os == 'linux'"
+      },
+      {
+        "command": "nginx.reload",
+        "group": "nginx",
+        "when": "host.os == 'linux'"
+      }
+    ],
+    "workflows": [
+      {
+        "id": "nginx.inspect",
+        "file": "workflows/inspect.yaml"
+      },
+      {
+        "id": "nginx.test",
+        "file": "workflows/test.yaml"
+      },
+      {
+        "id": "nginx.reload",
+        "file": "workflows/reload.yaml"
+      }
+    ]
+  }
+}

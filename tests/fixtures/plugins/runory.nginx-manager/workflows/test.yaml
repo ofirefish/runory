@@ -1,0 +1,15 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: nginx.test
+  name: Test Nginx Config
+  description: Run nginx -t with sudo (config check)
+steps:
+  - id: detect
+    uses: system.detect
+  - id: nginx-test
+    uses: ssh.command
+    with:
+      executable: nginx
+      args: ["-t"]
+      privilege: sudo

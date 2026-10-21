@@ -1,0 +1,67 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: django.update
+  name: Update Django Project
+  description: Create a new immutable release and switch current after health checks
+steps:
+  - id: detect
+    uses: system.detect
+  - id: release
+    uses: remote.fs.mkdir
+    with:
+      path: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: clone
+    uses: git.clone
+    with:
+      repository: "{{ inputs.repository }}"
+      branch: "{{ inputs.branch }}"
+      destination: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: revision
+    uses: git.rev_parse
+    with:
+      path: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: venv
+    uses: python.venv
+    with:
+      python: "{{ inputs.python }}"
+      path: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv"
+  - id: dependencies
+    uses: python.pip.install
+    with:
+      venv: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv"
+      requirements:
+        file: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/requirements.txt"
+  - id: check
+    uses: ssh.command
+    with:
+      executable: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv/bin/python"
+      args: ["manage.py", "check"]
+      cwd: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: migrate
+    uses: database.migration
+    with:
+      executable: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv/bin/python"
+      args: ["manage.py", "migrate"]
+      cwd: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: collectstatic
+    uses: ssh.command
+    with:
+      executable: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv/bin/python"
+      args: ["manage.py", "collectstatic", "--noinput"]
+      cwd: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: checkpoint
+    uses: changeset.checkpoint
+    with:
+      name: before-update-switch
+      currentLink: "/opt/runory/apps/{{ inputs.projectName }}/current"
+      service: "{{ inputs.projectName }}"
+  - id: activate
+    uses: release.activate
+    with:
+      currentLink: "/opt/runory/apps/{{ inputs.projectName }}/current"
+      releaseDir: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+      previousTarget: "{{ steps.checkpoint.outputs.previousTarget }}"
+      service: "{{ inputs.projectName }}"
+      healthUrl: "http://127.0.0.1:{{ inputs.port }}{{ inputs.healthPath }}"
+      migrationRan: true

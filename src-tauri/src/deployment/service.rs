@@ -41,11 +41,22 @@ impl DeploymentService {
         validate_remote_url(&remote_url)?;
         validate_branch(&branch)?;
         let profile_id = sessions.profile_id(session_id).await?;
-        let script = r#"command -v git >/dev/null 2>&1 || exit 90
-if test -d "$1/.git"; then git -C "$1" remote set-url origin "$2" && git -C "$1" fetch origin "$3" && git -C "$1" checkout "$3"
-elif test -e "$1"; then exit 91
-else git clone --branch "$3" --single-branch "$2" "$1"
-fi"#;
+        let script = r#"set -e
+command -v git >/dev/null 2>&1 || exit 90
+parent=$(dirname -- "$1")
+mkdir -p -- "$parent" || exit 93
+if test -d "$1"; then test -r "$1" && test -x "$1" || exit 93; fi
+if test -d "$1/.git"; then
+  git -C "$1" remote set-url origin "$2"
+  git -C "$1" fetch --prune origin "$3"
+  git -C "$1" checkout -B "$3" "origin/$3" 2>/dev/null || git -C "$1" checkout "$3"
+elif test ! -e "$1" || { test -d "$1" && test -z "$(ls -A "$1" 2>/dev/null || true)"; }; then
+  git clone --branch "$3" --single-branch -- "$2" "$1"
+else
+  exit 92
+fi
+printf 'GIT_OK %s %s\n' "$1" "$3"
+"#;
         let result = sessions
             .exec(
                 session_id,
@@ -53,7 +64,7 @@ fi"#;
                     .with_timeout(Duration::from_secs(180)),
             )
             .await
-            .map(ensure_operation)
+            .map(git_setup_result)
             .and_then(|value| value);
         self.finish(profile_id, "git-setup", repository_path, result)
             .await
@@ -67,10 +78,18 @@ fi"#;
         branch: String,
         build: BuildPreset,
         restart: RestartTarget,
+        requirements_path: Option<String>,
     ) -> AppResult<OperationResult> {
         validate_remote_path(&repository_path)?;
         validate_branch(&branch)?;
         validate_restart(&restart)?;
+        if let Some(path) = requirements_path.as_deref() {
+            if path.starts_with('/') {
+                validate_remote_path(path)?;
+            } else if !path.is_empty() {
+                crate::deployment::validation::validate_relative_path(path)?;
+            }
+        }
         let profile_id = sessions.profile_id(session_id).await?;
         let pull = RemoteCommand::script("command -v git >/dev/null 2>&1 || exit 90; test -d \"$1/.git\" || exit 91; git -C \"$1\" fetch --prune origin \"$2\" && git -C \"$1\" checkout \"$2\" && git -C \"$1\" pull --ff-only origin \"$2\"", vec![repository_path.clone(), branch]).with_timeout(Duration::from_secs(180));
         let result = async {
@@ -79,7 +98,9 @@ fi"#;
                 return Ok(first);
             }
             let mut outputs = vec![first];
-            if let Some(command) = build_command(build, &repository_path) {
+            if let Some(command) =
+                build_command(build, &repository_path, requirements_path.as_deref())
+            {
                 let value = ensure_operation(sessions.exec(session_id, command).await?)?;
                 if !value.success {
                     return Ok(value);
@@ -250,7 +271,7 @@ fi"#;
         Ok(records)
     }
 
-    async fn finish(
+    pub(crate) async fn finish(
         &self,
         profile_id: Uuid,
         operation: &str,
@@ -293,26 +314,67 @@ fi"#;
     }
 }
 
-fn build_command(preset: BuildPreset, path: &str) -> Option<RemoteCommand> {
+pub(crate) fn build_command(
+    preset: BuildPreset,
+    path: &str,
+    requirements_path: Option<&str>,
+) -> Option<RemoteCommand> {
     let script = match preset {
         BuildPreset::None => return None,
-        BuildPreset::Npm => "command -v npm >/dev/null 2>&1 || exit 90; cd \"$1\" && npm ci && npm run build",
-        BuildPreset::Pnpm => "command -v pnpm >/dev/null 2>&1 || exit 90; cd \"$1\" && pnpm install --frozen-lockfile && pnpm build",
-        BuildPreset::Cargo => "command -v cargo >/dev/null 2>&1 || exit 90; cd \"$1\" && cargo build --release --locked",
+        BuildPreset::Npm => {
+            "command -v npm >/dev/null 2>&1 || exit 90; cd \"$1\" && npm ci && npm run build"
+        }
+        BuildPreset::Pnpm => {
+            "command -v pnpm >/dev/null 2>&1 || exit 90; cd \"$1\" && pnpm install --frozen-lockfile && pnpm build"
+        }
+        BuildPreset::Cargo => {
+            "command -v cargo >/dev/null 2>&1 || exit 90; cd \"$1\" && cargo build --release --locked"
+        }
+        BuildPreset::Pip => {
+            r#"set -e
+command -v python3 >/dev/null 2>&1 || exit 90
+cd "$1"
+req="${2:-requirements.txt}"
+case "$req" in
+  /*) ;;
+  *) req="$1/$req" ;;
+esac
+test -f "$req" || exit 91
+if ! test -d .venv; then python3 -m venv .venv; fi
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r "$req"
+"#
+        }
     };
-    Some(RemoteCommand::script(script, vec![path.into()]).with_timeout(Duration::from_secs(600)))
+    let args = match preset {
+        BuildPreset::Pip => vec![
+            path.into(),
+            requirements_path.unwrap_or("requirements.txt").into(),
+        ],
+        _ => vec![path.into()],
+    };
+    Some(RemoteCommand::script(script, args).with_timeout(Duration::from_secs(600)))
 }
 
 fn restart_command(target: &RestartTarget, path: &str) -> Option<RemoteCommand> {
     match target {
         RestartTarget::None => None,
-        RestartTarget::Systemd { service } => Some(RemoteCommand::script("command -v systemctl >/dev/null 2>&1 || exit 90; systemctl restart \"$1\"", vec![service.clone()])),
-        RestartTarget::Pm2 { process } => Some(RemoteCommand::script("command -v pm2 >/dev/null 2>&1 || exit 90; pm2 restart \"$1\"", vec![process.clone()])),
-        RestartTarget::DockerCompose { service } => Some(RemoteCommand::script("command -v docker >/dev/null 2>&1 || exit 90; cd \"$1\" && docker compose restart \"$2\"", vec![path.into(), service.clone()])),
+        RestartTarget::Systemd { service } => Some(RemoteCommand::script(
+            "command -v systemctl >/dev/null 2>&1 || exit 90; systemctl restart \"$1\"",
+            vec![service.clone()],
+        )),
+        RestartTarget::Pm2 { process } => Some(RemoteCommand::script(
+            "command -v pm2 >/dev/null 2>&1 || exit 90; pm2 restart \"$1\"",
+            vec![process.clone()],
+        )),
+        RestartTarget::DockerCompose { service } => Some(RemoteCommand::script(
+            "command -v docker >/dev/null 2>&1 || exit 90; cd \"$1\" && docker compose restart \"$2\"",
+            vec![path.into(), service.clone()],
+        )),
     }
 }
 
-fn ensure_operation(result: RemoteExecResult) -> AppResult<OperationResult> {
+pub(crate) fn ensure_operation(result: RemoteExecResult) -> AppResult<OperationResult> {
     if result.exit_code == 90 {
         return Err(AppError::UnsupportedRemote);
     }
@@ -330,14 +392,68 @@ fn ensure_operation(result: RemoteExecResult) -> AppResult<OperationResult> {
     })
 }
 
-fn join_outputs(values: Vec<OperationResult>) -> OperationResult {
+fn git_setup_result(result: RemoteExecResult) -> AppResult<OperationResult> {
+    match result.exit_code {
+        92 => Err(AppError::DeploymentGitTargetNotEmpty),
+        93 => Err(AppError::DeploymentGitPathDenied),
+        _ => ensure_operation(result),
+    }
+}
+
+pub(crate) fn join_outputs(values: Vec<OperationResult>) -> OperationResult {
     OperationResult {
-        success: true,
+        success: values.iter().all(|value| value.success),
         output: values
             .into_iter()
             .map(|value| value.output)
             .filter(|value| !value.is_empty())
             .collect::<Vec<_>>()
             .join("\n"),
+    }
+}
+
+#[cfg(test)]
+mod result_tests {
+    use super::*;
+
+    #[test]
+    fn git_setup_distinguishes_directory_errors_from_invalid_configuration() {
+        for (exit_code, code) in [
+            (92, "DEPLOYMENT_GIT_TARGET_NOT_EMPTY"),
+            (93, "DEPLOYMENT_GIT_PATH_DENIED"),
+            (90, "UNSUPPORTED_REMOTE"),
+        ] {
+            let result = git_setup_result(RemoteExecResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code,
+            });
+            assert_eq!(result.unwrap_err().code(), code);
+        }
+        assert!(
+            !git_setup_result(RemoteExecResult {
+                stdout: String::new(),
+                stderr: "checkout failed".into(),
+                exit_code: 1
+            })
+            .unwrap()
+            .success
+        );
+    }
+
+    #[test]
+    fn failed_install_is_not_reported_as_successful_deployment() {
+        let result = join_outputs(vec![
+            OperationResult {
+                success: true,
+                output: "prepared".into(),
+            },
+            OperationResult {
+                success: false,
+                output: "UNIT_PENDING".into(),
+            },
+        ]);
+        assert!(!result.success);
+        assert_eq!(result.output, "prepared\nUNIT_PENDING");
     }
 }

@@ -52,6 +52,17 @@ The homepage and `/download` prefer the published release marked `is_latest`. If
 
 Import the repository, select `apps/web` as the Root Directory, and add the four variables above for every deployed environment. Set `RUNORY_APP_ORIGIN` to that environment's canonical HTTPS origin. Add the matching confirmation and password-recovery URLs to the Supabase Auth redirect allow list.
 
+Optional: set `MARKETPLACE_ADMIN_TOKEN` for CI/scripted plugin publishes (`x-runory-marketplace-token` header). Owners can also publish from `/[locale]/admin/store`.
+
+## Plugin Marketplace API
+
+Desktop Discover uses the website HTTP API (default `marketplaceUrl=https://runory.app`):
+
+- Public: `/api/v1/plugins`, versions, download, publisher keys, revocations
+- Admin: `/api/v1/admin/publish` (platform owner session or admin token)
+
+Apply migration `20260918090000_web_plugin_marketplace.sql` before using Store / API. Packages are stored in the private Supabase Storage bucket `plugin-packages`. Signature verification remains in the desktop Core.
+
 ## First platform administrator
 
 The web application deliberately cannot promote an account. After applying the migrations, register the first confirmed user through the Supabase SQL Editor:

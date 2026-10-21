@@ -284,14 +284,14 @@ fn prepare_command_proposal(
 /// authorization decision: every command still requires approval. Shell is
 /// too expressive to prove read-only statically, so ambiguous composition is
 /// labelled `Unknown` instead of being presented as safe.
+///
+/// Power verbs (`reboot` / `shutdown` / …) match as executables only, so
+/// diagnostic filters like `last -x reboot shutdown` are not Critical.
 fn classify_command(command: &str) -> (CommandRisk, CommandMutability) {
     let lower = command.to_ascii_lowercase();
-    if contains_any(
-        &lower,
-        &[
-            "rm -rf", "mkfs", "wipefs", "dd if=", "shutdown", "poweroff", "reboot", ":(){",
-        ],
-    ) {
+    if contains_any(&lower, &["rm -rf", "mkfs", "wipefs", "dd if=", ":(){"])
+        || command_invokes_critical_power_verb(&lower)
+    {
         return (CommandRisk::Critical, CommandMutability::Mutating);
     }
     if contains_any(
@@ -341,6 +341,11 @@ fn classify_command(command: &str) -> (CommandRisk, CommandMutability) {
             "&&", "||", ";", "$(", "`", " -exec ", " xargs ", "sh -c", "bash -c",
         ],
     ) {
+        // Read-only diagnostic chains (`uptime; date; last … | head`) are common
+        // timeline probes. Keep them Low when every segment is a known reader.
+        if is_read_safe_composition(&lower) {
+            return (CommandRisk::Low, CommandMutability::ReadIntent);
+        }
         return (CommandRisk::High, CommandMutability::Unknown);
     }
     if without_fd_redirection.contains('>') {
@@ -358,6 +363,241 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
 
 fn starts_with_any(value: &str, prefixes: &[&str]) -> bool {
     prefixes.iter().any(|prefix| value.starts_with(prefix))
+}
+
+const CRITICAL_POWER_VERBS: &[&str] = &["shutdown", "poweroff", "reboot", "halt"];
+
+/// True when a critical power verb appears as a primary executable (argv0),
+/// including after `sudo` / path prefixes — not merely as a `last` filter arg
+/// or a `which`/`command -v` name lookup.
+fn command_invokes_critical_power_verb(command: &str) -> bool {
+    shell_segments(command)
+        .into_iter()
+        .filter_map(executable_being_invoked)
+        .any(|exe| CRITICAL_POWER_VERBS.contains(&exe.as_str()))
+}
+
+fn executable_being_invoked(segment: &str) -> Option<String> {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut idx = 0;
+    while idx < tokens.len()
+        && tokens[idx].contains('=')
+        && !tokens[idx].starts_with('-')
+        && !tokens[idx].starts_with('\'')
+        && !tokens[idx].starts_with('"')
+    {
+        idx += 1;
+    }
+    if idx >= tokens.len() {
+        return None;
+    }
+
+    let mut exe = strip_executable_path(tokens[idx]);
+    if matches!(exe.as_str(), "which" | "type" | "whereis") {
+        // Name lookup — the looked-up token is not executed.
+        return Some(exe);
+    }
+    if exe == "command" {
+        let mut look = idx + 1;
+        while look < tokens.len() && tokens[look].starts_with('-') {
+            if matches!(tokens[look], "-v" | "-V") {
+                return Some(exe);
+            }
+            look += 1;
+        }
+    }
+    if matches!(
+        exe.as_str(),
+        "sudo" | "doas" | "command" | "time" | "nice" | "nohup" | "env"
+    ) {
+        idx += 1;
+        while idx < tokens.len() && tokens[idx].starts_with('-') {
+            let flag = tokens[idx];
+            idx += 1;
+            if matches!(flag, "-u" | "-g" | "-p" | "-C" | "--user" | "--group")
+                && idx < tokens.len()
+            {
+                idx += 1;
+            }
+        }
+        while idx < tokens.len() && tokens[idx].contains('=') && !tokens[idx].starts_with('-') {
+            idx += 1;
+        }
+        if idx >= tokens.len() {
+            return Some(exe);
+        }
+        exe = strip_executable_path(tokens[idx]);
+    }
+    Some(exe)
+}
+
+/// Known read-oriented timeline / inspection tools. Intentionally excludes
+/// package managers, docker, systemctl mutations, and shell interpreters.
+const READ_SAFE_EXECUTABLES: &[&str] = &[
+    "uptime",
+    "date",
+    "who",
+    "w",
+    "whoami",
+    "id",
+    "uname",
+    "last",
+    "lastb",
+    "echo",
+    "printf",
+    "true",
+    "false",
+    "cat",
+    "head",
+    "tail",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "awk",
+    "sed",
+    "cut",
+    "sort",
+    "uniq",
+    "wc",
+    "tr",
+    "df",
+    "du",
+    "free",
+    "ps",
+    "vmstat",
+    "iostat",
+    "mpstat",
+    "pidstat",
+    "journalctl",
+    "dmesg",
+    "ls",
+    "pwd",
+    "hostname",
+    "timedatectl",
+    "lsblk",
+    "findmnt",
+    "ss",
+    "ip",
+    "basename",
+    "dirname",
+    "command",
+    "type",
+    "which",
+    "stat",
+    "file",
+    "realpath",
+    "readlink",
+    "getent",
+    "env",
+    "printenv",
+    "lscpu",
+    "nproc",
+    "arch",
+];
+
+fn is_read_safe_composition(command: &str) -> bool {
+    if contains_any(
+        command,
+        &["$(", "`", " -exec ", " xargs ", "sh -c", "bash -c"],
+    ) {
+        return false;
+    }
+    let segments = shell_segments(command);
+    if segments.is_empty() {
+        return false;
+    }
+    segments.into_iter().all(|segment| {
+        let Some(exe) = primary_executable(segment) else {
+            return false;
+        };
+        READ_SAFE_EXECUTABLES.contains(&exe.as_str())
+    })
+}
+
+fn shell_segments(command: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let bytes = command.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let is_and = bytes[i] == b'&' && i + 1 < bytes.len() && bytes[i + 1] == b'&';
+        let is_or = bytes[i] == b'|' && i + 1 < bytes.len() && bytes[i + 1] == b'|';
+        let is_pipe = bytes[i] == b'|' && !is_or;
+        let is_seq = bytes[i] == b';';
+        if is_seq || is_and || is_or || is_pipe {
+            let part = command[start..i].trim();
+            if !part.is_empty() {
+                segments.push(part);
+            }
+            i += if is_and || is_or { 2 } else { 1 };
+            start = i;
+            continue;
+        }
+        i += 1;
+    }
+    let part = command[start..].trim();
+    if !part.is_empty() {
+        segments.push(part);
+    }
+    segments
+}
+
+fn primary_executable(segment: &str) -> Option<String> {
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut idx = 0;
+    while idx < tokens.len()
+        && tokens[idx].contains('=')
+        && !tokens[idx].starts_with('-')
+        && !tokens[idx].starts_with('\'')
+        && !tokens[idx].starts_with('"')
+    {
+        idx += 1;
+    }
+    if idx >= tokens.len() {
+        return None;
+    }
+
+    let mut exe = strip_executable_path(tokens[idx]);
+    if matches!(
+        exe.as_str(),
+        "sudo" | "doas" | "command" | "time" | "nice" | "nohup" | "env"
+    ) {
+        idx += 1;
+        while idx < tokens.len() && tokens[idx].starts_with('-') {
+            let flag = tokens[idx];
+            idx += 1;
+            if matches!(flag, "-u" | "-g" | "-p" | "-C" | "--user" | "--group")
+                && idx < tokens.len()
+            {
+                idx += 1;
+            }
+        }
+        // `env VAR=val cmd` — skip further assignments after env wrapper.
+        while idx < tokens.len() && tokens[idx].contains('=') && !tokens[idx].starts_with('-') {
+            idx += 1;
+        }
+        if idx >= tokens.len() {
+            return Some(exe);
+        }
+        exe = strip_executable_path(tokens[idx]);
+    }
+    Some(exe)
+}
+
+fn strip_executable_path(token: &str) -> String {
+    token
+        .rsplit('/')
+        .next()
+        .unwrap_or(token)
+        .trim_matches(|c| c == '\'' || c == '"')
+        .to_ascii_lowercase()
 }
 
 fn prepare_change_proposal(
@@ -579,6 +819,66 @@ mod tests {
         };
         assert_eq!(command.risk, CommandRisk::Critical);
         assert_eq!(command.mutability, CommandMutability::Mutating);
+    }
+
+    #[test]
+    fn last_reboot_filter_is_not_critical_but_real_reboot_is() {
+        let validated = validate_decision(AgentDecision::CommandProposal(CommandProposalRequest {
+            command: "uptime; echo '---'; date; echo '---'; last -x reboot shutdown | head -20"
+                .into(),
+            reason_summary: "Establish reboot timeline".into(),
+            observation_analysis: None,
+        }))
+        .expect("timeline probe must remain reviewable");
+        let ValidatedDecision::CommandProposal(command) = validated else {
+            panic!("expected command proposal");
+        };
+        assert_eq!(command.risk, CommandRisk::Low);
+        assert_eq!(command.mutability, CommandMutability::ReadIntent);
+
+        for blocked in [
+            "reboot",
+            "reboot now",
+            "/sbin/reboot",
+            "sudo reboot",
+            "shutdown -h now",
+            "poweroff",
+            "halt",
+        ] {
+            let validated =
+                validate_decision(AgentDecision::CommandProposal(CommandProposalRequest {
+                    command: blocked.into(),
+                    reason_summary: "Must stay critical".into(),
+                    observation_analysis: None,
+                }))
+                .expect("critical power verb still validates structurally");
+            let ValidatedDecision::CommandProposal(command) = validated else {
+                panic!("expected command proposal");
+            };
+            assert_eq!(
+                command.risk,
+                CommandRisk::Critical,
+                "{blocked} must remain Critical"
+            );
+        }
+
+        for allowed in ["which reboot", "command -v reboot", "type reboot"] {
+            let validated =
+                validate_decision(AgentDecision::CommandProposal(CommandProposalRequest {
+                    command: allowed.into(),
+                    reason_summary: "Name lookup only".into(),
+                    observation_analysis: None,
+                }))
+                .expect("name lookup must remain reviewable");
+            let ValidatedDecision::CommandProposal(command) = validated else {
+                panic!("expected command proposal");
+            };
+            assert_ne!(
+                command.risk,
+                CommandRisk::Critical,
+                "{allowed} must not be Critical"
+            );
+        }
     }
 
     #[test]

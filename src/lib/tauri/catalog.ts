@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CreateGroupRequest, CreateProfileRequest, HostGroup, ReorderGroupsRequest, ReorderProfilesRequest, ServerProfile, UpdateGroupRequest, UpdateProfileRequest } from "../../types/domain";
+import type { CatalogImportApplyResult, CatalogImportPreview, CatalogImportSource } from "../../types/import";
 
 export const listGroups = () => invoke<HostGroup[]>("group_list");
 export const createGroup = (request: CreateGroupRequest) => invoke<HostGroup>("group_create", { request });
@@ -11,3 +12,7 @@ export const createProfile = (request: CreateProfileRequest) => invoke<ServerPro
 export const updateProfile = (request: UpdateProfileRequest) => invoke<ServerProfile>("profile_update", { request });
 export const deleteProfile = (id: string) => invoke<void>("profile_delete", { request: { id } });
 export const reorderProfiles = (request: ReorderProfilesRequest) => invoke<ServerProfile[]>("profile_reorder", { request });
+export const previewCatalogImport = (source: CatalogImportSource, path: string) =>
+  invoke<CatalogImportPreview>("catalog_import_preview", { request: { source, path } });
+export const applyCatalogImport = (source: CatalogImportSource, path: string, selectedKeys: string[]) =>
+  invoke<CatalogImportApplyResult>("catalog_import_apply", { request: { source, path, selectedKeys } });

@@ -1,0 +1,10 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: django.restart
+  name: Restart Django Service
+steps:
+  - id: restart
+    uses: systemd.restart
+    with:
+      service: "{{ inputs.projectName }}"

@@ -1,0 +1,19 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: nginx.reload
+  name: Reload Nginx
+  description: Validate config then reload nginx via systemctl (R2/R3)
+steps:
+  - id: nginx-test
+    uses: ssh.command
+    with:
+      executable: nginx
+      args: ["-t"]
+      privilege: sudo
+  - id: nginx-reload
+    uses: ssh.command
+    with:
+      executable: systemctl
+      args: ["reload", "nginx"]
+      privilege: sudo

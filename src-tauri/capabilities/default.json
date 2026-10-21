@@ -20,7 +20,8 @@
       "allow": [
         { "url": "https://*.supabase.co/auth/v1/authorize*" },
         { "url": "http://localhost:*/auth/v1/authorize*" },
-        { "url": "http://127.0.0.1:*/auth/v1/authorize*" }
+        { "url": "http://127.0.0.1:*/auth/v1/authorize*" },
+        { "url": "https://github.com/y01and3/termius-export*" }
       ]
     }
   ]

@@ -1,0 +1,10 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: django.health
+  name: Django Health Check
+steps:
+  - id: health
+    uses: http.check
+    with:
+      url: "http://127.0.0.1:{{ inputs.port }}{{ inputs.healthPath }}"

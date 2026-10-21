@@ -519,11 +519,13 @@ pub async fn agent_v2_run_start(
         .os_distribution
         .map(|value| value.display_label().to_owned())
         .unwrap_or_else(|| "Linux".into());
+    let probe = sessions.host_agent_probe(request.session_id).await;
     let host_context = HostSessionContext {
         os: os.clone(),
         user: profile.username.clone(),
         directory: directory.clone(),
-        system_info: sessions.host_system_info(request.session_id).await,
+        clock: probe.clock,
+        system_info: probe.system_info,
     };
     let run_id = runtime
         .start_run(

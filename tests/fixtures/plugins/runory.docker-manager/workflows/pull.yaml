@@ -1,0 +1,16 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: docker.pull
+  name: Pull Docker Image
+  description: Pull an image from a registry (R3).
+inputs:
+  type: object
+steps:
+  - id: pull
+    uses: ssh.command
+    with:
+      executable: docker
+      args:
+        - pull
+        - "{{ inputs.image }}"

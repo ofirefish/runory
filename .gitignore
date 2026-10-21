@@ -24,6 +24,12 @@ tests/ssh-server/generated/
 
 # Updater signing private key
 runory-updater.key
+
+# Plugin publisher private keys (public *.pub.json may be committed)
+plugin-sdk/keys/*.json
+!plugin-sdk/keys/*.pub.json
+!plugin-sdk/keys/README.md
+
 supabase/.temp/
 .vercel
 .env*

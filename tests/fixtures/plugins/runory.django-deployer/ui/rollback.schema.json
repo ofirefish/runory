@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "required": ["projectName", "releaseId"],
+  "properties": {
+    "projectName": {
+      "type": "string",
+      "title": "Project Name",
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "releaseId": {
+      "type": "string",
+      "title": "Release ID",
+      "description": "Immutable release directory name under releases/"
+    },
+    "port": {
+      "type": "integer",
+      "title": "Gunicorn Port",
+      "default": 8000
+    },
+    "healthPath": {
+      "type": "string",
+      "title": "Health Check Path",
+      "default": "/health/"
+    }
+  }
+}

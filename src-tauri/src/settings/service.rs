@@ -48,6 +48,12 @@ impl SettingsService {
         if let Some(path) = patch.teleport_cli_path {
             settings.teleport_cli_path = normalize_optional_path(path);
         }
+        if let Some(value) = patch.plugin_developer_mode {
+            settings.plugin_developer_mode = value;
+        }
+        if let Some(url) = patch.marketplace_url {
+            settings.marketplace_url = normalize_optional_path(url);
+        }
         self.repository.save(&settings).await?;
         Ok(settings)
     }
@@ -72,6 +78,8 @@ pub struct AppSettingsPatch {
     /// `Some("")` clears the stored path; `None` leaves it unchanged.
     pub boundary_cli_path: Option<String>,
     pub teleport_cli_path: Option<String>,
+    pub plugin_developer_mode: Option<bool>,
+    pub marketplace_url: Option<String>,
 }
 
 #[cfg(test)]
@@ -93,6 +101,11 @@ mod tests {
         assert_eq!(initial.terminal_theme, TerminalTheme::Runory);
         assert_eq!(initial.boundary_cli_path, None);
         assert_eq!(initial.teleport_cli_path, None);
+        assert!(!initial.plugin_developer_mode);
+        assert_eq!(
+            initial.marketplace_url.as_deref(),
+            Some("https://runory.app")
+        );
 
         let updated = service
             .update(AppSettingsPatch {
@@ -101,6 +114,7 @@ mod tests {
                 terminal_theme: Some(TerminalTheme::TokyoNight),
                 boundary_cli_path: Some(r"C:\Tools\boundary.exe".into()),
                 teleport_cli_path: Some(r"C:\Tools\tsh.exe".into()),
+                ..Default::default()
             })
             .await
             .expect("update");

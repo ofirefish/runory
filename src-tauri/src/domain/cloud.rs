@@ -33,6 +33,40 @@ pub struct CloudProfile {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CloudDeploymentApp {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub name: String,
+    pub repository_path: String,
+    pub remote_url: String,
+    pub branch: String,
+    pub build: crate::domain::BuildPreset,
+    pub restart: crate::domain::RestartTarget,
+    pub project_kind: crate::domain::ProjectKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python: Option<crate::domain::PythonProjectConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub php: Option<crate::domain::PhpProjectConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub java: Option<crate::domain::JavaProjectConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<crate::domain::NodeProjectConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub go: Option<crate::domain::GoProjectConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html: Option<crate::domain::HtmlProjectConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<crate::domain::ReverseProxyConfig>,
+    pub setup_step: u8,
+    pub setup_status: crate::domain::DeploymentSetupStatus,
+    pub source_kind: crate::domain::DeploymentSourceKind,
+    #[serde(default)]
+    pub venv_path: String,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloudKeyEnvelope {
     pub salt: Vec<u8>,
     pub nonce: Vec<u8>,
@@ -102,6 +136,7 @@ pub struct CloudApplyRequest {
 pub enum CloudObjectKind {
     Group,
     Profile,
+    DeploymentApp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +182,12 @@ pub struct CloudImportPreview {
     pub profile_updates: usize,
     pub group_deletions: usize,
     pub profile_deletions: usize,
+    #[serde(default)]
+    pub deployment_app_additions: usize,
+    #[serde(default)]
+    pub deployment_app_updates: usize,
+    #[serde(default)]
+    pub deployment_app_deletions: usize,
     pub local_newer: usize,
     pub conflicts: usize,
     pub conflict_items: Vec<CloudConflictItem>,
@@ -159,5 +200,9 @@ pub struct CloudApplyResult {
     pub profiles_applied: usize,
     pub groups_deleted: usize,
     pub profiles_deleted: usize,
+    #[serde(default)]
+    pub deployment_apps_applied: usize,
+    #[serde(default)]
+    pub deployment_apps_deleted: usize,
     pub skipped: usize,
 }

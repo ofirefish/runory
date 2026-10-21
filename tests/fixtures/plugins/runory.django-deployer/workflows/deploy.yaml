@@ -1,0 +1,116 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: django.deploy
+  name: Deploy Django Project
+  description: Immutable release deploy with Gunicorn + systemd + Nginx
+steps:
+  - id: detect
+    uses: system.detect
+  - id: app-root
+    uses: remote.fs.mkdir
+    with:
+      path: "/opt/runory/apps/{{ inputs.projectName }}"
+  - id: releases-root
+    uses: remote.fs.mkdir
+    with:
+      path: "/opt/runory/apps/{{ inputs.projectName }}/releases"
+  - id: shared-root
+    uses: remote.fs.mkdir
+    with:
+      path: "/opt/runory/apps/{{ inputs.projectName }}/shared"
+  - id: write-env
+    uses: remote.fs.write_env
+    if: inputs.environmentSecret != ''
+    with:
+      path: "/opt/runory/apps/{{ inputs.projectName }}/shared/.env"
+      secretRef: "{{ inputs.environmentSecret }}"
+  - id: release
+    uses: remote.fs.mkdir
+    with:
+      path: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: clone
+    uses: git.clone
+    with:
+      repository: "{{ inputs.repository }}"
+      branch: "{{ inputs.branch }}"
+      destination: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: revision
+    uses: git.rev_parse
+    with:
+      path: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: venv
+    uses: python.venv
+    with:
+      python: "{{ inputs.python }}"
+      path: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv"
+  - id: dependencies
+    uses: python.pip.install
+    with:
+      venv: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv"
+      requirements:
+        file: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/requirements.txt"
+  - id: check
+    uses: ssh.command
+    with:
+      executable: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv/bin/python"
+      args: ["manage.py", "check"]
+      cwd: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: migrate
+    uses: database.migration
+    with:
+      executable: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv/bin/python"
+      args: ["manage.py", "migrate"]
+      cwd: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: collectstatic
+    uses: ssh.command
+    with:
+      executable: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}/.venv/bin/python"
+      args: ["manage.py", "collectstatic", "--noinput"]
+      cwd: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+  - id: gunicorn-unit
+    uses: template.render
+    with:
+      template: templates/gunicorn.service.hbs
+      destination: "/etc/systemd/system/{{ inputs.projectName }}.service"
+      variables:
+        projectName: "{{ inputs.projectName }}"
+        runUser: "{{ inputs.runUser }}"
+        runGroup: "{{ inputs.runGroup }}"
+        currentDir: "/opt/runory/apps/{{ inputs.projectName }}/current"
+        sharedDir: "/opt/runory/apps/{{ inputs.projectName }}/shared"
+        workers: "{{ inputs.workers }}"
+        port: "{{ inputs.port }}"
+        wsgi: "{{ inputs.wsgi }}"
+  - id: nginx-config
+    uses: template.render
+    with:
+      template: templates/nginx.conf.hbs
+      destination: "/etc/nginx/sites-available/{{ inputs.projectName }}"
+      variables:
+        domain: "{{ inputs.domain }}"
+        currentDir: "/opt/runory/apps/{{ inputs.projectName }}/current"
+        sharedDir: "/opt/runory/apps/{{ inputs.projectName }}/shared"
+        port: "{{ inputs.port }}"
+  - id: nginx-link
+    uses: remote.fs.symlink
+    with:
+      target: "/etc/nginx/sites-available/{{ inputs.projectName }}"
+      linkPath: "/etc/nginx/sites-enabled/{{ inputs.projectName }}"
+  - id: nginx-test
+    uses: nginx.test
+  - id: checkpoint
+    uses: changeset.checkpoint
+    with:
+      name: before-release-switch
+      currentLink: "/opt/runory/apps/{{ inputs.projectName }}/current"
+      service: "{{ inputs.projectName }}"
+  - id: activate
+    uses: release.activate
+    with:
+      currentLink: "/opt/runory/apps/{{ inputs.projectName }}/current"
+      releaseDir: "/opt/runory/apps/{{ inputs.projectName }}/releases/{{ inputs.releaseId }}"
+      previousTarget: "{{ steps.checkpoint.outputs.previousTarget }}"
+      service: "{{ inputs.projectName }}"
+      healthUrl: "http://127.0.0.1:{{ inputs.port }}{{ inputs.healthPath }}"
+      migrationRan: true

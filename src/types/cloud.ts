@@ -82,12 +82,16 @@ export type SyncObject = {
 export type CloudImportPreview = {
   importId: string; groupAdditions: number; groupUpdates: number; profileAdditions: number;
   profileUpdates: number; groupDeletions: number; profileDeletions: number;
+  deploymentAppAdditions?: number; deploymentAppUpdates?: number; deploymentAppDeletions?: number;
   localNewer: number; conflicts: number; conflictItems: CloudConflictItem[];
 };
-export type CloudObjectKind = "group" | "profile";
+export type CloudObjectKind = "group" | "profile" | "deploymentApp";
 export type CloudConflictItem = { kind: CloudObjectKind; id: string; label: string; localUpdatedAt: string; remoteUpdatedAt: string; remoteDeleted: boolean };
 export type CloudConflictDecision = CloudConflictItem & { resolution: "keepLocal" | "useRemote" };
-export type CloudApplyResult = { groupsApplied: number; profilesApplied: number; groupsDeleted: number; profilesDeleted: number; skipped: number };
+export type CloudApplyResult = {
+  groupsApplied: number; profilesApplied: number; groupsDeleted: number; profilesDeleted: number;
+  deploymentAppsApplied?: number; deploymentAppsDeleted?: number; skipped: number;
+};
 export type CloudUserProfile = {
   id: string;
   display_name: string;

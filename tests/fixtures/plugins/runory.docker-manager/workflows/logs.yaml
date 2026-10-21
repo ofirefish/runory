@@ -1,0 +1,18 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: docker.logs
+  name: Docker Container Logs
+  description: Fetch recent container logs (R0).
+inputs:
+  type: object
+steps:
+  - id: logs
+    uses: ssh.command
+    with:
+      executable: docker
+      args:
+        - logs
+        - --tail
+        - "100"
+        - "{{ inputs.containerId }}"

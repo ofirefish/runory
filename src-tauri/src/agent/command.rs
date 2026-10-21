@@ -125,17 +125,74 @@ fn bounded(value: &str) -> String {
 }
 
 fn looks_like_shell_failure(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    [
-        "no such file or directory",
-        "command not found",
-        "permission denied",
-        "operation not permitted",
-        "syntax error",
-        "cannot be installed without",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+    value.lines().any(line_looks_like_shell_failure)
+}
+
+fn line_looks_like_shell_failure(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || looks_like_log_or_service_line(trimmed) {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains("cannot be installed without")
+        || lower.contains("command not found")
+        || lower.contains("syntax error")
+    {
+        return true;
+    }
+    let file_or_perm = lower.contains("no such file or directory")
+        || lower.contains("permission denied")
+        || lower.contains("operation not permitted");
+    if !file_or_perm {
+        return false;
+    }
+    // `find: '/path': No such file or directory` / `bash: ...: Permission denied`
+    if let Some((head, rest)) = trimmed.split_once(':') {
+        let head = head.trim();
+        if !head.is_empty() && head.len() <= 64 && !head.contains(' ') && !rest.trim().is_empty() {
+            return true;
+        }
+    }
+    lower == "permission denied"
+        || lower == "operation not permitted"
+        || lower.starts_with("permission denied:")
+        || lower.starts_with("operation not permitted:")
+}
+
+fn looks_like_log_or_service_line(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("sshd[")
+        || lower.contains("systemd[")
+        || lower.contains("kernel:")
+        || lower.contains(" cron[")
+        || lower.contains("sudo[")
+        || lower.contains(" failed password")
+        || lower.contains(" invalid user ")
+        || line_starts_with_syslog_timestamp(line)
+}
+
+fn line_starts_with_syslog_timestamp(line: &str) -> bool {
+    let mut parts = line.split_whitespace();
+    let month = parts.next().unwrap_or("");
+    let day = parts.next().unwrap_or("");
+    let time = parts.next().unwrap_or("");
+    const MONTHS: &[&str] = &[
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    if MONTHS.iter().any(|item| *item == month)
+        && day.chars().all(|c| c.is_ascii_digit())
+        && time.contains(':')
+    {
+        return true;
+    }
+    let head: String = line.chars().take(10).collect();
+    head.len() == 10
+        && head.as_bytes()[4] == b'-'
+        && head.as_bytes()[7] == b'-'
+        && head
+            .chars()
+            .filter(|c| *c != '-')
+            .all(|c| c.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -159,5 +216,11 @@ mod tests {
             "npm cannot be installed without node.js.\ninstall node first, and then try again."
         ));
         assert!(!looks_like_shell_failure("/dev/sda2 100G 94G 6G 94% /"));
+        assert!(!looks_like_shell_failure(
+            "Sep 18 12:01:02 host sshd[1422]: Failed password for root from 1.2.3.4 port 22 ssh2"
+        ));
+        assert!(!looks_like_shell_failure(
+            "sshd[1422]: error: connect_to 127.0.0.1: Permission denied"
+        ));
     }
 }

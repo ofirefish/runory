@@ -28,6 +28,13 @@ pub trait CredentialVault: Send + Sync {
         kind: CredentialKind,
         secret: Zeroizing<String>,
     ) -> AppResult<()>;
+    /// Insert many secrets and persist the vault snapshot once.
+    fn put_many(&self, entries: Vec<(Uuid, CredentialKind, Zeroizing<String>)>) -> AppResult<()> {
+        for (profile_id, kind, secret) in entries {
+            self.put(profile_id, kind, secret)?;
+        }
+        Ok(())
+    }
     fn delete(&self, profile_id: Uuid, kind: CredentialKind) -> AppResult<()>;
     fn put_private_key(&self, key_id: Uuid, content: Zeroizing<Vec<u8>>) -> AppResult<()>;
     fn get_private_key(&self, key_id: Uuid) -> AppResult<Zeroizing<Vec<u8>>>;
@@ -262,14 +269,38 @@ impl CredentialService {
         }
     }
 
+    /// Fail-closed before writing secrets (e.g. catalog import with plaintext passwords).
+    pub fn ensure_unlocked(&self) -> AppResult<()> {
+        if self.vault.is_unlocked() {
+            Ok(())
+        } else {
+            Err(AppError::VaultLocked)
+        }
+    }
+
     pub async fn remember(
         &self,
         profile_id: Uuid,
         kind: CredentialKind,
         secret: Zeroizing<String>,
     ) -> AppResult<()> {
+        self.ensure_unlocked()?;
         let vault = Arc::clone(&self.vault);
         tokio::task::spawn_blocking(move || vault.put(profile_id, kind, secret))
+            .await
+            .map_err(|_| AppError::VaultInvalid)?
+    }
+
+    pub async fn remember_many(
+        &self,
+        entries: Vec<(Uuid, CredentialKind, Zeroizing<String>)>,
+    ) -> AppResult<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.ensure_unlocked()?;
+        let vault = Arc::clone(&self.vault);
+        tokio::task::spawn_blocking(move || vault.put_many(entries))
             .await
             .map_err(|_| AppError::VaultInvalid)?
     }

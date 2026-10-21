@@ -1,0 +1,16 @@
+[Unit]
+Description=Gunicorn for {{projectName}}
+After=network.target
+
+[Service]
+Type=simple
+User={{runUser}}
+Group={{runGroup}}
+WorkingDirectory={{currentDir}}
+EnvironmentFile={{sharedDir}}/.env
+ExecStart={{currentDir}}/.venv/bin/gunicorn --workers {{workers}} --bind 127.0.0.1:{{port}} {{wsgi}}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

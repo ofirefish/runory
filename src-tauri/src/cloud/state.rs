@@ -22,6 +22,8 @@ pub(crate) struct OrganizationSyncState {
     #[serde(default)]
     pub known_profiles: HashSet<Uuid>,
     #[serde(default)]
+    pub known_deployment_apps: HashSet<Uuid>,
+    #[serde(default)]
     pub tombstones: Vec<CloudTombstone>,
 }
 

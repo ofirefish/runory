@@ -30,6 +30,10 @@ use super::changeset::{
 };
 use super::checkpoint::{AgentCheckpoint, BudgetCheckpoint, PendingInterruptRef};
 use super::command::CommandOutcome;
+use super::command_loop::{
+    is_redundant_command, loop_rejection_detail, prior_commands_from_observations,
+    redundant_prior_count, COMMAND_LOOP_DETECTED,
+};
 use super::decision::{
     validate_decision, CommandMutability, DecisionError, PreparedCommandProposal,
     ValidatedChangeProposal, ValidatedDecision, AGENT_DECISION_INVALID,
@@ -65,6 +69,17 @@ const MAX_GOAL_BYTES: usize = 8 * 1024;
 const OBSERVATION_CONTEXT_TTL_MS: u64 = 30_000;
 const GENERIC_TOOL_FAILURE_CODE: &str = "TOOL_FAILED";
 const COMMAND_EVENT_PREVIEW_CHARS: usize = 8 * 1024;
+const MAX_REASONER_RECOVERIES: u32 = 2;
+
+fn recoverable_reasoner_error(code: &str) -> bool {
+    matches!(
+        code,
+        "MODEL_JSON_INVALID"
+            | "MODEL_RESPONSE_INVALID"
+            | "MODEL_RESPONSE_EMPTY"
+            | "MODEL_DECISION_INVALID"
+    )
+}
 
 /// Budgets for one run. Deterministic Rust-side limits; the Reasoner sees
 /// them but cannot change them.
@@ -199,6 +214,8 @@ pub struct AgentController<R: Reasoner, D: ToolDispatcher> {
     tool_calls_used: u32,
     pending_command_verification: bool,
     pending_command_analysis: Option<Uuid>,
+    /// Bounded recoveries for flaky model JSON / empty replies before failing.
+    consecutive_reasoner_recoveries: u32,
     loop_started_at: Option<Instant>,
 }
 
@@ -249,6 +266,7 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
             tool_calls_used: 0,
             pending_command_verification: false,
             pending_command_analysis: None,
+            consecutive_reasoner_recoveries: 0,
             loop_started_at: None,
         };
         controller.emit(AgentEvent::RunCreated)?;
@@ -309,6 +327,7 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
             tool_calls_used,
             pending_command_verification: false,
             pending_command_analysis: None,
+            consecutive_reasoner_recoveries: 0,
             loop_started_at: Some(started),
         })
     }
@@ -669,6 +688,36 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
             mutability: command.mutability.as_str().into(),
         })?;
 
+        let prior_commands = prior_commands_from_observations(&self.observations);
+        if is_redundant_command(&command.command, &prior_commands) {
+            let repeats = redundant_prior_count(&command.command, &prior_commands);
+            let summary = format!("Repeated command rejected ({COMMAND_LOOP_DETECTED})");
+            let detail = format!(
+                "Command: {}\n{}",
+                command.command,
+                loop_rejection_detail(repeats)
+            );
+            self.emit(AgentEvent::ObservationAdded {
+                summary: summary.clone(),
+            })?;
+            self.observations.push(Observation {
+                tool_call_id: Some(command.command_id),
+                tool_name: Some("agent.command".into()),
+                success: false,
+                error_code: Some(COMMAND_LOOP_DETECTED.into()),
+                summary,
+                detail: Some(detail),
+            });
+            self.trace_runtime(
+                "command_proposal",
+                "agent.command",
+                "deny",
+                "loop",
+                AgentRunStateV2::Reasoning,
+            );
+            return Ok(None);
+        }
+
         let (policy_version, policy_hash) = match self.gate.authorize_command(&command).await {
             CommandAuthorization::RequireApproval {
                 risk: _,
@@ -686,7 +735,10 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
                     success: false,
                     error_code: Some(reason_code),
                     summary,
-                    detail: None,
+                    detail: Some(format!(
+                        "Command: {}\nPolicy blocked this proposal.",
+                        command.command
+                    )),
                 });
                 self.trace_runtime(
                     "command_proposal",
@@ -967,7 +1019,36 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
             };
             self.metrics.record_reasoner_round(context_tokens);
             let decision = match decision {
-                Ok(decision) => decision,
+                Ok(decision) => {
+                    self.consecutive_reasoner_recoveries = 0;
+                    decision
+                }
+                Err(error)
+                    if recoverable_reasoner_error(&error.code)
+                        && self.consecutive_reasoner_recoveries < MAX_REASONER_RECOVERIES =>
+                {
+                    self.consecutive_reasoner_recoveries =
+                        self.consecutive_reasoner_recoveries.saturating_add(1);
+                    let summary = format!(
+                        "Model reply was unusable ({}); continuing with existing evidence",
+                        error.code
+                    );
+                    self.emit(AgentEvent::ObservationAdded {
+                        summary: summary.clone(),
+                    })?;
+                    self.observations.push(Observation {
+                        tool_call_id: None,
+                        tool_name: None,
+                        success: false,
+                        error_code: Some(error.code.clone()),
+                        summary,
+                        detail: Some(
+                            "The model returned incomplete or invalid JSON. Do not repeat the last command; synthesize from evidence or propose a different next step."
+                                .into(),
+                        ),
+                    });
+                    continue;
+                }
                 Err(error) => return self.fail_reasoner(error.code),
             };
             if self.is_cancelled() {
@@ -989,10 +1070,11 @@ impl<R: Reasoner, D: ToolDispatcher> AgentController<R, D> {
             match validated {
                 ValidatedDecision::Final { summary } => {
                     if self.pending_command_verification {
-                        let already_notified = self.observations.last().is_some_and(|observation| {
-                            observation.error_code.as_deref()
-                                == Some("COMMAND_VERIFICATION_REQUIRED")
-                        });
+                        let already_notified =
+                            self.observations.last().is_some_and(|observation| {
+                                observation.error_code.as_deref()
+                                    == Some("COMMAND_VERIFICATION_REQUIRED")
+                            });
                         if already_notified {
                             // Avoid spamming the same observation; park so the
                             // user can Stop or steer instead of burning rounds.

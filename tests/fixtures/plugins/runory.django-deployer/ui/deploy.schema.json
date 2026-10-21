@@ -1,0 +1,77 @@
+{
+  "type": "object",
+  "required": ["projectName", "repository", "branch", "wsgi", "domain", "releaseId"],
+  "properties": {
+    "projectName": {
+      "type": "string",
+      "title": "Project Name",
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "repository": {
+      "type": "string",
+      "title": "Git Repository"
+    },
+    "branch": {
+      "type": "string",
+      "title": "Branch",
+      "default": "main"
+    },
+    "releaseId": {
+      "type": "string",
+      "title": "Release ID",
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "python": {
+      "type": "string",
+      "title": "Python Executable",
+      "default": "python3"
+    },
+    "wsgi": {
+      "type": "string",
+      "title": "WSGI Application",
+      "description": "Example: config.wsgi:application"
+    },
+    "domain": {
+      "type": "string",
+      "title": "Domain"
+    },
+    "port": {
+      "type": "integer",
+      "title": "Gunicorn Port",
+      "default": 8000,
+      "minimum": 1024,
+      "maximum": 65535
+    },
+    "healthPath": {
+      "type": "string",
+      "title": "Health Check Path",
+      "default": "/health/"
+    },
+    "runUser": {
+      "type": "string",
+      "title": "Service User",
+      "default": "www-data"
+    },
+    "runGroup": {
+      "type": "string",
+      "title": "Service Group",
+      "default": "www-data"
+    },
+    "workers": {
+      "type": "integer",
+      "title": "Gunicorn Workers",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 32
+    },
+    "environmentSecret": {
+      "type": "string",
+      "format": "secret-ref",
+      "title": "Environment Secret"
+    }
+  }
+}

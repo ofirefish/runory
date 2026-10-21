@@ -1,0 +1,16 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: docker.start
+  name: Start Docker Container
+  description: Start a stopped container (R2).
+inputs:
+  type: object
+steps:
+  - id: start
+    uses: ssh.command
+    with:
+      executable: docker
+      args:
+        - start
+        - "{{ inputs.containerId }}"

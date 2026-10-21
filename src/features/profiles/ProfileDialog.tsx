@@ -364,8 +364,8 @@ export function ProfileDialog({ profile, initialGroupId = null, onClose }: { pro
           {keySourceType === "file" ? (
             <FormField id="profile-key-path" label={t("profile.privateKey")} error={errors.keyPath ? t("validation.profilePrivateKey") : undefined} hint={t("profile.privateKeyHint")}>
               <div className="flex gap-2">
-                <Input id="profile-key-path" className="min-w-0 font-mono" readOnly placeholder={t("profile.keyPathPlaceholder")} aria-invalid={Boolean(errors.keyPath)} aria-describedby={errors.keyPath ? "profile-key-path-error" : "profile-key-path-hint"} disabled={busy} {...register("keyPath")} />
-                <Button type="button" variant="secondary" disabled={busy} onClick={() => void browse()}><FolderOpen size={16} aria-hidden="true" /><span className="hidden sm:inline">{t("profile.browse")}</span></Button>
+                <Input id="profile-key-path" className="min-w-0 flex-1 font-mono" readOnly placeholder={t("profile.keyPathPlaceholder")} aria-invalid={Boolean(errors.keyPath)} aria-describedby={errors.keyPath ? "profile-key-path-error" : "profile-key-path-hint"} disabled={busy} {...register("keyPath")} />
+                <Button type="button" variant="secondary" className="shrink-0 whitespace-nowrap" disabled={busy} onClick={() => void browse()}><FolderOpen size={16} aria-hidden="true" /><span className="hidden sm:inline">{t("profile.browse")}</span></Button>
               </div>
             </FormField>
           ) : (

@@ -1,0 +1,40 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: django.preflight
+  name: Django Preflight Check
+  description: Non-mutating readiness checks for Django deployment
+steps:
+  - id: detect
+    uses: system.detect
+  - id: python
+    uses: system.command_exists
+    with:
+      command: python3
+  - id: git
+    uses: system.command_exists
+    with:
+      command: git
+  - id: nginx
+    uses: system.command_exists
+    with:
+      command: nginx
+  - id: systemctl
+    uses: system.command_exists
+    with:
+      command: systemctl
+  - id: disk
+    uses: system.disk
+  - id: memory
+    uses: system.memory
+  - id: port
+    uses: network.tcp_check
+    with:
+      host: "127.0.0.1"
+      port: "{{ inputs.port }}"
+  - id: report
+    uses: system.preflight_report
+    with:
+      host: "127.0.0.1"
+      port: "{{ inputs.port }}"
+      minPython: "3.10"

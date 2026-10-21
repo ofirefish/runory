@@ -1,0 +1,47 @@
+{
+  "type": "object",
+  "required": ["projectName", "repository", "branch", "releaseId"],
+  "properties": {
+    "projectName": {
+      "type": "string",
+      "title": "Project Name",
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "repository": {
+      "type": "string",
+      "title": "Git Repository"
+    },
+    "branch": {
+      "type": "string",
+      "title": "Branch",
+      "default": "main"
+    },
+    "releaseId": {
+      "type": "string",
+      "title": "Release ID",
+      "pattern": "^[a-zA-Z0-9_-]+$"
+    },
+    "python": {
+      "type": "string",
+      "title": "Python Executable",
+      "default": "python3"
+    },
+    "port": {
+      "type": "integer",
+      "title": "Gunicorn Port",
+      "default": 8000
+    },
+    "healthPath": {
+      "type": "string",
+      "title": "Health Check Path",
+      "default": "/health/"
+    },
+    "runMigrate": {
+      "type": "boolean",
+      "title": "Run database migrate",
+      "default": true
+    }
+  }
+}

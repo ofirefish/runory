@@ -1,0 +1,14 @@
+apiVersion: runory/v1
+kind: Workflow
+metadata:
+  id: docker.list
+  name: List Docker Containers
+  description: List containers via docker ps (R0). Avoid Docker Go-template {{ }} which conflicts with Runory expressions.
+steps:
+  - id: list
+    uses: ssh.command
+    with:
+      executable: docker
+      args:
+        - ps
+        - -a

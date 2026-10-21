@@ -13,9 +13,10 @@ mod sftp;
 
 pub use cloud::{
     CloudApplyRequest, CloudApplyResult, CloudConflictDecision, CloudConflictItem,
-    CloudConflictResolution, CloudDiscardRequest, CloudEncryptedPayload, CloudExportRequest,
-    CloudGroup, CloudImportPreview, CloudImportRequest, CloudKeyEnvelope, CloudObjectKind,
-    CloudProfile, CloudRecoveryPassphraseRotateRequest, CloudSyncKeyRequest, CloudSyncKeyStatus,
+    CloudConflictResolution, CloudDeploymentApp, CloudDiscardRequest, CloudEncryptedPayload,
+    CloudExportRequest, CloudGroup, CloudImportPreview, CloudImportRequest, CloudKeyEnvelope,
+    CloudObjectKind, CloudProfile, CloudRecoveryPassphraseRotateRequest, CloudSyncKeyRequest,
+    CloudSyncKeyStatus,
 };
 pub use credential::{
     CredentialInput, CredentialKind, CredentialStatus, CredentialStatusRequest,
@@ -28,9 +29,17 @@ pub use dashboard::{
 pub use deployment::{
     BackupRequest, BuildPreset, CronAddRequest, CronEntry, CronRemoveRequest, CronSchedule,
     CronTask, DeployRequest, DeploymentApp, DeploymentAppDeleteRequest, DeploymentAppUpsertRequest,
-    DeploymentAppsListRequest, DeploymentHistoryRequest, DeploymentRecord,
-    EnvironmentConfigRequest, EnvironmentEntry, GitSetupRequest, RestartTarget, SslInspectRequest,
-    SslIssueRequest,
+    DeploymentAppsListRequest, DeploymentHistoryRequest, DeploymentRecord, DeploymentSetupStatus,
+    DeploymentSourceKind, EnvironmentConfigRequest, EnvironmentEntry, GitSetupRequest,
+    GoControlRequest, GoProjectConfig, GoProvisionRequest, GoRuntime, HtmlProjectConfig,
+    HtmlProvisionRequest, JavaBuildTool, JavaControlRequest, JavaInstallJdkRequest,
+    JavaProjectConfig, JavaProvisionRequest, JavaRuntime, JavaSetDefaultJdkRequest, JdkVersion,
+    NodeControlRequest, NodePackageManager, NodeProjectConfig, NodeProvisionRequest, NodeRuntime,
+    NodeStartMode, PhpControlRequest, PhpProcessManager, PhpProjectConfig, PhpProvisionRequest,
+    PhpRewriteMode, PhpRuntime, ProjectKind, ProxyHostHeader, ProxyProvisionRequest,
+    PythonControlRequest, PythonPrepareEnvRequest, PythonProjectConfig, PythonProtocol,
+    PythonProvisionRequest, PythonRuntime, PythonServiceAction, PythonStartupMethod,
+    PythonStatusRequest, RestartTarget, ReverseProxyConfig, SslInspectRequest, SslIssueRequest,
 };
 pub use error::{format_ssh_endpoint, AppError, AppResult};
 pub use group::{

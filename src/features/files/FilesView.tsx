@@ -15,6 +15,7 @@ import { RemoteImagePreview, type RemoteFileRequest } from "./RemoteImagePreview
 import { RemoteTextPreview } from "./RemoteTextPreview";
 import { clearLastRemotePath, readLastRemotePath, saveLastRemotePath } from "./remote-path-history";
 import { breadcrumbPaths, formatFileSize, formatPermissions } from "./sftp-format";
+import { PluginWorkspaceSection } from "../plugins/workspace/PluginWorkspaceSection";
 
 const entryIcon = (kind: SftpEntryKind, name: string) => {
   if (kind === "directory") return <Folder aria-hidden size={17} className="text-blue-500" />;
@@ -352,5 +353,13 @@ export function FilesView({ sessionId, profileId, active }: { sessionId: string 
     {filePreview && (imageFile(filePreview)
       ? <RemoteImagePreview sessionId={sessionId} request={filePreview} onClose={() => setFilePreview(null)} />
       : <RemoteTextPreview sessionId={sessionId} request={filePreview} onClose={() => setFilePreview(null)} />)}
+    <div className="shrink-0 px-4 pb-3">
+      <PluginWorkspaceSection
+        category="files"
+        titleKey="plugins.workspace.section.files"
+        hostId={profileId}
+        sessionId={sessionId}
+      />
+    </div>
   </section>;
 }

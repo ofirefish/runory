@@ -17,6 +17,9 @@ export const hasCloudSyncChanges = (preview: CloudImportPreview): boolean => [
   preview.profileUpdates,
   preview.groupDeletions,
   preview.profileDeletions,
+  preview.deploymentAppAdditions ?? 0,
+  preview.deploymentAppUpdates ?? 0,
+  preview.deploymentAppDeletions ?? 0,
   preview.localNewer,
   preview.conflicts,
 ].some((count) => count > 0);

@@ -61,6 +61,8 @@ pub enum AppError {
     TunnelLimit,
     #[error("invalid request")]
     InvalidProfile,
+    #[error("import file is invalid")]
+    ImportInvalid,
     #[error("invalid group")]
     InvalidGroup,
     #[error("profile not found")]
@@ -137,6 +139,16 @@ pub enum AppError {
     UnsupportedRemote,
     #[error("invalid infrastructure operation")]
     InvalidOperation,
+    #[error("deployment project name already exists")]
+    DeploymentNameConflict,
+    #[error("deployment project path already exists")]
+    DeploymentPathConflict,
+    #[error("deployment service name already exists")]
+    DeploymentServiceConflict,
+    #[error("git clone target is not an empty directory or a repository")]
+    DeploymentGitTargetNotEmpty,
+    #[error("git project directory cannot be created or accessed")]
+    DeploymentGitPathDenied,
     #[error("multi-server target selection is invalid")]
     AgentFleetTargetInvalid,
     #[error("multi-server target does not match the live SSH session")]
@@ -213,6 +225,54 @@ pub enum AppError {
     UpdateBusy,
     #[error("desktop update installation failed")]
     UpdateInstallFailed,
+    #[error("plugin package is invalid")]
+    PluginPackageInvalid,
+    #[error("plugin manifest is invalid")]
+    PluginManifestInvalid,
+    #[error("plugin is incompatible with this Runory version")]
+    PluginVersionIncompatible,
+    #[error("plugin is already installed")]
+    PluginAlreadyInstalled,
+    #[error("plugin was not found")]
+    PluginNotFound,
+    #[error("plugin is disabled")]
+    PluginDisabled,
+    #[error("plugin permission denied")]
+    PluginPermissionDenied,
+    #[error("plugin workflow was not found")]
+    PluginWorkflowNotFound,
+    #[error("plugin workflow is invalid")]
+    PluginWorkflowInvalid,
+    #[error("plugin action was not found")]
+    PluginActionNotFound,
+    #[error("plugin policy denied the operation")]
+    PluginPolicyDenied,
+    #[error("plugin workflow was cancelled")]
+    PluginCancelled,
+    #[error("plugin execution failed")]
+    PluginExecutionFailed,
+    #[error("plugin package signature is missing")]
+    PluginSignatureMissing,
+    #[error("plugin package signature is invalid")]
+    PluginSignatureInvalid,
+    #[error("plugin signing key is unknown")]
+    PluginSigningKeyUnknown,
+    #[error("plugin signing key is revoked")]
+    PluginSigningKeyRevoked,
+    #[error("plugin publisher does not match signer")]
+    PluginPublisherMismatch,
+    #[error("plugin is revoked")]
+    PluginRevoked,
+    #[error("plugin version is revoked")]
+    PluginVersionRevoked,
+    #[error("plugin update requires permission review")]
+    PluginUpdatePermissionReviewRequired,
+    #[error("plugin plan is stale")]
+    PluginPlanStale,
+    #[error("plugin marketplace is unavailable")]
+    PluginMarketplaceUnavailable,
+    #[error("plugin marketplace hash mismatch")]
+    PluginHashMismatch,
     #[error("storage operation failed")]
     Storage,
 }
@@ -256,6 +316,7 @@ impl AppError {
             Self::TunnelSessionMismatch => "TUNNEL_SESSION_MISMATCH",
             Self::TunnelLimit => "TUNNEL_LIMIT",
             Self::InvalidProfile => "INVALID_PROFILE",
+            Self::ImportInvalid => "IMPORT_INVALID",
             Self::InvalidGroup => "INVALID_GROUP",
             Self::ProfileNotFound => "PROFILE_NOT_FOUND",
             Self::GroupNotFound => "GROUP_NOT_FOUND",
@@ -294,6 +355,11 @@ impl AppError {
             Self::ExecOutputLimit => "EXEC_OUTPUT_LIMIT",
             Self::UnsupportedRemote => "UNSUPPORTED_REMOTE",
             Self::InvalidOperation => "INVALID_OPERATION",
+            Self::DeploymentNameConflict => "DEPLOYMENT_NAME_CONFLICT",
+            Self::DeploymentPathConflict => "DEPLOYMENT_PATH_CONFLICT",
+            Self::DeploymentServiceConflict => "DEPLOYMENT_SERVICE_CONFLICT",
+            Self::DeploymentGitTargetNotEmpty => "DEPLOYMENT_GIT_TARGET_NOT_EMPTY",
+            Self::DeploymentGitPathDenied => "DEPLOYMENT_GIT_PATH_DENIED",
             Self::AgentFleetTargetInvalid => "AGENT_FLEET_TARGET_INVALID",
             Self::AgentFleetTargetMismatch => "AGENT_FLEET_TARGET_MISMATCH",
             Self::AgentFleetTargetLimit => "AGENT_FLEET_TARGET_LIMIT",
@@ -332,6 +398,32 @@ impl AppError {
             Self::UpdateDownloadFailed => "UPDATE_DOWNLOAD_FAILED",
             Self::UpdateBusy => "UPDATE_BUSY",
             Self::UpdateInstallFailed => "UPDATE_INSTALL_FAILED",
+            Self::PluginPackageInvalid => "PLUGIN_PACKAGE_INVALID",
+            Self::PluginManifestInvalid => "PLUGIN_MANIFEST_INVALID",
+            Self::PluginVersionIncompatible => "PLUGIN_VERSION_INCOMPATIBLE",
+            Self::PluginAlreadyInstalled => "PLUGIN_ALREADY_INSTALLED",
+            Self::PluginNotFound => "PLUGIN_NOT_FOUND",
+            Self::PluginDisabled => "PLUGIN_DISABLED",
+            Self::PluginPermissionDenied => "PLUGIN_PERMISSION_DENIED",
+            Self::PluginWorkflowNotFound => "PLUGIN_WORKFLOW_NOT_FOUND",
+            Self::PluginWorkflowInvalid => "PLUGIN_WORKFLOW_INVALID",
+            Self::PluginActionNotFound => "PLUGIN_ACTION_NOT_FOUND",
+            Self::PluginPolicyDenied => "PLUGIN_POLICY_DENIED",
+            Self::PluginCancelled => "PLUGIN_CANCELLED",
+            Self::PluginExecutionFailed => "PLUGIN_EXECUTION_FAILED",
+            Self::PluginSignatureMissing => "PLUGIN_SIGNATURE_MISSING",
+            Self::PluginSignatureInvalid => "PLUGIN_SIGNATURE_INVALID",
+            Self::PluginSigningKeyUnknown => "PLUGIN_SIGNING_KEY_UNKNOWN",
+            Self::PluginSigningKeyRevoked => "PLUGIN_SIGNING_KEY_REVOKED",
+            Self::PluginPublisherMismatch => "PLUGIN_PUBLISHER_MISMATCH",
+            Self::PluginRevoked => "PLUGIN_REVOKED",
+            Self::PluginVersionRevoked => "PLUGIN_VERSION_REVOKED",
+            Self::PluginUpdatePermissionReviewRequired => {
+                "PLUGIN_UPDATE_PERMISSION_REVIEW_REQUIRED"
+            }
+            Self::PluginPlanStale => "PLUGIN_PLAN_STALE",
+            Self::PluginMarketplaceUnavailable => "PLUGIN_MARKETPLACE_UNAVAILABLE",
+            Self::PluginHashMismatch => "PLUGIN_HASH_MISMATCH",
             Self::Storage => "STORAGE_ERROR",
         }
     }

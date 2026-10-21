@@ -22,8 +22,12 @@ const CommandEmpty = React.forwardRef<React.ComponentRef<typeof CommandPrimitive
   ({ className, ...props }, ref) => <CommandPrimitive.Empty ref={ref} className={cn("py-6 text-center text-sm", className)} {...props} />,
 );
 CommandEmpty.displayName = CommandPrimitive.Empty.displayName;
+const CommandGroup = React.forwardRef<React.ComponentRef<typeof CommandPrimitive.Group>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Group>>(
+  ({ className, ...props }, ref) => <CommandPrimitive.Group ref={ref} className={cn("overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-[hsl(var(--muted))]", className)} {...props} />,
+);
+CommandGroup.displayName = CommandPrimitive.Group.displayName;
 const CommandItem = React.forwardRef<React.ComponentRef<typeof CommandPrimitive.Item>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>>(
   ({ className, ...props }, ref) => <CommandPrimitive.Item ref={ref} className={cn("relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[disabled=true]:pointer-events-none data-[selected=true]:bg-[hsl(var(--elevated))] data-[selected=true]:text-foreground data-[disabled=true]:opacity-50", className)} {...props} />,
 );
 CommandItem.displayName = CommandPrimitive.Item.displayName;
-export { Command, CommandInput, CommandList, CommandEmpty, CommandItem };
+export { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem };

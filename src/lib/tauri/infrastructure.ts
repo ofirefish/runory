@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { BuildPreset, CronEntry, CronSchedule, CronTask, DeploymentApp, DeploymentRecord, DockerContainer, DockerDaemonConfig, DockerEngineSettingsView, DockerImage, DockerImageAction, DockerNetwork, DockerNetworkAction, DockerOnlineImage, DockerRegistry, DockerRegistryUpsertInput, DockerVolume, DockerVolumeAction, LogSource, OperationResult, Pm2Process, ProcessInfo, ResourceAction, RestartTarget, ServerDashboard, ServiceHealth } from "../../types/infrastructure";
+import type { BuildPreset, CronEntry, CronSchedule, CronTask, DeploymentApp, DeploymentRecord, DeploymentSetupStatus, DeploymentSourceKind, DockerContainer, DockerDaemonConfig, DockerEngineSettingsView, DockerImage, DockerImageAction, DockerNetwork, DockerNetworkAction, DockerOnlineImage, DockerRegistry, DockerRegistryUpsertInput, DockerVolume, DockerVolumeAction, GoProjectConfig, GoRuntime, HtmlProjectConfig, ReverseProxyConfig, JavaProjectConfig, JavaRuntime, JdkVersion, LogSource, NodeProjectConfig, NodeRuntime, OperationResult, Pm2Process, PhpProjectConfig, PhpRuntime, ProcessInfo, ProjectKind, PythonProjectConfig, PythonProtocol, PythonRuntime, PythonStartupMethod, ResourceAction, RestartTarget, ServerDashboard, ServiceHealth } from "../../types/infrastructure";
 
 const request = (sessionId: string) => ({ request: { sessionId } });
 export const loadDashboard = (sessionId: string) => invoke<ServerDashboard>("dashboard_overview", request(sessionId));
@@ -51,5 +51,78 @@ export const upsertDeploymentApp = (app: {
   branch: string;
   build: BuildPreset;
   restart: RestartTarget;
+  projectKind?: ProjectKind;
+  python?: PythonProjectConfig | null;
+  php?: PhpProjectConfig | null;
+  java?: JavaProjectConfig | null;
+  node?: NodeProjectConfig | null;
+  go?: GoProjectConfig | null;
+  html?: HtmlProjectConfig | null;
+  proxy?: ReverseProxyConfig | null;
+  setupStep?: number;
+  setupStatus?: DeploymentSetupStatus;
+  sourceKind?: DeploymentSourceKind;
+  venvPath?: string;
 }) => invoke<DeploymentApp>("deployment_apps_upsert", { request: app });
 export const deleteDeploymentApp = (profileId: string, id: string) => invoke<void>("deployment_apps_delete", { request: { profileId, id } });
+export const provisionPythonProject = (
+  sessionId: string,
+  name: string,
+  projectPath: string,
+  python: PythonProjectConfig,
+  venvPath = "",
+) => invoke<OperationResult>("deployment_python_provision", {
+  request: { sessionId, name, projectPath, python, venvPath },
+});
+export const pythonProjectStatus = (sessionId: string, service: string) =>
+  invoke<OperationResult>("deployment_python_status", { request: { sessionId, service } });
+export const controlPythonProject = (sessionId: string, appId: string, action: "start" | "stop" | "restart") =>
+  invoke<OperationResult>("deployment_python_control", { request: { sessionId, appId, action } });
+export const listSystemUsers = (sessionId: string) =>
+  invoke<string[]>("deployment_list_system_users", { request: { sessionId } });
+export const listPythonRuntimes = (sessionId: string) =>
+  invoke<PythonRuntime[]>("deployment_list_python_runtimes", { request: { sessionId } });
+export const preparePythonEnv = (
+  sessionId: string,
+  projectPath: string,
+  pythonBin: string,
+  venvPath: string,
+  requirementsPath: string,
+  installPackages: boolean,
+  startup?: PythonStartupMethod,
+  protocol?: PythonProtocol,
+) => invoke<OperationResult>("deployment_python_prepare_env", {
+  request: { sessionId, projectPath, pythonBin, venvPath, requirementsPath, installPackages, startup, protocol },
+});
+export const provisionPhpProject = (sessionId: string, name: string, projectPath: string, php: PhpProjectConfig) =>
+  invoke<OperationResult>("deployment_php_provision", { request: { sessionId, name, projectPath, php } });
+export const controlPhpProject = (sessionId: string, appId: string, action: "start" | "stop" | "restart") =>
+  invoke<OperationResult>("deployment_php_control", { request: { sessionId, appId, action } });
+export const listPhpRuntimes = (sessionId: string) =>
+  invoke<PhpRuntime[]>("deployment_list_php_runtimes", { request: { sessionId } });
+export const provisionJavaProject = (sessionId: string, name: string, projectPath: string, java: JavaProjectConfig) =>
+  invoke<OperationResult>("deployment_java_provision", { request: { sessionId, name, projectPath, java } });
+export const controlJavaProject = (sessionId: string, appId: string, action: "start" | "stop" | "restart") =>
+  invoke<OperationResult>("deployment_java_control", { request: { sessionId, appId, action } });
+export const installJdk = (sessionId: string, version: JdkVersion) =>
+  invoke<OperationResult>("deployment_java_install_jdk", { request: { sessionId, version } });
+export const setDefaultJdk = (sessionId: string, binary: string) =>
+  invoke<OperationResult>("deployment_java_set_default_jdk", { request: { sessionId, binary } });
+export const provisionNodeProject = (sessionId: string, name: string, projectPath: string, node: NodeProjectConfig) =>
+  invoke<OperationResult>("deployment_node_provision", { request: { sessionId, name, projectPath, node } });
+export const controlNodeProject = (sessionId: string, appId: string, action: "start" | "stop" | "restart") =>
+  invoke<OperationResult>("deployment_node_control", { request: { sessionId, appId, action } });
+export const provisionGoProject = (sessionId: string, name: string, projectPath: string, go: GoProjectConfig) =>
+  invoke<OperationResult>("deployment_go_provision", { request: { sessionId, name, projectPath, go } });
+export const controlGoProject = (sessionId: string, appId: string, action: "start" | "stop" | "restart") =>
+  invoke<OperationResult>("deployment_go_control", { request: { sessionId, appId, action } });
+export const provisionHtmlProject = (sessionId: string, name: string, projectPath: string, html: HtmlProjectConfig) =>
+  invoke<OperationResult>("deployment_html_provision", { request: { sessionId, name, projectPath, html } });
+export const provisionProxyProject = (sessionId: string, name: string, proxy: ReverseProxyConfig) =>
+  invoke<OperationResult>("deployment_proxy_provision", { request: { sessionId, name, proxy } });
+export const listGoRuntimes = (sessionId: string) =>
+  invoke<GoRuntime[]>("deployment_list_go_runtimes", { request: { sessionId } });
+export const listNodeRuntimes = (sessionId: string) =>
+  invoke<NodeRuntime[]>("deployment_list_node_runtimes", { request: { sessionId } });
+export const listJavaRuntimes = (sessionId: string) =>
+  invoke<JavaRuntime[]>("deployment_list_java_runtimes", { request: { sessionId } });

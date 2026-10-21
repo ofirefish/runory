@@ -17,6 +17,8 @@ pub struct SettingsUpdateRequest {
     pub terminal_theme: Option<TerminalTheme>,
     pub boundary_cli_path: Option<String>,
     pub teleport_cli_path: Option<String>,
+    pub plugin_developer_mode: Option<bool>,
+    pub marketplace_url: Option<String>,
 }
 
 #[tauri::command]
@@ -29,6 +31,8 @@ pub async fn settings_update(
         && request.terminal_theme.is_none()
         && request.boundary_cli_path.is_none()
         && request.teleport_cli_path.is_none()
+        && request.plugin_developer_mode.is_none()
+        && request.marketplace_url.is_none()
     {
         return Err(AppError::InvalidOperation);
     }
@@ -39,6 +43,8 @@ pub async fn settings_update(
             terminal_theme: request.terminal_theme,
             boundary_cli_path: request.boundary_cli_path,
             teleport_cli_path: request.teleport_cli_path,
+            plugin_developer_mode: request.plugin_developer_mode,
+            marketplace_url: request.marketplace_url,
         })
         .await
 }

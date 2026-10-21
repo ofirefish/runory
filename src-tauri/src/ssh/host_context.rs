@@ -8,6 +8,7 @@ use crate::domain::SessionId;
 // Fixed metadata probe only: no model/user arguments, elevation, or PTY writes.
 // Never source os-release: a remote file is data, not executable configuration.
 const PROBE: &str = r#"
+printf 'DATE='; date '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null
 printf 'KERNEL='; uname -r 2>/dev/null
 printf 'ARCH='; uname -m 2>/dev/null
 printf 'USER='; id -un 2>/dev/null
@@ -27,8 +28,19 @@ pub(crate) struct HostSystemInfo {
     pub login_is_root: Option<bool>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HostAgentProbe {
+    pub system_info: HostSystemInfo,
+    /// Host local wall clock at probe time (`YYYY-mm-dd HH:MM:SS TZ`), if available.
+    pub clock: Option<String>,
+}
+
 impl ServerSessionManager {
     pub(crate) async fn host_system_info(&self, session_id: SessionId) -> HostSystemInfo {
+        self.host_agent_probe(session_id).await.system_info
+    }
+
+    pub(crate) async fn host_agent_probe(&self, session_id: SessionId) -> HostAgentProbe {
         match self
             .exec(
                 session_id,
@@ -38,14 +50,13 @@ impl ServerSessionManager {
             )
             .await
         {
-            // Non-Linux hosts may have no os-release; preserve successful id/uname fields.
-            Ok(result) => parse(&result.stdout),
-            Err(_) => HostSystemInfo::default(),
+            Ok(result) => parse_probe(&result.stdout),
+            Err(_) => HostAgentProbe::default(),
         }
     }
 }
 
-fn parse(output: &str) -> HostSystemInfo {
+fn parse_probe(output: &str) -> HostAgentProbe {
     let value = |key: &str| {
         output.lines().find_map(|line| {
             let (name, value) = line.split_once('=')?;
@@ -61,15 +72,23 @@ fn parse(output: &str) -> HostSystemInfo {
         })
     };
     let login_uid = value("UID").and_then(|value| value.parse::<u32>().ok());
-    HostSystemInfo {
-        os_release: value("PRETTY_NAME").or_else(|| value("NAME")),
-        version_id: value("VERSION_ID"),
-        kernel: value("KERNEL"),
-        architecture: value("ARCH"),
-        login_user: value("USER"),
-        login_uid,
-        login_is_root: login_uid.map(|uid| uid == 0),
+    HostAgentProbe {
+        clock: value("DATE"),
+        system_info: HostSystemInfo {
+            os_release: value("PRETTY_NAME").or_else(|| value("NAME")),
+            version_id: value("VERSION_ID"),
+            kernel: value("KERNEL"),
+            architecture: value("ARCH"),
+            login_user: value("USER"),
+            login_uid,
+            login_is_root: login_uid.map(|uid| uid == 0),
+        },
     }
+}
+
+#[cfg(test)]
+fn parse(output: &str) -> HostSystemInfo {
+    parse_probe(output).system_info
 }
 
 #[cfg(test)]
@@ -78,7 +97,11 @@ mod tests {
 
     #[test]
     fn parses_versions_and_uses_uid_instead_of_username_for_root() {
-        let info = parse("PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nVERSION_ID=\"24.04\"\nKERNEL=6.8.0\nARCH=x86_64\nUSER=admin\nUID=0\n");
+        let probe = parse_probe(
+            "DATE=2026-09-18 15:15:01 CST\nPRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nVERSION_ID=\"24.04\"\nKERNEL=6.8.0\nARCH=x86_64\nUSER=admin\nUID=0\n",
+        );
+        assert_eq!(probe.clock.as_deref(), Some("2026-09-18 15:15:01 CST"));
+        let info = probe.system_info;
         assert_eq!(info.os_release.as_deref(), Some("Ubuntu 24.04.1 LTS"));
         assert_eq!(info.version_id.as_deref(), Some("24.04"));
         assert_eq!(info.kernel.as_deref(), Some("6.8.0"));
